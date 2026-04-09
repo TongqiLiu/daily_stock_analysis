@@ -63,6 +63,10 @@ export interface ReportStrategy {
   secondaryBuy?: string;
   stopLoss?: string;
   takeProfit?: string;
+  /** 贪恐指数原始分值（约 -100~100，负值偏恐慌，正值偏贪婪） */
+  fearGreedScore?: number;
+  /** 贪恐指数可读标签，如"恐慌"/"贪婪" */
+  fearGreedLabel?: string;
 }
 
 export interface RelatedBoard {

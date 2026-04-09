@@ -826,23 +826,39 @@ class NotificationService(
             "",
         ]
 
-        # === 新增：分析结果摘要 (Issue #112) ===
+        # === 分析结果摘要（按决策分组，Issue #112 / 用户可读性优化）===
         if results:
             report_lines.extend([
                 f"## 📊 {labels['summary_heading']}",
                 "",
             ])
-            for r in sorted_results:
-                _, signal_emoji, _ = self._get_signal_level(r)
-                display_name = self._get_display_name(r, report_language)
-                report_lines.append(
-                    f"{signal_emoji} **{display_name}({r.code})**: "
-                    f"{localize_operation_advice(r.operation_advice, report_language)} | "
-                    f"{labels['score_label']} {r.sentiment_score} | "
-                    f"{localize_trend_prediction(r.trend_prediction, report_language)}"
-                )
+
+            # 按决策类型分组，组内按评分降序
+            _group_order = [
+                ('buy',  '🟢', labels.get('buy_label',  '买入/加仓')),
+                ('hold', '🟡', labels.get('watch_label', '观望/持有')),
+                ('sell', '🔴', labels.get('sell_label',  '卖出/减仓')),
+            ]
+            for dt, grp_emoji, grp_label in _group_order:
+                if dt == 'hold':
+                    group = [r for r in sorted_results if getattr(r, 'decision_type', '') in ('hold', '')]
+                else:
+                    group = [r for r in sorted_results if getattr(r, 'decision_type', '') == dt]
+                if not group:
+                    continue
+                report_lines.append(f"**{grp_emoji} {grp_label}（{len(group)} 只）**")
+                for r in group:
+                    display_name = self._get_display_name(r, report_language)
+                    advice_text = localize_operation_advice(r.operation_advice, report_language)
+                    trend_text = localize_trend_prediction(r.trend_prediction, report_language)
+                    report_lines.append(
+                        f"  {grp_emoji} **{display_name}({r.code})**"
+                        f"  {labels['score_label']} {r.sentiment_score}"
+                        f"  {advice_text} | {trend_text}"
+                    )
+                report_lines.append("")
+
             report_lines.extend([
-                "",
                 "---",
                 "",
             ])

@@ -34,6 +34,47 @@ const StrategyItem: React.FC<StrategyItemProps> = ({
   </div>
 );
 
+interface FearGreedItemProps {
+  label: string;
+  score?: number;
+  scoreLabel?: string;
+}
+
+/** 贪恐指数卡片，分值正负决定颜色（红=恐慌，青=贪婪，紫=中性） */
+const FearGreedItem: React.FC<FearGreedItemProps> = ({ label, score, scoreLabel }) => {
+  const tone =
+    score === undefined || score === null
+      ? '--home-strategy-secondary'
+      : score >= 20
+      ? '--home-strategy-buy'    // 贪婪 → 青
+      : score <= -20
+      ? '--home-strategy-stop'   // 恐慌 → 红
+      : '--home-strategy-take';  // 中性 → 黄/紫
+
+  const display =
+    score !== undefined && score !== null
+      ? `${score > 0 ? '+' : ''}${score}${scoreLabel ? `  ${scoreLabel}` : ''}`
+      : undefined;
+
+  return (
+    <div className="home-subpanel home-strategy-card p-3" style={{ ['--home-strategy-tone' as string]: `var(${tone})` }}>
+      <div className="flex flex-col">
+        <span className="home-strategy-label mb-0.5 text-xs">{label}</span>
+        <span
+          className="home-strategy-value text-lg font-bold font-mono"
+          style={!display ? { color: 'var(--text-muted-text)' } : undefined}
+        >
+          {display || '—'}
+        </span>
+      </div>
+      <div
+        className="absolute bottom-0 left-0 right-0 h-0.5"
+        style={{ background: `linear-gradient(90deg, transparent, var(${tone}), transparent)` }}
+      />
+    </div>
+  );
+};
+
 /**
  * 策略点位区组件 - 终端风格
  */
@@ -68,6 +109,9 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
     },
   ];
 
+  const hasFearGreed =
+    strategy.fearGreedScore !== undefined && strategy.fearGreedScore !== null;
+
   return (
     <Card variant="bordered" padding="md" className="home-panel-card">
       <DashboardPanelHeader
@@ -75,10 +119,17 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
         title={text.sniperLevels}
         className="mb-3"
       />
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className={`grid gap-3 ${hasFearGreed ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4'}`}>
         {strategyItems.map((item) => (
           <StrategyItem key={item.label} {...item} />
         ))}
+        {hasFearGreed && (
+          <FearGreedItem
+            label={text.fearGreedIndex}
+            score={strategy.fearGreedScore}
+            scoreLabel={strategy.fearGreedLabel}
+          />
+        )}
       </div>
     </Card>
   );

@@ -22,9 +22,9 @@ class TestMarketStrategyBlueprint(unittest.TestCase):
         blueprint = get_market_strategy_blueprint("us")
         block = blueprint.to_prompt_block()
 
-        self.assertIn("US Market Regime Strategy", block)
-        self.assertIn("Risk-on", block)
-        self.assertIn("Macro & Flows", block)
+        self.assertIn("美股市场复盘策略框架", block)
+        self.assertIn("风险偏好上升", block)
+        self.assertIn("宏观与资金流向", block)
 
 
 class TestMarketAnalyzerStrategyPrompt(unittest.TestCase):
@@ -41,8 +41,9 @@ class TestMarketAnalyzerStrategyPrompt(unittest.TestCase):
         analyzer = MarketAnalyzer(region="us")
         prompt = analyzer._build_review_prompt(MarketOverview(date="2026-02-24"), [])
 
-        self.assertIn("Strategy Plan", prompt)
-        self.assertIn("US Market Regime Strategy", prompt)
+        self.assertIn("策略计划", prompt)
+        self.assertIn("美股市场复盘策略框架", prompt)
+        self.assertIn("全文必须使用简体中文", prompt)
 
 
 if __name__ == "__main__":

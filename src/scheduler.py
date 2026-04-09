@@ -86,6 +86,7 @@ class Scheduler:
         self.shutdown_handler = GracefulShutdown()
         self._task_callback: Optional[Callable] = None
         self._daily_job: Optional[Any] = None
+        self._extra_daily_jobs: List[Any] = []   # 额外的每日定时 job（如美股收盘后）
         self._background_tasks: List[Dict[str, Any]] = []
         self._running = False
 
@@ -186,6 +187,46 @@ class Scheduler:
 
         except Exception as e:
             logger.exception(f"定时任务执行失败: {e}")
+
+    def add_extra_daily_job(
+        self,
+        schedule_time: str,
+        task: Callable,
+        name: Optional[str] = None,
+    ) -> bool:
+        """
+        注册额外的每日定时 job（如美股收盘后分析）。
+
+        可多次调用以注册多个不同时间点的任务。
+        时间格式同主 daily job，"HH:MM" 24小时制。
+
+        Returns:
+            True 注册成功，False 时间格式无效。
+        """
+        if not self._is_valid_schedule_time(schedule_time):
+            logger.warning("add_extra_daily_job: 无效时间 %r，跳过注册", schedule_time)
+            return False
+
+        job_name = name or getattr(task, "__name__", "extra_daily_job")
+        job = self.schedule.every().day.at(schedule_time).do(
+            self._make_named_task_runner(task, job_name)
+        )
+        self._extra_daily_jobs.append(job)
+        logger.info("已注册额外每日定时任务 [%s]，执行时间: %s", job_name, schedule_time)
+        return True
+
+    def _make_named_task_runner(self, task: Callable, name: str) -> Callable:
+        """生成带日志包装的任务执行函数。"""
+        def _runner():
+            try:
+                logger.info("=" * 50)
+                logger.info("额外定时任务开始执行 [%s] - %s", name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                logger.info("=" * 50)
+                task()
+                logger.info("额外定时任务执行完成 [%s] - %s", name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            except Exception as exc:
+                logger.exception("额外定时任务执行失败 [%s]: %s", name, exc)
+        return _runner
 
     def add_background_task(
         self,
@@ -293,12 +334,12 @@ class Scheduler:
         logger.info("调度器已停止")
 
     def _get_next_run_time(self) -> str:
-        """获取下次执行时间"""
+        """获取所有已注册 daily job 的下次执行时间列表。"""
         jobs = self.schedule.get_jobs()
-        if jobs:
-            next_run = min(job.next_run for job in jobs)
-            return next_run.strftime('%Y-%m-%d %H:%M:%S')
-        return "未设置"
+        if not jobs:
+            return "未设置"
+        times = sorted(job.next_run for job in jobs)
+        return " / ".join(t.strftime('%Y-%m-%d %H:%M:%S') for t in times)
 
     def stop(self):
         """停止调度器"""
@@ -311,6 +352,7 @@ def run_with_schedule(
     run_immediately: bool = True,
     background_tasks: Optional[List[Dict[str, Any]]] = None,
     schedule_time_provider: Optional[Callable[[], str]] = None,
+    extra_daily_jobs: Optional[List[Dict[str, Any]]] = None,
 ):
     """
     便捷函数：使用定时调度运行任务
@@ -324,6 +366,9 @@ def run_with_schedule(
             和 `run_immediately`。`interval_seconds` 单位为秒。
         schedule_time_provider: 可选的时间提供器；调度器每轮检查前会读取，
             当返回值变化时自动重建 daily job。
+        extra_daily_jobs: 额外的每日定时 job 列表，每项需包含
+            `schedule_time`（HH:MM）和 `task`，可选 `name`。
+            典型用途：美股收盘后自动触发分析。
     """
     scheduler = Scheduler(
         schedule_time=schedule_time,
@@ -334,6 +379,12 @@ def run_with_schedule(
             task=entry["task"],
             interval_seconds=entry["interval_seconds"],
             run_immediately=entry.get("run_immediately", False),
+            name=entry.get("name"),
+        )
+    for entry in extra_daily_jobs or []:
+        scheduler.add_extra_daily_job(
+            schedule_time=entry["schedule_time"],
+            task=entry["task"],
             name=entry.get("name"),
         )
     scheduler.set_daily_task(task, run_immediately=run_immediately)

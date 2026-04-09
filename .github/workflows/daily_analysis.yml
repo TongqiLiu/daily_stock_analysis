@@ -1,9 +1,10 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
+  # 定时触发
   schedule:
-    - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
+    - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00  = 北京时间 18:00（A股/港股收盘后）
+    - cron: '0 21 * * 1-5'     # 周一到周五，UTC 21:00  = 北京时间次日 05:00（美股收盘后，EST）
   
   # 手动触发
   workflow_dispatch:
@@ -17,6 +18,14 @@ on:
           - full          # 完整分析（股票+大盘）
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
+      trigger:
+        description: '触发场景（影响大盘复盘区域和是否强制运行）'
+        required: false
+        default: 'cn-close'
+        type: choice
+        options:
+          - cn-close      # A股/港股收盘后（默认，不强制，MARKET_REVIEW_REGION=cn）
+          - us-close      # 美股收盘后（自动 --force-run，MARKET_REVIEW_REGION=us）
       force_run:
         description: '强制运行（跳过交易日检查）'
         required: false
@@ -172,6 +181,11 @@ jobs:
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
 
           # ==========================================
+          # 贪恐指数（szdt.tech）
+          # ==========================================
+          SZDT_AUTH_TOKEN: ${{ secrets.SZDT_AUTH_TOKEN }}
+
+          # ==========================================
           # 自选股配置
           # ==========================================
           STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
@@ -209,6 +223,30 @@ jobs:
             echo "✅ LITELLM 配置文件已写入: $LITELLM_CONFIG"
           fi
 
+          # ==========================================
+          # 判断触发场景（A股收盘 or 美股收盘）
+          # ==========================================
+          SCHEDULE="${{ github.event.schedule }}"
+          TRIGGER_INPUT="${{ github.event.inputs.trigger }}"
+
+          # 美股收盘场景：cron UTC 21:00 触发，或手动选择 us-close
+          if [ "$SCHEDULE" = "0 21 * * 1-5" ] || [ "$TRIGGER_INPUT" = "us-close" ]; then
+            IS_US_CLOSE=true
+          else
+            IS_US_CLOSE=false
+          fi
+
+          if [ "$IS_US_CLOSE" = "true" ]; then
+            # 覆盖大盘复盘区域为美股
+            export MARKET_REVIEW_REGION=us
+            # 收盘后数据已就绪，强制跳过开盘状态检查
+            AUTO_FORCE_RUN_ARG="--force-run"
+            SESSION_LABEL="美股收盘"
+          else
+            AUTO_FORCE_RUN_ARG=""
+            SESSION_LABEL="A股/港股收盘"
+          fi
+
           # 判断运行模式
           MODE="${{ github.event.inputs.mode || 'full' }}"
           
@@ -216,8 +254,10 @@ jobs:
           echo "🚀 A股自选股智能分析系统"
           echo "=========================================="
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
+          echo "📌 收盘场景: $SESSION_LABEL"
           echo "🎯 运行模式: $MODE"
           echo "📊 自选股: $STOCK_LIST"
+          echo "📊 大盘区域: $MARKET_REVIEW_REGION"
           echo "📝 报告类型: $REPORT_TYPE"
           echo ""
           echo "=========================================="
@@ -265,11 +305,13 @@ jobs:
           echo "=========================================="
           echo ""
           
-          # 构建命令行参数
-          FORCE_RUN_ARG=""
+          # 构建命令行参数（手动 force_run 优先；美股收盘自动追加）
+          FORCE_RUN_ARG="$AUTO_FORCE_RUN_ARG"
           if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
             FORCE_RUN_ARG="--force-run"
             echo "⚡ 已启用强制运行模式（跳过交易日检查）"
+          elif [ -n "$AUTO_FORCE_RUN_ARG" ]; then
+            echo "⚡ 美股收盘场景：自动启用 --force-run"
           fi
 
           # 执行分析

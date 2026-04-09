@@ -37,6 +37,7 @@ from src.report_language import (
 )
 from src.search_service import SearchService
 from src.services.social_sentiment_service import SocialSentimentService
+from src.services.fear_greed_service import FearGreedService
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
@@ -175,6 +176,13 @@ class StockAnalysisPipeline:
                     "query_id": query_id,
                 },
             )
+
+        # 初始化贪恐指数服务（A股/港股/美股）
+        self.fear_greed_service = FearGreedService(
+            auth_token=self.config.szdt_auth_token,
+        )
+        if self.fear_greed_service.is_available:
+            logger.info("贪恐指数服务已启用（szdt.tech，支持 A股/港股/美股）")
 
     def fetch_and_save_stock_data(
         self, 
@@ -426,6 +434,19 @@ class StockAnalysisPipeline:
                 except Exception as e:
                     logger.warning(f"{stock_name}({code}) Social sentiment fetch failed: {e}")
 
+            # Step 4.6: 贪恐指数（A股/港股/美股）
+            if self.fear_greed_service.is_available:
+                try:
+                    fg_context = self.fear_greed_service.get_fear_greed_context(code)
+                    if fg_context:
+                        logger.info(f"{stock_name}({code}) 贪恐指数数据已获取")
+                        if news_context:
+                            news_context = news_context + "\n\n" + fg_context
+                        else:
+                            news_context = fg_context
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 贪恐指数获取失败: {e}")
+
             # Step 5: 获取分析上下文（技术面数据）
             self._emit_progress(58, f"{stock_name}：正在整理分析上下文")
             context = self.db.get_analysis_context(code)
@@ -482,6 +503,15 @@ class StockAnalysisPipeline:
                 realtime_data = enhanced_context.get('realtime', {})
                 result.current_price = realtime_data.get('price')
                 result.change_pct = realtime_data.get('change_pct')
+
+            # Step 7.8: 将贪恐指数原始分值附加到 result（与文本注入共享缓存，无额外请求）
+            if result and self.fear_greed_service.is_available:
+                try:
+                    fg_score = self.fear_greed_service.get_score(code)
+                    if fg_score is not None:
+                        result.fear_greed_score, result.fear_greed_label = fg_score
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 贪恐指数分值附加失败: {e}")
 
             # Step 7.6: chip_structure fallback (Issue #589)
             if result and chip_data:
@@ -789,6 +819,20 @@ class StockAnalysisPipeline:
                 except Exception as e:
                     logger.warning(f"[{code}] Agent mode: social sentiment fetch failed: {e}")
 
+            # Agent path: 注入贪恐指数
+            if self.fear_greed_service.is_available:
+                try:
+                    fg_context = self.fear_greed_service.get_fear_greed_context(code)
+                    if fg_context:
+                        existing = initial_context.get("news_context")
+                        if existing:
+                            initial_context["news_context"] = existing + "\n\n" + fg_context
+                        else:
+                            initial_context["news_context"] = fg_context
+                        logger.info(f"[{code}] Agent mode: 贪恐指数已注入 news_context")
+                except Exception as e:
+                    logger.warning(f"[{code}] Agent mode: 贪恐指数获取失败: {e}")
+
             # 运行 Agent
             if report_language == "en":
                 message = f"Analyze stock {code} ({stock_name}) and return the full decision dashboard JSON in English."
@@ -818,6 +862,15 @@ class StockAnalysisPipeline:
             # price_position fallback (same as non-agent path Step 7.7)
             if result:
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
+
+            # 贪恐指数分值附加到 result（与文本注入共享缓存，无额外请求）
+            if result and self.fear_greed_service.is_available:
+                try:
+                    fg_score = self.fear_greed_service.get_score(code)
+                    if fg_score is not None:
+                        result.fear_greed_score, result.fear_greed_label = fg_score
+                except Exception as e:
+                    logger.warning(f"[{code}] Agent mode: 贪恐指数分值附加失败: {e}")
 
             resolved_stock_name = result.name if result and result.name else stock_name
 

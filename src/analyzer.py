@@ -395,6 +395,10 @@ class AnalysisResult:
     # ========== 历史对比（Report Engine P0）==========
     query_id: Optional[str] = None  # 本次分析 query_id，用于历史对比时排除本次记录
 
+    # ========== 贪恐指数（szdt.tech，独立于 LLM 产出）==========
+    fear_greed_score: Optional[float] = None   # 原始分值，约 -100~100
+    fear_greed_label: Optional[str] = None     # 可读标签，如"恐慌"/"贪婪"
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {

@@ -57,6 +57,30 @@ NEWS_STRATEGY_WINDOWS: Dict[str, int] = {
     "long": 30,
 }
 
+# 未配置 STOCK_LIST 时的默认自选股（A 股示例 + 常见美股示例，逗号分隔与 .env 一致）
+DEFAULT_STOCK_LIST: Tuple[str, ...] = (
+    "600519",
+    "000001",
+    "300750",
+    "MSTR",
+    "CRCL",
+    "ASTS",
+    "AMZN",
+    "MARA",
+    "CLSK",
+    "BITF",
+    "BMNR",
+    "CPNG",
+    "HIMS",
+    "RDDT",
+    "DUOL",
+    "NBIS",
+    "OKLO",
+    "TEM",
+    "U",
+    "SOFI",
+)
+
 
 def parse_env_bool(value: Optional[str], default: bool = False) -> bool:
     """Parse common truthy/falsey environment-style values."""
@@ -511,6 +535,17 @@ class Config:
     social_sentiment_api_key: Optional[str] = None
     social_sentiment_api_url: str = "https://api.adanos.org"
 
+    # === 贪恐指数（szdt.tech，全市场：A股/港股/美股） ===
+    szdt_auth_token: Optional[str] = None
+
+    # === Druckenmiller Conviction（大盘复盘附加，公开 API 无需认证） ===
+    druckenmiller_base_url: Optional[str] = None  # 留空则使用默认官方地址
+
+    # === 美股收盘后定时分析 ===
+    # 美股（ET）收盘时间约为北京时间 04:00（EDT）/ 05:00（EST）
+    # 默认 05:00，设为空字符串可禁用此功能
+    us_close_schedule_time: str = "05:00"
+
     # === 新闻与分析筛选配置 ===
     news_max_age_days: int = 3   # 新闻最大时效（天）
     news_strategy_profile: str = "short"  # 新闻窗口策略档位：ultra_short/short/medium/long
@@ -896,7 +931,7 @@ class Config:
         
         # 如果没有配置，使用默认的示例股票
         if not stock_list:
-            stock_list = ['600519', '000001', '300750']
+            stock_list = list(DEFAULT_STOCK_LIST)
         
         # === LiteLLM multi-key parsing ===
         # GEMINI_API_KEYS (comma-separated) > GEMINI_API_KEY (single)
@@ -1166,6 +1201,9 @@ class Config:
             searxng_public_instances_enabled=searxng_public_instances_enabled,
             social_sentiment_api_key=os.getenv('SOCIAL_SENTIMENT_API_KEY') or None,
             social_sentiment_api_url=os.getenv('SOCIAL_SENTIMENT_API_URL', 'https://api.adanos.org').rstrip('/'),
+            szdt_auth_token=os.getenv('SZDT_AUTH_TOKEN') or None,
+            druckenmiller_base_url=os.getenv('DRUCKENMILLER_BASE_URL') or None,
+            us_close_schedule_time=os.getenv('US_CLOSE_SCHEDULE_TIME', '05:00').strip(),
             news_max_age_days=parse_env_int(os.getenv('NEWS_MAX_AGE_DAYS'), 3, field_name='NEWS_MAX_AGE_DAYS', minimum=1),
             news_strategy_profile=cls._parse_news_strategy_profile(
                 os.getenv('NEWS_STRATEGY_PROFILE', 'short')
@@ -1968,7 +2006,7 @@ class Config:
         ]
 
         if not stock_list:
-            stock_list = ['000001']
+            stock_list = list(DEFAULT_STOCK_LIST)
 
         self.stock_list = stock_list
     

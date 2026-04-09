@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
 - [修复] `AGENT_MAX_STEPS` 在 orchestrator 多 Agent 模式下改为作为各子 Agent 的步数上限而非硬覆盖；TechnicalAgent 等高默认值 Agent 会被封顶，低默认值 Agent 保持原值，减少不必要的 LLM 调用膨胀与配额消耗。
+- [改进] 未配置 `STOCK_LIST` 时的默认自选股增加常见美股标的（`MSTR`、`CRCL`、`ASTS`、`AMZN`、`MARA`、`CLSK`、`BITF`、`BMNR`、`CPNG`、`HIMS`、`RDDT`、`DUOL`、`NBIS`、`OKLO`、`TEM`、`U`、`SOFI` 等），与 `.env.example`、Web 设置默认值（`config_registry`）对齐；`refresh_stock_list` 空列表回退与之一致。
+- [改进] 美股大盘复盘 LLM 提示词改为简体中文输出（与 A 股相同章节结构），并同步 `US_BLUEPRINT` 策略框架为中文，避免 `MARKET_REVIEW_REGION=us/both` 时生成整段英文报告。
+- [改进] 产品对外命名统一为「自选股智能分析系统」（README、AGENTS、繁体 README、完整指南与 openclaw 集成说明、邮件与自定义 Webhook 默认标题文案等）。
 - [修复] **MiniMax-M2.7 模型连接测试支持** — 修复 LLM 通道连接测试在 MiniMax-M2.7 模型下返回 "Empty response" 的问题；增加了 `max_tokens` 上限（8→256）以容纳 MiniMax 思考过程，并添加 `content_blocks` 格式解析逻辑统一处理 MiniMax 响应格式差异。
 - [修复] 移除 `HistoryItem` 与 `ReportSummary` 响应 Schema 中 `sentiment_score` 的 `ge=0/le=100` 约束（fixes #942）——历史库中存储的超范围负值或大于 100 的情绪评分不再触发 Pydantic ValidationError，历史列表与详情接口恢复正常返回。
 - [改进] Agent IntelAgent 新增公司公告搜索维度（上交所/深交所/cninfo）与主力资金流工具（get_capital_flow），修复 Agent 模式下公告和资金流数据经常缺失的问题

@@ -923,12 +923,40 @@ def main() -> int:
                 else:
                     logger.info("EventMonitor 已启用，但未加载到有效规则，跳过后台提醒任务")
 
+            # 美股收盘后定时分析（US_CLOSE_SCHEDULE_TIME 非空时注册）
+            extra_daily_jobs = []
+            us_close_time = (getattr(config, 'us_close_schedule_time', '') or '').strip()
+            if us_close_time:
+                logger.info("美股收盘后定时分析已启用，执行时间: %s（北京时间）", us_close_time)
+
+                def us_close_task():
+                    """美股收盘后分析：全部股票 + 美股大盘复盘，强制执行跳过当前开盘状态检查。"""
+                    import copy
+                    runtime_config = _reload_runtime_config()
+                    # 覆盖为美股大盘复盘（收盘后跑美股复盘）
+                    runtime_config.market_review_region = 'us'
+                    us_args = copy.copy(args)
+                    # force_run=True：跳过"当前是否开盘"检查，收盘后数据已可用
+                    us_args.force_run = True
+                    us_args.no_market_review = False
+                    logger.info("美股收盘后定时分析开始 - %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    run_full_analysis(runtime_config, us_args, scheduled_stock_codes)
+
+                extra_daily_jobs.append({
+                    "schedule_time": us_close_time,
+                    "task": us_close_task,
+                    "name": "us_close_analysis",
+                })
+            else:
+                logger.info("美股收盘后定时分析已禁用（US_CLOSE_SCHEDULE_TIME 为空）")
+
             run_with_schedule(
                 task=scheduled_task,
                 schedule_time=config.schedule_time,
                 run_immediately=should_run_immediately,
                 background_tasks=background_tasks,
                 schedule_time_provider=schedule_time_provider,
+                extra_daily_jobs=extra_daily_jobs,
             )
             return 0
 
