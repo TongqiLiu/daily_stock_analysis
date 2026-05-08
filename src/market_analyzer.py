@@ -454,9 +454,9 @@ class MarketAnalyzer:
         news_placeholder = news_text if news_text else "暂无相关新闻"
 
         analyst_role = (
-            "你是一位专业的美股市场分析师，请根据以下数据生成一份简洁的美股大盘复盘报告。"
+            "你是一位专业的股票市场分析师，请根据以下数据生成一份简洁的美股大盘复盘报告。"
             if self.region == "us"
-            else "你是一位专业的A/H/美股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。"
+            else "你是一位专业的股票市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。"
         )
         output_title = (
             f"## {overview.date} 美股大盘复盘"

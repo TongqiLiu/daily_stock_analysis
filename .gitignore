@@ -78,3 +78,7 @@ verify_*.py
 static/
 /apps/dsa-desktop/dist/
 /apps/dsa-desktop/node_modules/
+
+# personal options trading screenshots & live PnL records (kept template/cheatsheet only)
+docs/options-pic/
+docs/options-review/期权记录_*.xlsx

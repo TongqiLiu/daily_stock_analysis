@@ -243,6 +243,20 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {},
         "display_order": 15,
     },
+    "SZDT_AUTH_TOKEN": {
+        "title": "SZDT 贪恐指数激活码",
+        "description": "szdt.tech 会员激活码，用于查询个股贪恐指数（A股/港股/美股）。未配置时贪恐指数功能静默跳过。每自然月 5000 次调用，同一只股票 30 天内复用仅扣 1 次额度。",
+        "category": "data_source",
+        "data_type": "string",
+        "ui_control": "password",
+        "is_sensitive": True,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 17,
+    },
     "REALTIME_SOURCE_PRIORITY": {
         "title": "Realtime Source Priority",
         "description": "Comma-separated priority for realtime quote providers.",
@@ -1897,6 +1911,7 @@ def _infer_category(key: str) -> str:
         (
             "TUSHARE",
             "TICKFLOW",
+            "SZDT",
             "AKSHARE",
             "EFINANCE",
             "PYTDX",

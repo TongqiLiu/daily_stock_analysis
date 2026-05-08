@@ -47,16 +47,16 @@ def detect_market(stock_code: Optional[str]) -> str:
 
 _MARKET_ROLES = {
     "cn": {
-        "zh": " A 股",
-        "en": "China A-shares",
+        "zh": "股票",
+        "en": "stock",
     },
     "hk": {
-        "zh": "港股",
-        "en": "Hong Kong stock",
+        "zh": "股票",
+        "en": "stock",
     },
     "us": {
-        "zh": "美股",
-        "en": "US stock",
+        "zh": "股票",
+        "en": "stock",
     },
 }
 
@@ -102,7 +102,9 @@ def get_market_role(stock_code: Optional[str], lang: str = "zh") -> str:
         lang: 'zh' or 'en'.
 
     Returns:
-        Role string like 'A 股投资分析' or 'US stock investment analysis'.
+        Role string like '股票投资分析' or 'stock investment analysis'.
+        Market-specific behaviour (limits, trading hours, etc.) is conveyed via
+        get_market_guidelines below, not via the role label itself.
     """
     market = detect_market(stock_code)
     lang_key = "en" if lang == "en" else "zh"

@@ -155,6 +155,17 @@ class StockAnalysisPipeline:
             )
             self.social_sentiment_service = None
 
+        # 初始化贪恐指数服务（A股/港股/美股）
+        try:
+            self.fear_greed_service = FearGreedService(
+                auth_token=self.config.szdt_auth_token,
+            )
+            if self.fear_greed_service is not None and self.fear_greed_service.is_available:
+                logger.info("贪恐指数服务已启用（szdt.tech，支持 A股/港股/美股）")
+        except Exception as exc:
+            logger.warning("贪恐指数服务初始化失败，将跳过贪恐指数分析: %s", exc)
+            self.fear_greed_service = None
+
     def _emit_progress(self, progress: int, message: str) -> None:
         """Best-effort bridge from pipeline stages to task SSE progress."""
         callback = getattr(self, "progress_callback", None)
@@ -176,13 +187,6 @@ class StockAnalysisPipeline:
                     "query_id": query_id,
                 },
             )
-
-        # 初始化贪恐指数服务（A股/港股/美股）
-        self.fear_greed_service = FearGreedService(
-            auth_token=self.config.szdt_auth_token,
-        )
-        if self.fear_greed_service.is_available:
-            logger.info("贪恐指数服务已启用（szdt.tech，支持 A股/港股/美股）")
 
     def fetch_and_save_stock_data(
         self, 
@@ -435,7 +439,7 @@ class StockAnalysisPipeline:
                     logger.warning(f"{stock_name}({code}) Social sentiment fetch failed: {e}")
 
             # Step 4.6: 贪恐指数（A股/港股/美股）
-            if self.fear_greed_service.is_available:
+            if self.fear_greed_service is not None and self.fear_greed_service.is_available:
                 try:
                     fg_context = self.fear_greed_service.get_fear_greed_context(code)
                     if fg_context:
@@ -505,7 +509,7 @@ class StockAnalysisPipeline:
                 result.change_pct = realtime_data.get('change_pct')
 
             # Step 7.8: 将贪恐指数原始分值附加到 result（与文本注入共享缓存，无额外请求）
-            if result and self.fear_greed_service.is_available:
+            if result and self.fear_greed_service is not None and self.fear_greed_service.is_available:
                 try:
                     fg_score = self.fear_greed_service.get_score(code)
                     if fg_score is not None:
@@ -820,7 +824,7 @@ class StockAnalysisPipeline:
                     logger.warning(f"[{code}] Agent mode: social sentiment fetch failed: {e}")
 
             # Agent path: 注入贪恐指数
-            if self.fear_greed_service.is_available:
+            if self.fear_greed_service is not None and self.fear_greed_service.is_available:
                 try:
                     fg_context = self.fear_greed_service.get_fear_greed_context(code)
                     if fg_context:
@@ -864,7 +868,7 @@ class StockAnalysisPipeline:
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
 
             # 贪恐指数分值附加到 result（与文本注入共享缓存，无额外请求）
-            if result and self.fear_greed_service.is_available:
+            if result and self.fear_greed_service is not None and self.fear_greed_service.is_available:
                 try:
                     fg_score = self.fear_greed_service.get_score(code)
                     if fg_score is not None:

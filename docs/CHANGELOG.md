@@ -12,7 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
+- [改进] LLM Prompt 中 Agent 自我定位话术通用化 — `src/market_context.py::_MARKET_ROLES` 三市场（cn/hk/us）的 zh/en 文案统一为「股票 / stock」，配套调整 `src/market_analyzer.py` 大盘复盘的写死角色（`A/H/美股市场分析师` → `股票市场分析师`）。Prompt 中「专注于趋势交易的 A 股投资分析 Agent」改为「专注于趋势交易的股票投资分析 Agent」，无论分析 A 股 / 港股 / 美股都使用同一通用角色描述。**保留** `_MARKET_GUIDELINES` 不变（A 股仍注入涨跌停 ±10%/T+1、美股仍注入熔断/盘前盘后、港股仍注入港币汇率/南北向资金等市场特化规则），不影响代码分支判断、报告章节标题、数据源路由、文档与配置 key。
+- [新功能] 问股页新增「⚡ 多策略联合」技能（`strategies/multi_strategy_consensus.yaml`）— 一次性调用 11 个内置策略（多头趋势/缠论/均线金叉/缩量回踩/放量突破/波浪/底部放量/箱体震荡/龙头/情绪周期/一阳夹三阴）逐项打分，输出统一表格、加权综合得分（公式 `Σ(评分×权重)/Σ权重`）与决策映射（强烈买入/偏多/观望/偏空/卖出 + 建议仓位）；前端在策略列表首位以紫色高亮按钮呈现，`default_priority=5` 排在最前，默认仍保持「通用分析」（`bull_trend`），需用户主动勾选才会触发。
+- [改进] 问股页「导出会话 / 导出单条消息」按钮的下载文件名改为 `{股票代码}_{YYYYMMDD}.md`（单条加 `_user/_assistant` 后缀）；从最早一条用户消息中按括号代码 → token 正则两级提取，识别失败时回退旧命名以保证体验不退化；改动仅在 `apps/dsa-web/src/utils/chatExport.ts` 与 `ChatPage.tsx`，不影响后端 / Schema / 持久化。
 - [修复] `AGENT_MAX_STEPS` 在 orchestrator 多 Agent 模式下改为作为各子 Agent 的步数上限而非硬覆盖；TechnicalAgent 等高默认值 Agent 会被封顶，低默认值 Agent 保持原值，减少不必要的 LLM 调用膨胀与配额消耗。
+- [测试] 新增 `tests/test_fear_greed_service.py`，覆盖 41 个用例（`_score_label` 边界值、`to_szdt_code` 全格式、`is_available`、`get_score`/`get_fear_greed_context` 成功/失败/缓存/TTL 过期、`_format` 字段组合）；同步在 `config_registry` 中补齐 `SZDT_AUTH_TOKEN` 字段定义（`data_source` 分类、敏感、display_order=17），使其可在 Web 设置里正常展示与保存。
 - [改进] 未配置 `STOCK_LIST` 时的默认自选股增加常见美股标的（`MSTR`、`CRCL`、`ASTS`、`AMZN`、`MARA`、`CLSK`、`BITF`、`BMNR`、`CPNG`、`HIMS`、`RDDT`、`DUOL`、`NBIS`、`OKLO`、`TEM`、`U`、`SOFI` 等），与 `.env.example`、Web 设置默认值（`config_registry`）对齐；`refresh_stock_list` 空列表回退与之一致。
 - [改进] 美股大盘复盘 LLM 提示词改为简体中文输出（与 A 股相同章节结构），并同步 `US_BLUEPRINT` 策略框架为中文，避免 `MARKET_REVIEW_REGION=us/both` 时生成整段英文报告。
 - [改进] 产品对外命名统一为「自选股智能分析系统」（README、AGENTS、繁体 README、完整指南与 openclaw 集成说明、邮件与自定义 Webhook 默认标题文案等）。

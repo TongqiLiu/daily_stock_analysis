@@ -13,7 +13,7 @@ import {
   type Message,
   type ProgressStep,
 } from '../stores/agentChatStore';
-import { downloadSession, formatSessionAsMarkdown } from '../utils/chatExport';
+import { buildMessageFilename, downloadSession, formatSessionAsMarkdown } from '../utils/chatExport';
 import type { ChatFollowUpContext } from '../utils/chatFollowUp';
 import {
   buildFollowUpPrompt,
@@ -335,12 +335,12 @@ const ChatPage: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `${msg.role === 'user' ? 'user' : 'assistant'}-message-${msg.id}.md`;
+    anchor.download = buildMessageFilename(msg, messages);
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-  }, []);
+  }, [messages]);
 
   const getCurrentStage = (steps: ProgressStep[]): string => {
     if (steps.length === 0) return '正在连接...';
@@ -932,34 +932,43 @@ const ChatPage: React.FC = () => {
                     通用分析
                   </span>
                 </label>
-                {skills.map((s) => (
-                  <label
-                    key={s.id}
-                    className="flex items-center gap-1.5 cursor-pointer group relative mt-0.5"
-                    onMouseEnter={() => setShowSkillDesc(s.id)}
-                    onMouseLeave={() => setShowSkillDesc(null)}
-                  >
-                    <input
-                      type="radio"
-                      name="skill"
-                      value={s.id}
-                      checked={selectedSkill === s.id}
-                      onChange={() => setSelectedSkill(s.id)}
-                      className="chat-skill-radio"
-                    />
-                    <span
-                      className={`transition-colors text-sm ${selectedSkill === s.id ? 'text-foreground font-medium' : 'text-secondary-text group-hover:text-foreground'}`}
+                {skills.map((s) => {
+                  const isMultiConsensus = s.id === 'multi_strategy_consensus';
+                  return (
+                    <label
+                      key={s.id}
+                      className={
+                        isMultiConsensus
+                          ? 'flex items-center gap-1.5 cursor-pointer group relative mt-0.5 rounded-md border border-purple-500/60 bg-purple-500/10 px-2 py-0.5 hover:bg-purple-500/20 hover:border-purple-400 transition-colors'
+                          : 'flex items-center gap-1.5 cursor-pointer group relative mt-0.5'
+                      }
+                      onMouseEnter={() => setShowSkillDesc(s.id)}
+                      onMouseLeave={() => setShowSkillDesc(null)}
                     >
-                      {s.name}
-                    </span>
-                    {showSkillDesc === s.id && s.description && (
-                      <div className="skill-desc-tooltip">
-                        <p className="skill-title">{s.name}</p>
-                        <p>{s.description}</p>
-                      </div>
-                    )}
-                  </label>
-                ))}
+                      <input
+                        type="radio"
+                        name="skill"
+                        value={s.id}
+                        checked={selectedSkill === s.id}
+                        onChange={() => setSelectedSkill(s.id)}
+                        className="chat-skill-radio"
+                      />
+                      <span
+                        className={`transition-colors text-sm ${
+                          selectedSkill === s.id ? 'text-foreground font-medium' : 'text-secondary-text group-hover:text-foreground'
+                        } ${isMultiConsensus ? 'font-semibold text-purple-200' : ''}`}
+                      >
+                        {s.name}
+                      </span>
+                      {showSkillDesc === s.id && s.description && (
+                        <div className="skill-desc-tooltip">
+                          <p className="skill-title">{s.name}</p>
+                          <p>{s.description}</p>
+                        </div>
+                      )}
+                    </label>
+                  );
+                })}
               </div>
             )}
 
