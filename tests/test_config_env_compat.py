@@ -347,7 +347,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             config = Config._load_from_env()
 
-        self.assertEqual(config.agent_orchestrator_timeout_s, 600)
+        self.assertEqual(config.agent_orchestrator_timeout_s, 900)
         self.assertEqual(config.news_max_age_days, 3)
         self.assertEqual(config.max_workers, 3)
         self.assertEqual(config.webui_port, 8000)

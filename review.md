@@ -77,7 +77,7 @@
 - `.env.example`
 - `docs/CHANGELOG.md`
 - Web 设置页文案与可见项
-- `AGENT_ORCHESTRATOR_TIMEOUT_S` 在配置元数据中的默认值已与运行时默认 `600` 秒对齐
+- `AGENT_ORCHESTRATOR_TIMEOUT_S` 在配置元数据中的默认值已与运行时默认 `900` 秒对齐
 
 以保证“实际行为 / 配置元数据 / 前端展示”三者尽量一致。
 
