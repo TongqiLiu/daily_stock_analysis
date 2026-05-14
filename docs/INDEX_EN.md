@@ -37,6 +37,7 @@
 
 | Document | Description |
 |----------|-------------|
+| [Capabilities Map](capabilities/README.md) | Single-page overview of what the system can do (triggers, skills, agent tools, data sources, notifications, API endpoints, extension guide) — Chinese only at the moment |
 | [Changelog](CHANGELOG.md) | Version history and release notes (maintained in Chinese with English summaries) |
 
 ---

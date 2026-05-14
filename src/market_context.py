@@ -13,16 +13,32 @@ import re
 from typing import Optional
 
 
+def _empty_stock_market_fallback() -> str:
+    """Market for LLM guidelines when no stock_code (from Config, default us)."""
+    try:
+        from src.config import get_config
+
+        m = getattr(get_config(), "default_market_context", "us") or "us"
+        m = str(m).strip().lower()
+        if m in ("cn", "hk", "us"):
+            return m
+    except Exception:
+        pass
+    return "us"
+
+
 def detect_market(stock_code: Optional[str]) -> str:
     """Detect market from stock code.
 
     Returns:
-        One of 'cn', 'hk', 'us', or 'cn' as fallback.
+        One of 'cn', 'hk', 'us'. When ``stock_code`` is empty, uses
+        ``Config.default_market_context`` (env ``DEFAULT_MARKET_CONTEXT``, default ``us``).
     """
-    if not stock_code:
-        return "cn"
+    raw = (stock_code or "").strip()
+    if not raw:
+        return _empty_stock_market_fallback()
 
-    code = stock_code.strip().upper()
+    code = raw.upper()
 
     # HK stocks: HK00700, 00700.HK, or 5-digit pure numbers
     if code.startswith("HK") or code.endswith(".HK"):

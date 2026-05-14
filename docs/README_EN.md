@@ -162,6 +162,7 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `AGENT_MODE` | Enable Agent strategy chat mode (internally normalized as `skill`, `true`/`false`, default `false`) | Optional |
 | `AGENT_LITELLM_MODEL` | Optional Agent-only primary model; when empty it inherits the primary model, and bare names are normalized to `openai/<model>` | Optional |
 | `AGENT_MAX_STEPS` | Max reasoning-step ceiling for Agent mode (default `10`); in orchestrator mode each sub-agent uses `min(its default, AGENT_MAX_STEPS)` instead of a hard override | Optional |
+| `DEFAULT_MARKET_CONTEXT` | When no stock code is bound, LLM market guidelines use this market (`cn` / `hk` / `us`, default `us`); explicit codes still override detection | Optional |
 | `AGENT_SKILLS` | Comma-separated active strategy-skill ids. Leave empty to use the primary default strategy skill declared in metadata (built-in default: `bull_trend`); use `all` to activate every loaded strategy skill. | Optional |
 | `AGENT_SKILL_DIR` | Custom strategy-skill directory (default built-in `strategies/` compatibility path) | Optional |
 

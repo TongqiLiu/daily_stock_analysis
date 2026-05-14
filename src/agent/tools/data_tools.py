@@ -606,3 +606,210 @@ get_capital_flow_tool = ToolDefinition(
 
 
 ALL_DATA_TOOLS.append(get_capital_flow_tool)
+
+
+# ============================================================
+# get_fear_greed_index (szdt.tech)
+# ============================================================
+
+_fear_greed_service_singleton = None
+_fear_greed_service_lock = Lock()
+
+
+def _get_fear_greed_service():
+    """Return a module-level singleton FearGreedService, reusing in-process cache."""
+    global _fear_greed_service_singleton
+    if _fear_greed_service_singleton is None:
+        with _fear_greed_service_lock:
+            if _fear_greed_service_singleton is None:
+                from src.config import get_config
+                from src.services.fear_greed_service import FearGreedService
+
+                cfg = get_config()
+                token = getattr(cfg, "szdt_auth_token", None)
+                _fear_greed_service_singleton = FearGreedService(auth_token=token)
+    return _fear_greed_service_singleton
+
+
+def reset_fear_greed_service() -> None:
+    """Clear the cached FearGreedService so runtime config reloads take effect."""
+    global _fear_greed_service_singleton
+    with _fear_greed_service_lock:
+        _fear_greed_service_singleton = None
+
+
+def _handle_get_fear_greed_index(stock_code: str) -> dict:
+    """Fetch stock-level fear/greed index via szdt.tech."""
+    svc = _get_fear_greed_service()
+    if not svc.is_available:
+        return {
+            "stock_code": stock_code,
+            "status": "not_configured",
+            "note": "SZDT_AUTH_TOKEN not set; fear/greed index unavailable.",
+        }
+
+    try:
+        ctx = svc.get_fear_greed_context(stock_code)
+        score_pair = svc.get_score(stock_code)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_fear_greed_index failed for %s: %s", stock_code, exc)
+        return {
+            "stock_code": stock_code,
+            "status": "error",
+            "error": f"fear/greed fetch failed: {exc}",
+        }
+
+    if score_pair is None:
+        return {
+            "stock_code": stock_code,
+            "status": "unavailable",
+            "note": (
+                "No data returned. Possible reasons: stock code not yet bound to szdt.tech account "
+                "(account stock-binding quota exhausted), or symbol format not recognised."
+            ),
+        }
+
+    score, label = score_pair
+    return {
+        "stock_code": stock_code,
+        "status": "ok",
+        "score": score,
+        "label": label,
+        "score_range": "approx -100 ~ 100; negative = panic, positive = greedy",
+        "context_text": ctx or "",
+        "interpretation": (
+            "Use as a contrarian signal: extreme greed (>60) suggests caution at highs; "
+            "extreme panic (<-60) suggests potential accumulation zones. "
+            "Do not rely on this alone."
+        ),
+    }
+
+
+get_fear_greed_index_tool = ToolDefinition(
+    name="get_fear_greed_index",
+    description=(
+        "Get the stock-level Fear/Greed index (szdt.tech) for a stock. "
+        "Returns a sentiment score in the approximate range -100..100 and a Chinese label "
+        "(极度恐慌/恐慌/中性/贪婪/极度贪婪). Supports A-share (SH/SZ), Hong Kong (HK), and US tickers. "
+        "Useful as a contrarian sentiment signal at market extremes. "
+        "When szdt.tech token is missing or stock-binding quota is exhausted, returns status='not_configured'/'unavailable' "
+        "with an explanatory note rather than failing."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519' (A-share), 'HK00700' (HK), 'AAPL' (US).",
+        ),
+    ],
+    handler=_handle_get_fear_greed_index,
+    category="data",
+)
+
+
+ALL_DATA_TOOLS.append(get_fear_greed_index_tool)
+
+
+# ============================================================
+# get_valuation_percentile (akshare baidu + yfinance.info)
+# ============================================================
+
+_valuation_service_singleton = None
+_valuation_service_lock = Lock()
+
+
+def _get_valuation_service():
+    """Return a module-level singleton ValuationPercentileService."""
+    global _valuation_service_singleton
+    if _valuation_service_singleton is None:
+        with _valuation_service_lock:
+            if _valuation_service_singleton is None:
+                from src.services.valuation_percentile_service import (
+                    ValuationPercentileService,
+                )
+
+                _valuation_service_singleton = ValuationPercentileService()
+    return _valuation_service_singleton
+
+
+def reset_valuation_service() -> None:
+    """Clear the cached ValuationPercentileService so runtime reloads take effect."""
+    global _valuation_service_singleton
+    with _valuation_service_lock:
+        _valuation_service_singleton = None
+
+
+def _handle_get_valuation_percentile(
+    stock_code: str,
+    metric: str = "pe",
+    lookback_years: int = 5,
+) -> dict:
+    """Fetch valuation history percentile (PE/PB/PS) for a stock."""
+    svc = _get_valuation_service()
+    try:
+        result = svc.get_valuation_data(
+            stock_code=stock_code,
+            metric=metric,
+            lookback_years=lookback_years,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "get_valuation_percentile failed for %s/%s: %s", stock_code, metric, exc
+        )
+        return {
+            "stock_code": stock_code,
+            "metric": metric,
+            "status": "error",
+            "error": f"valuation percentile fetch failed: {exc}",
+        }
+
+    if result is None:
+        return {
+            "stock_code": stock_code,
+            "metric": metric,
+            "status": "unavailable",
+            "note": "Service returned no data.",
+        }
+    return result
+
+
+get_valuation_percentile_tool = ToolDefinition(
+    name="get_valuation_percentile",
+    description=(
+        "Get historical valuation percentile (PE / PB / PS) for a stock. "
+        "Returns current value, percentile rank (0-100), 5-bucket distribution, "
+        "and a Chinese rating (极低估/偏低估/合理/偏高估/极高估). "
+        "Useful as the core 'is it cheap?' signal for long-term value investing. "
+        "A-share: full ~5-year daily history via akshare/baidu. "
+        "US: current value only (status='partial', historical percentile not available). "
+        "HK: not supported yet (status='unavailable'). "
+        "All failures return a dict with status field, never raises."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519' (A-share), 'AAPL' (US), 'HK00700' (HK).",
+        ),
+        ToolParameter(
+            name="metric",
+            type="string",
+            description="Valuation metric: pe (default) / pb / ps.",
+            required=False,
+            enum=["pe", "pb", "ps"],
+            default="pe",
+        ),
+        ToolParameter(
+            name="lookback_years",
+            type="integer",
+            description="History window in years (1, 3, 5, 10). Default 5.",
+            required=False,
+            default=5,
+        ),
+    ],
+    handler=_handle_get_valuation_percentile,
+    category="data",
+)
+
+
+ALL_DATA_TOOLS.append(get_valuation_percentile_tool)

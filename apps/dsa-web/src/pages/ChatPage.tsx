@@ -170,7 +170,11 @@ const ChatPage: React.FC = () => {
     agentApi.getSkills()
       .then((res) => {
         setSkills(res.skills);
+        // 前端默认偏好「⚡ 多策略联合」，回退到后端 default_skill_id，再回退到首项
+        const preferredSkillId = 'multi_strategy_consensus';
+        const hasPreferred = res.skills.some((s) => s.id === preferredSkillId);
         const defaultId =
+          (hasPreferred ? preferredSkillId : '') ||
           res.default_skill_id ||
           res.skills[0]?.id ||
           '';

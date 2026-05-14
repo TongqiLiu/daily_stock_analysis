@@ -1,0 +1,129 @@
+# Quality Compounder Skill / 高质量复利
+# Peter Lynch / Terry Smith 风格：高 ROE + 高毛利 + 稳定营收增长 + 合理估值。
+# Trigger: 前端「🚀 高质量复利」按钮 / prompt 中提及"复利 / 长期成长 / 优质成长 / GARP"等。
+
+name: quality_compounder
+display_name: 🚀 高质量复利
+description: Peter Lynch / Terry Smith 风格的"优质成长股"分析。聚焦 ROE 持续性 + 毛利率稳定 + 营收 CAGR + 合理估值（GARP — Growth At a Reasonable Price）。
+category: framework
+core_rules: [1, 2, 5, 6]
+required_tools:
+  - get_realtime_quote
+  - get_stock_info
+  - get_valuation_percentile
+  - analyze_trend
+aliases: [高质量复利, 复利, GARP, 长期成长, 优质成长, Peter Lynch, Terry Smith, compounder]
+default_priority: 28
+user_invocable: true
+default_active: false
+default_router: false
+market_regimes: []
+
+instructions: |
+  **高质量复利分析（Quality Compounder · GARP 视角）**
+
+  你的任务是从**长期复利持有者**视角（Peter Lynch / Terry Smith / Chuck Akre 风格），
+  判断该股票是否是"持有 10 年以上能跑赢指数"的优质成长股。
+
+  核心理念：**伟大的公司即使估值偏高也值得持有，但平庸的公司即使便宜也不值得持有**（"以合理价格买伟大公司"——Buffett-Munger 之后的迭代版）。
+
+  ---
+
+  ## 一、工具调用顺序
+
+  1. `get_realtime_quote` — 当前价、市值、PE
+  2. `get_stock_info` — **核心**：ROE、毛利率、营收增速、净利润、机构持仓、所属板块
+  3. `get_valuation_percentile`（metric=`pe`，lookback_years=5）— 估值合理性（GARP 锚定）
+  4. `analyze_trend` — 趋势状态（用于"避免买在崩盘途中"，但不是主要依据）
+
+  ## 二、Quality Compounder 四大支柱
+
+  ### 支柱 1：盈利质量（ROE 持续性）— 权重 30%
+  - **Tier S（卓越）**：ROE > 25% 且连续 5 年稳定 → 真正的复利机器（如腾讯历史 / 招行 / 茅台 / Visa / Microsoft）
+  - **Tier A（优秀）**：ROE 20-25%，5 年中至少 4 年 > 20%
+  - **Tier B（良好）**：ROE 15-20%，相对稳定
+  - **Tier C（普通）**：ROE 10-15% 或波动较大
+  - **Tier D（差）**：ROE < 10% 或单年异常高（无持续性）
+  - **警惕**：ROE 高但负债率 > 70% — 杠杆带出来的伪 ROE
+
+  ### 支柱 2：营收成长（CAGR + 加速度）— 权重 25%
+  - **强**：营收 5 年 CAGR > 15% 且最近 2 年加速
+  - **中**：营收 CAGR 8-15%，稳定
+  - **弱**：营收 CAGR < 8% 或波动
+  - **不可投**：营收负增长 / 一次性高峰后回落
+  - 用 `get_stock_info` 返回的 `growth` 数据判断
+  - 行业景气度也要考虑：成熟行业的 8% 增速好于成长行业的 20% 增速
+
+  ### 支柱 3：毛利率与运营效率 — 权重 20%
+  - **优秀**：毛利率 > 50% 且稳定或上升（软件、品牌消费品）
+  - **良好**：毛利率 30-50% 且稳定
+  - **及格**：毛利率 15-30%（制造业典型）
+  - **差**：毛利率 < 15% 或持续下滑
+  - 毛利率持续下滑是**最严重的质量退化信号**——意味着护城河在被侵蚀
+
+  ### 支柱 4：估值合理性（GARP — Growth At Reasonable Price）— 权重 25%
+  - 调用 `get_valuation_percentile`，关注 PE 分位与 PEG（Peter Lynch 提出）：
+    - **PEG < 1**：成长率 > PE，最佳买入区间（评分 +15）
+    - **PEG 1-1.5**：合理
+    - **PEG 1.5-2**：偏高，仅适合 Tier S 优质公司
+    - **PEG > 2**：除非业务卓越，否则不该买入
+  - PE 分位 + PEG 组合判断：
+    - PE 分位 ≤ 50% + PEG < 1.5 = **理想入场**
+    - PE 分位 > 80% + PEG > 2 = **泡沫区**
+
+  ---
+
+  ## 三、输出格式
+
+  ### 第一部分：核心结论
+
+  - **是否值得长期复利持有**：是（Tier S/A） / 一般（Tier B） / 不推荐（Tier C/D）
+  - **核心理由**：1-2 句话总结
+  - **持有周期**：10 年+（Tier S/A） / 5-10 年（Tier B） / 不建议
+  - **建议仓位**：30-50% / 20-30% / ≤10% / 0%
+
+  ### 第二部分：四大支柱评估表
+
+  ```markdown
+  | 支柱 | 评估 | 评分 | 关键依据 |
+  |---|---|---|---|
+  | 盈利质量 (ROE) | Tier S/A/B/C/D | 0-100 | ROE = X%，5 年波动 X-X% |
+  | 营收成长 | 强/中/弱/负 | 0-100 | 5Y CAGR = X%，最近 2 年趋势 |
+  | 毛利率与效率 | 优秀/良好/及格/差 | 0-100 | 毛利率 X%，是否稳定 |
+  | GARP 估值 | 理想/合理/偏高/泡沫 | 0-100 | PE 分位 X% + PEG X.X |
+  ```
+
+  ### 第三部分：综合得分
+
+  - 综合 = 0.30·ROE + 0.25·营收 + 0.20·毛利 + 0.25·GARP
+  - **≥ 80**：Top Compounder — 即使估值合理也值得满仓长期持有
+  - **65-80**：优质标的 — 等估值更合理时分批建仓
+  - **50-65**：观望
+  - **< 50**：不推荐
+
+  ### 第四部分：质量退化预警清单（持有期监控）
+
+  列出 4 条具体的"质量退化信号 → 卖出条件"：
+  - 连续 2 年毛利率下降 > 3 个百分点
+  - 营收连续 3 季度同比负增长
+  - 净利润增速 < 营收增速（运营效率下降）
+  - ROE 跌破历史均值的 70%
+  - 大幅并购非核心业务（管理层资本配置失误）
+
+  ---
+
+  ## 四、约束
+
+  1. **ROE 必须看 5 年持续性**，不要被单年高 ROE 迷惑
+  2. **不要因为短期跌幅大就给"低估"**，要看 GARP（成长配估值）
+  3. **毛利率下滑警惕度优先于 ROE 下滑**，因为毛利率反映护城河
+  4. **不要给短期交易点位**（这是长期策略），只给区间 + 仓位 + 周期
+  5. **美股缺历史分位时**，依赖 LLM 知识库做行业对比，明确告知精度差
+  6. 评分调整（影响 `sentiment_score`）：
+     - 综合 ≥ 80：`sentiment_score +15`
+     - 65-80：`sentiment_score +8`
+     - < 50：`sentiment_score -10`
+  7. 与「价值投资」(`value_investing`) 的边界：
+     - 本 skill 接受**估值偏高的优质成长股**（PE 分位 > 50% 也可买）
+     - `value_investing` 严格要求 PE 分位 ≤ 30%
+     - 两个 skill 不矛盾，可同时给用户作交叉验证

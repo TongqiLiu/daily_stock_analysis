@@ -20,7 +20,7 @@
 
 **零成本部署** · GitHub Actions 免費運行 · 無需伺服器
 
-[**功能特性**](#-功能特性) · [**快速開始**](#-快速開始) · [**推送效果**](#-推送效果) · [**完整指南**](./full-guide.md) · [**常見問題**](./FAQ.md) · [**更新日誌**](./CHANGELOG.md)
+[**功能特性**](#-功能特性) · [**快速開始**](#-快速開始) · [**推送效果**](#-推送效果) · [**完整指南**](./full-guide.md) · [**能力總覽**](./capabilities/README.md) · [**常見問題**](./FAQ.md) · [**更新日誌**](./CHANGELOG.md)
 
  繁體中文 | [English](README_EN.md) | [简体中文](../README.md)
 
@@ -156,6 +156,7 @@
 | `AGENT_MODE` | 啟用 Agent 策略問股模式（內部統一命名為 skill，`true`/`false`，預設 `false`） | 可選 |
 | `AGENT_LITELLM_MODEL` | Agent 專用主模型（可選）；留空時繼承主模型，無 provider 前綴時按 `openai/<model>` 解析 | 可選 |
 | `AGENT_MAX_STEPS` | Agent 最大推理步數上限（預設 `10`）；多 Agent orchestrator 模式下按 `min(子 Agent 預設值, AGENT_MAX_STEPS)` 生效，不會抬高低預設值 Agent 的步數 | 可選 |
+| `DEFAULT_MARKET_CONTEXT` | 無綁定股票代碼時，問股／分析注入的預設市場語境（`cn`／`hk`／`us`，預設 `us`）；訊息或上下文帶代碼時仍按代碼識別市場 | 可選 |
 | `AGENT_SKILLS` | 逗號分隔的策略技能 id。留空時使用 metadata 宣告的主預設策略 skill（內建預設為 `bull_trend`）；使用 `all` 可啟用所有已載入策略技能。 | 可選 |
 | `AGENT_SKILL_DIR` | 自訂策略技能目錄（預設沿用內建 `strategies/` 相容路徑） | 可選 |
 

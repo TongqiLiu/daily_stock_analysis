@@ -571,6 +571,8 @@ class Config:
     agent_event_monitor_enabled: bool = False  # Enable periodic event-driven alert checks in schedule mode
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
+    # When stock_code is absent, LLM market guidelines (Agent chat / analyzer) use this market: cn|hk|us
+    default_market_context: str = "us"
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -1254,6 +1256,7 @@ class Config:
                 minimum=1,
             ),
             agent_event_alert_rules_json=os.getenv('AGENT_EVENT_ALERT_RULES_JSON', ''),
+            default_market_context=cls._parse_default_market_context(os.getenv('DEFAULT_MARKET_CONTEXT')),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
             feishu_webhook_secret=os.getenv('FEISHU_WEBHOOK_SECRET'),
@@ -1852,6 +1855,18 @@ class Config:
                 value,
             )
         return normalized
+
+    @classmethod
+    def _parse_default_market_context(cls, value: Optional[str]) -> str:
+        """Parse DEFAULT_MARKET_CONTEXT for empty stock_code LLM prompts (cn|hk|us)."""
+        raw = (value or "us").strip().lower()
+        if raw in ("cn", "hk", "us"):
+            return raw
+        logger.warning(
+            "DEFAULT_MARKET_CONTEXT %r invalid; falling back to 'us' (valid: cn, hk, us).",
+            value,
+        )
+        return "us"
 
     @classmethod
     def _parse_news_strategy_profile(cls, value: Optional[str]) -> str:

@@ -20,6 +20,7 @@ from src.market_analyzer import MarketAnalyzer
 from src.search_service import SearchService
 from src.analyzer import GeminiAnalyzer
 from src.services.druckenmiller_conviction_service import DruckenmillerConvictionService
+from src.services.us_liquidity_service import USLiquidityService
 
 
 logger = logging.getLogger(__name__)
@@ -100,9 +101,22 @@ def run_market_review(
             except Exception as e:
                 logger.warning("Druckenmiller conviction 获取失败，跳过: %s", e)
 
+            # 附加美股资金流动性面板（仅 us / both，fail-open）
+            liquidity_block = None
+            if region in ('us', 'both'):
+                try:
+                    liq_svc = USLiquidityService()
+                    liquidity_block = liq_svc.get_liquidity_block()
+                    if liquidity_block:
+                        logger.info("美股资金流动性面板已获取，附加到复盘报告")
+                except Exception as e:
+                    logger.warning("美股资金流动性面板获取失败，跳过: %s", e)
+
             full_report = review_report
+            if liquidity_block:
+                full_report = full_report + "\n\n" + liquidity_block
             if conviction_block:
-                full_report = review_report + "\n\n" + conviction_block
+                full_report = full_report + "\n\n" + conviction_block
 
             # 保存报告到文件
             date_str = datetime.now().strftime('%Y%m%d')

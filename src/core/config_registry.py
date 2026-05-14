@@ -245,7 +245,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "SZDT_AUTH_TOKEN": {
         "title": "SZDT 贪恐指数激活码",
-        "description": "szdt.tech 会员激活码，用于查询个股贪恐指数（A股/港股/美股）。未配置时贪恐指数功能静默跳过。每自然月 5000 次调用，同一只股票 30 天内复用仅扣 1 次额度。",
+        "description": "szdt.tech 会员激活码，用于查询个股贪恐指数（A股/港股/美股）。未配置时贪恐指数功能静默跳过。注意：配额按「已绑定股票数量」计算（非调用次数），账号股票池满后新代码会被服务端拒绝（返回「额度已用完」），需要在 szdt.tech 后台手动删减旧股票释放额度；同一只股票 30 天内复用免额度。",
         "category": "data_source",
         "data_type": "string",
         "ui_control": "password",
@@ -1769,6 +1769,24 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "validation": {},
         "display_order": 68,
+    },
+    "DEFAULT_MARKET_CONTEXT": {
+        "title": "Default Market Context",
+        "description": "When no stock_code is bound (e.g. free-form Agent chat), LLM market guidelines use this market: cn (A-share), hk (HKEX), or us (US). Stock codes still override detection.",
+        "category": "agent",
+        "data_type": "string",
+        "ui_control": "select",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "us",
+        "options": [
+            {"label": "US", "value": "us"},
+            {"label": "A-share (CN)", "value": "cn"},
+            {"label": "Hong Kong", "value": "hk"},
+        ],
+        "validation": {},
+        "display_order": 67,
     },
     "AGENT_EVENT_MONITOR_ENABLED": {
         "title": "Event Monitor",
