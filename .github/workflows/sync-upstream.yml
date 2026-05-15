@@ -1,0 +1,127 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # 每周一和周四的 UTC 02:00 运行（北京时间 10:00）
+    - cron: '0 2 * * 1,4'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          if ! git remote | grep -q '^upstream$'; then
+            git remote add upstream https://github.com/ZhuLinsen/daily_stock_analysis.git
+          fi
+
+      - name: Fetch upstream
+        run: git fetch upstream main
+
+      - name: Check for updates
+        id: check
+        run: |
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+
+          if [ "$MERGE_BASE" = "$UPSTREAM_HEAD" ]; then
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+            echo "✅ No updates from upstream"
+          else
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            COMMIT_COUNT=$(git rev-list --count ${MERGE_BASE}..${UPSTREAM_HEAD})
+            echo "commit_count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+            echo "📦 Found $COMMIT_COUNT new commits from upstream"
+          fi
+
+      - name: Create sync branch
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          BRANCH_NAME="sync-upstream-$(date +%Y%m%d-%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          git checkout -b $BRANCH_NAME
+
+      - name: Merge upstream
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          if git merge upstream/main --no-edit; then
+            echo "merge_status=success" >> $GITHUB_ENV
+            echo "✅ Merge successful"
+          else
+            echo "merge_status=conflict" >> $GITHUB_ENV
+            echo "❌ Merge conflict detected"
+            # 记录冲突文件
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt
+            cat /tmp/conflicts.txt
+          fi
+
+      - name: Push sync branch
+        if: steps.check.outputs.has_updates == 'true' && env.merge_status == 'success'
+        run: |
+          git push origin ${{ env.branch_name }}
+
+      - name: Create Pull Request
+        if: steps.check.outputs.has_updates == 'true' && env.merge_status == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "chore: sync upstream changes (${{ steps.check.outputs.commit_count }} commits)" \
+            --body "🔄 Auto-sync from upstream/main
+
+          **Updates**: ${{ steps.check.outputs.commit_count }} new commits from ZhuLinsen/daily_stock_analysis
+
+          **Merge Status**: ✅ No conflicts
+
+          **Review Checklist**:
+          - [ ] Check if any config changes need local adaptation
+          - [ ] Verify no breaking changes to local features
+          - [ ] Run tests: \`./scripts/ci_gate.sh\`
+
+          This PR was automatically created by the sync-upstream workflow." \
+            --base main \
+            --head ${{ env.branch_name }}
+
+      - name: Comment on conflict
+        if: steps.check.outputs.has_updates == 'true' && env.merge_status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 获取当前仓库的 issue 权限以创建 issue
+          gh issue create \
+            --title "⚠️ Upstream sync failed: merge conflicts" \
+            --body "Attempted to sync from upstream but encountered merge conflicts.
+
+          **Conflicted files**:
+          \`\`\`
+          $(cat /tmp/conflicts.txt)
+          \`\`\`
+
+          **Resolution**:
+          Run locally:
+          \`\`\`bash
+          git fetch upstream
+          git merge upstream/main
+          # Resolve conflicts manually
+          git add .
+          git commit
+          git push origin main
+          \`\`\`
+
+          Or use the sync script:
+          \`\`\`bash
+          ./scripts/sync-and-push.sh
+          \`\`\`" \
+            --label "upstream-sync"

@@ -64,6 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] `StockAnalysisPipeline` 搜索服务与社交舆情服务改为可选降级初始化：任一服务初始化异常时记录 warning 并以禁用状态继续运行，避免外部依赖抖动阻塞主分析链路与 SSE 进度回调。
 - [文档] DEPLOY.md 和 deploy-webui-cloud.md 新增"UI 元素异常变大/布局错乱"排查步骤（重建 Docker 镜像或手动执行 npm run build）
 - [文档] 补充飞书 Webhook 配置说明：强调 `FEISHU_WEBHOOK_URL` 是群通知必填项、`FEISHU_WEBHOOK_SECRET` 与飞书机器人「签名校验」必须两端同时启用或同时关闭、`FEISHU_APP_SECRET` 仅用于应用/Stream Bot 模式不可替代 Webhook；同步完善英文指南并在 `.env.example` 为相关配置项补充内联说明注释
+- [新功能] 新增 fork 仓库 upstream 同步脚本 `scripts/sync-and-push.sh`，推送前自动拉取 upstream 更新并合并，有冲突时提示手动解决。
+- [新功能] 新增 GitHub Actions 自动同步工作流 `.github/workflows/sync-upstream.yml`，定期检查 upstream 更新，无冲突时自动创建 PR，有冲突时创建 issue 提醒。
+- [文档] 新增 `docs/upstream-sync.md` upstream 同步指南，说明脚本使用、自动化工作流、冲突解决流程和最佳实践。
 ## [3.16.0] - 2026-05-10
 
 ### 发布亮点
