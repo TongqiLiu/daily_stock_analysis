@@ -82,6 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增仓库协作 skill `options-review-logger`（`.claude/skills/options-review-logger/`）：支持从期权截图结构化录入、按合约关键字段去重写入 `期权记录_2026.xlsx`、并自动刷新 `策略复盘` 的总览/Spread/周度到期统计。
 - [新功能] 新增仓库协作 skill `futu-indicator-writer`（`.claude/skills/futu-indicator-writer/`）：支持将自然语言交易想法翻译为可在富途指标编辑器粘贴保存的脚本，并附参数说明与导入自检清单。
 - [改进] 基于已验证样例 `CC/CD/NX.ftindex` 反测增强 `futu-indicator-writer`：支持自动匹配 `:=` 与 `A:EMA...` 双语句风格，兼容 `DRAWTEXT` 与 `STICKLINE` 绘图族，减少富途导入时的风格不兼容风险。
+- [新功能] 问股新增并列可选策略「📐 估值模型」(`valuation_model`)：与「😱 贪恐情绪」「放量突破」同级展示，基于 `get_valuation_percentile` + `get_stock_info` + `search_comprehensive_intel` 输出估值分位、成长质量与产业链景气三因子综合结论（对美股/港股数据不完整场景自动降级说明）。
+- [改进] 估值模型升级为“可计算版”：新增 Agent 工具 `get_dcf_valuation`（`stock_code`、`forecast_years`）输出 Bull/Base/Bear 三情景 DCF 估值区间，并接入 `valuation_model` 策略作为问股内在价值锚点（输入缺失时 fail-open 返回 `partial/unavailable`）。
 ## [3.16.0] - 2026-05-10
 
 ### 发布亮点

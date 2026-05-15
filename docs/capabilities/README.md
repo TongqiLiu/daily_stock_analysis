@@ -120,7 +120,7 @@ CLI 全部参数见 `main.py:222-358`，重点：
 
 ---
 
-## 四、Skills（策略）清单 — 16 个
+## 四、Skills（策略）清单 — 17 个
 
 YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载。
 
@@ -142,6 +142,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 14 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河 + 安全边际 + ROE，判断"是否值得长期持有 5 年+" |
 | 15 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP（成长配估值）|
 | 16 | `dividend_growth` | 💵 股息成长 | 35 | income | 收益型 / 退休账户视角：股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
+| 17 | `valuation_model` | 📐 估值模型 | 30 | framework | 估值模型分析：PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级，适配 AI 周期成长股 |
 
 **新增 skill 的最简流程**：
 1. 在 `strategies/` 下加一个 yaml（参考已有 yaml 字段）
@@ -150,11 +151,11 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 
 ---
 
-## 五、Agent Tools（20 个）
+## 五、Agent Tools（21 个）
 
 工具注册见 `src/agent/tools/`，按 `category` 分类：
 
-### 5.1 数据类（`data_tools.py`，9 个）
+### 5.1 数据类（`data_tools.py`，10 个）
 
 | 工具名 | 输入 | 用途 |
 |---|---|---|
@@ -167,6 +168,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `get_capital_flow` | stock_code | A 股主力资金净流入（当日 / 5日 / 10日 + 板块榜） |
 | `get_fear_greed_index` | stock_code | szdt.tech 贪恐分（-100~100）+ 中文标签 |
 | `get_valuation_percentile` | stock_code, metric?, lookback_years? | PE/PB/PS 历史分位（A 股完整 5 年，美股仅当前值 status='partial'，港股 unavailable）|
+| `get_dcf_valuation` | stock_code, forecast_years? | 轻量 DCF 三情景估值（Bull/Base/Bear），返回内在价值区间与相对现价偏离 |
 
 ### 5.2 分析类（`analysis_tools.py`，4 个）
 

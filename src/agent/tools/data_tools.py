@@ -802,6 +802,8 @@ ALL_DATA_TOOLS.append(get_fear_greed_index_tool)
 
 _valuation_service_singleton = None
 _valuation_service_lock = Lock()
+_dcf_valuation_service_singleton = None
+_dcf_valuation_service_lock = Lock()
 
 
 def _get_valuation_service():
@@ -899,3 +901,85 @@ get_valuation_percentile_tool = ToolDefinition(
 
 
 ALL_DATA_TOOLS.append(get_valuation_percentile_tool)
+
+
+# ============================================================
+# get_dcf_valuation (lightweight bull/base/bear DCF)
+# ============================================================
+
+def _get_dcf_valuation_service():
+    """Return a module-level singleton DCFValuationService."""
+    global _dcf_valuation_service_singleton
+    if _dcf_valuation_service_singleton is None:
+        with _dcf_valuation_service_lock:
+            if _dcf_valuation_service_singleton is None:
+                from src.services.dcf_valuation_service import DCFValuationService
+
+                _dcf_valuation_service_singleton = DCFValuationService()
+    return _dcf_valuation_service_singleton
+
+
+def reset_dcf_valuation_service() -> None:
+    """Clear cached DCFValuationService instance."""
+    global _dcf_valuation_service_singleton
+    with _dcf_valuation_service_lock:
+        _dcf_valuation_service_singleton = None
+
+
+def _handle_get_dcf_valuation(
+    stock_code: str,
+    forecast_years: int = 5,
+) -> dict:
+    """Fetch lightweight DCF valuation scenarios for a stock."""
+    svc = _get_dcf_valuation_service()
+    try:
+        result = svc.get_dcf_valuation(
+            stock_code=stock_code,
+            forecast_years=forecast_years,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_dcf_valuation failed for %s: %s", stock_code, exc)
+        return {
+            "stock_code": stock_code,
+            "status": "error",
+            "error": f"dcf valuation failed: {exc}",
+        }
+
+    if result is None:
+        return {
+            "stock_code": stock_code,
+            "status": "unavailable",
+            "note": "DCF valuation service returned no data.",
+        }
+    return result
+
+
+get_dcf_valuation_tool = ToolDefinition(
+    name="get_dcf_valuation",
+    description=(
+        "Run a lightweight DCF valuation and return bull/base/bear intrinsic value scenarios. "
+        "Outputs forecast assumptions, enterprise/equity value, intrinsic price per share, "
+        "and upside/downside percentage vs current price. "
+        "Designed for long-term valuation analysis and AI-cycle growth stock screening. "
+        "Returns status='partial'/'unavailable' when key financial inputs are incomplete."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519' (A-share), 'NVDA' (US), 'HK00700' (HK).",
+        ),
+        ToolParameter(
+            name="forecast_years",
+            type="integer",
+            description="Explicit forecast horizon in years (3-10, default: 5).",
+            required=False,
+            default=5,
+        ),
+    ],
+    handler=_handle_get_dcf_valuation,
+    category="data",
+)
+
+
+ALL_DATA_TOOLS.append(get_dcf_valuation_tool)

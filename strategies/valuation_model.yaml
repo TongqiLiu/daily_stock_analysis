@@ -1,0 +1,96 @@
+# Valuation Model Skill / 估值模型
+# Trigger: 问股策略栏「📐 估值模型」或 prompt 中提及"估值/内在价值/DCF/PEG/AI产业链估值"等。
+
+name: valuation_model
+display_name: 📐 估值模型
+description: 估值模型分析（AI 产业链优先）：结合历史估值分位（PE/PB/PS）、成长质量（ROE/营收增速/毛利）与情报催化，输出偏低估/合理/偏高估结论与仓位建议。
+category: framework
+core_rules: [1, 2, 5, 6]
+required_tools:
+  - get_realtime_quote
+  - get_stock_info
+  - get_valuation_percentile
+  - get_dcf_valuation
+  - search_comprehensive_intel
+aliases: [估值模型, 估值, DCF, PEG, GARP, 内在价值, AI产业链估值]
+default_priority: 30
+user_invocable: true
+default_active: false
+default_router: false
+market_regimes: []
+
+instructions: |
+  **估值模型分析（Valuation Model · AI 产业链）**
+
+  你的任务是判断该股票在当前价格下是否处于“估值合理区间”，并给出可执行的仓位与观察点。
+  重点覆盖 AI 产业链（算力/半导体/光模块/软件平台/应用层）成长股，但也适用于通用股票。
+
+  ---
+
+  ## 一、工具调用顺序（必须）
+
+  1. `get_realtime_quote`：当前价、市值、PE/PB（若可得）
+  2. `get_stock_info`：`valuation/growth/earnings/institution` 基本面块
+  3. `get_valuation_percentile`（metric=`pe`, lookback_years=5）
+  4. `get_valuation_percentile`（metric=`ps`, lookback_years=5）
+  5. `get_dcf_valuation`：输出 Bull/Base/Bear 内在价值区间与 upside/downside
+  6. `search_comprehensive_intel`：核对近期行业景气、订单、财报预期与风险事件
+
+  说明：
+  - A 股分位可直接使用历史百分位；
+  - 美股若返回 `status='partial'`，必须明确提示“历史分位数据有限”，改为“当前估值 + 成长质量 + 行业景气”三因子定性，不给极端定级。
+
+  ---
+
+  ## 二、估值框架（输出必须覆盖）
+
+  ### 1) 历史分位估值（40%）
+  - PE/PS 分位 ≤ 30%：估值友好
+  - 30%~70%：合理区间
+  - ≥ 70%：偏贵，要求更强成长兑现
+
+  ### 2) 成长质量（35%）
+  - ROE 持续性、营收增速、毛利率趋势
+  - 若增长放缓但估值抬升，判定“估值透支”
+
+  ### 3) DCF 区间（25%）
+  - Base 情景内在价值与现价偏离：`upside_pct`
+  - Bull/Bear 区间用于仓位上限与回撤容忍度
+  - DCF 输入不完整时必须标注“仅供参考”
+
+  ### 4) 产业链景气与催化（25%）
+  - 来自综合情报：需求强度、订单能见度、政策/供给冲击、竞争格局变化
+  - AI 周期中允许“合理偏贵”，但不接受“增长下修 + 高估值”组合
+
+  ---
+
+  ## 三、输出格式（严格）
+
+  ### 第一部分：核心结论
+  - **估值结论**：偏低估 / 合理 / 偏高估
+  - **结论置信度**：高 / 中 / 低（并说明数据完整度）
+  - **建议仓位**：0-10% / 10-30% / 30-50%
+  - **执行建议**：分批买入 / 观察等待 / 逢高减仓
+
+  ### 第二部分：估值打分表
+  ```markdown
+  | 维度 | 评分(0-100) | 关键依据 |
+  |---|---:|---|
+  | 历史分位估值 | X | PE/PS 分位与评级 |
+  | 成长质量 | X | ROE、营收增速、毛利趋势 |
+  | DCF 区间一致性 | X | Bull/Base/Bear 内在价值与现价偏离 |
+  | 产业链景气 | X | 订单/财报预期/风险事件 |
+  | 综合得分 | X | 0.30*分位 + 0.25*成长 + 0.25*DCF + 0.20*景气 |
+  ```
+
+  ### 第三部分：3 条监控信号
+  - 例如：估值分位抬升到 >85%、营收同比连续两个季度下滑、核心景气指标转弱
+
+  ---
+
+  ## 四、约束
+
+  1. 不得只看估值，不看成长质量
+  2. 不得把“短期大跌”直接等同于“低估”
+  3. 美股/港股数据不完整时必须明确降级说明
+  4. 不输出确定性收益承诺，只给条件化判断与仓位区间
