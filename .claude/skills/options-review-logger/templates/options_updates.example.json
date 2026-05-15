@@ -1,0 +1,46 @@
+{
+  "section_title": "📅 W20 | May 15 到期 + 近期成交补录（按截图去重）",
+  "summary_title_suffix": "含 W20 May 15 按 100% 结算",
+  "weekly_note_overrides": {
+    "2026-05-15": "100% ✓"
+  },
+  "weekly_exclude_ids": {
+    "2026-05-08": [29]
+  },
+  "spread_review_rows": [
+    {
+      "spread": "ADBE $330/$370",
+      "structure": "Bull Call JAN 15'27",
+      "close_date": "2026-05-16",
+      "net_pnl": 136.16,
+      "result": "盈利"
+    }
+  ],
+  "entries": [
+    {
+      "open_date": "-",
+      "ticker": "VST",
+      "action": "卖Put",
+      "strike": 139,
+      "expiry": "2026-05-15",
+      "premium": 114.2,
+      "close_date": "2026-05-15",
+      "rule": "△",
+      "note": "平均价 $1.14，按归零结算 ✓",
+      "settle_full_premium": true
+    },
+    {
+      "open_date": "2026-05-12",
+      "ticker": "HOOD",
+      "action": "卖Call",
+      "strike": 95,
+      "expiry": "2026-07-17",
+      "premium": 355,
+      "close_date": "2026-05-12",
+      "pnl": 113.38,
+      "pnl_pct": "31.9%",
+      "rule": "△",
+      "note": "卖出1@3.55，佣金0.57；截图 +$113.38"
+    }
+  ]
+}

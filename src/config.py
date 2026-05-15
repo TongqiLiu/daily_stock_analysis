@@ -127,11 +127,13 @@ DEFAULT_STOCK_LIST: Tuple[str, ...] = (
     "CPNG",
     "HIMS",
     "RDDT",
-    "DUOL",
+    "CRWV",
     "NBIS",
     "OKLO",
     "TEM",
-    "U",
+    "TCEHY",
+    "AAPG",
+    "NET",
     "SOFI",
 )
 

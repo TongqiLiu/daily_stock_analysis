@@ -23,6 +23,7 @@ from src.report_language import normalize_report_language
 from src.search_service import SearchService
 from src.core.market_profile import get_profile, MarketProfile
 from src.core.market_strategy import get_market_strategy_blueprint
+from src.services.us_liquidity_service import USLiquidityService
 from data_provider.base import DataFetcherManager
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,8 @@ class MarketAnalyzer:
         self.region = region if region in ("cn", "us", "hk") else "cn"
         self.profile: MarketProfile = get_profile(self.region)
         self.strategy = get_market_strategy_blueprint(self.region)
+        # 美股市场添加流动性服务
+        self.liquidity_service = USLiquidityService() if self.region == "us" else None
 
     def _get_review_language(self) -> str:
         configured = normalize_report_language(
@@ -453,21 +456,21 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
     def generate_market_review(self, overview: MarketOverview, news: List) -> str:
         """
         使用大模型生成大盘复盘报告
-        
+
         Args:
             overview: 市场概览数据
             news: 市场新闻列表 (SearchResult 对象列表)
-            
+
         Returns:
             大盘复盘报告文本
         """
         if not self.analyzer or not self.analyzer.is_available():
             logger.warning("[大盘] AI分析器未配置或不可用，使用模板生成报告")
             return self._generate_template_review(overview, news)
-        
+
         # 构建 Prompt
         prompt = self._build_review_prompt(overview, news)
-        
+
         logger.info("[大盘] 调用大模型生成复盘报告...")
         # Use the public generate_text() entry point — never access private analyzer attributes.
         review = self.analyzer.generate_text(prompt, max_tokens=8192, temperature=0.7)
@@ -475,7 +478,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         if review:
             logger.info("[大盘] 复盘报告生成成功，长度: %d 字符", len(review))
             # Inject structured data tables into LLM prose sections
-            return self._inject_data_into_review(review, overview, news)
+            review = self._inject_data_into_review(review, overview, news)
+
+            # 美股市场附加流动性面板（US10Y 等关键指标）
+            if self.region == "us" and self.liquidity_service:
+                liquidity_block = self.liquidity_service.get_liquidity_block()
+                if liquidity_block:
+                    logger.info("[大盘] 附加美股流动性面板（含 US10Y 风险监控）")
+                    review = review.rstrip() + "\n\n" + liquidity_block
+
+            return review
         else:
             logger.warning("[大盘] 大模型返回为空，使用模板报告")
             return self._generate_template_review(overview, news)
@@ -1150,6 +1162,13 @@ Market conditions can change quickly. The data above is for reference only and d
 ---
 *Review Time: {datetime.now().strftime('%H:%M')}*
 """
+            # 美股市场附加流动性面板（US10Y 等关键指标）
+            if self.region == "us" and self.liquidity_service:
+                liquidity_block = self.liquidity_service.get_liquidity_block()
+                if liquidity_block:
+                    logger.info("[大盘模板] 附加美股流动性面板（含 US10Y 风险监控）")
+                    report = report.rstrip() + "\n\n" + liquidity_block
+
             return report
 
         market_labels = {"cn": "A股", "us": "美股", "hk": "港股"}
@@ -1188,6 +1207,14 @@ Market conditions can change quickly. The data above is for reference only and d
 ---
 *复盘时间: {datetime.now().strftime('%H:%M')}*
 """
+        # 美股市场附加流动性面板（US10Y 等关键指标）
+        if self.region == "us" and self.liquidity_service:
+            liquidity_block = self.liquidity_service.get_liquidity_block()
+            if liquidity_block:
+                logger.info("[大盘模板] 附加美股流动性面板（含 US10Y 风险监控）")
+                report = report.rstrip() + "\n\n" + liquidity_block
+
+        return report
     
     def run_daily_review(self) -> str:
         """

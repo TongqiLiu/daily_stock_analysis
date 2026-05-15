@@ -76,6 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增 fork 仓库 upstream 同步脚本 `scripts/sync-and-push.sh`，推送前自动拉取 upstream 更新并合并，有冲突时提示手动解决。
 - [新功能] 新增 GitHub Actions 自动同步工作流 `.github/workflows/sync-upstream.yml`，定期检查 upstream 更新，无冲突时自动创建 PR，有冲突时创建 issue 提醒。
 - [文档] 新增 `docs/upstream-sync.md` upstream 同步指南，说明脚本使用、自动化工作流、冲突解决流程和最佳实践。
+- [改进] 调整未配置 `STOCK_LIST` 时的默认自选股：移除 `U`、`DUOL`，新增 `CRWV`、`TCEHY`、`AAPG`、`NET`，并同步 `.env.example`。
+- [文档] 新增 `docs/stock-analysis-capability-map/` 独立能力图文档：`capability-map.html` 用于可视化当前股票分析能力全景，`future-capabilities.md` 给出估值模型、市场分析与组合风控等增强路线图。
+- [新功能] 新增可选 `FutuFetcher` 数据源（`FUTU_ENABLED=true` 时启用），通过 OpenD 为美股/港股/A股提供实时与日线补充；默认关闭，不影响现有数据源链路。
+- [新功能] 新增仓库协作 skill `options-review-logger`（`.claude/skills/options-review-logger/`）：支持从期权截图结构化录入、按合约关键字段去重写入 `期权记录_2026.xlsx`、并自动刷新 `策略复盘` 的总览/Spread/周度到期统计。
+- [新功能] 新增仓库协作 skill `futu-indicator-writer`（`.claude/skills/futu-indicator-writer/`）：支持将自然语言交易想法翻译为可在富途指标编辑器粘贴保存的脚本，并附参数说明与导入自检清单。
+- [改进] 基于已验证样例 `CC/CD/NX.ftindex` 反测增强 `futu-indicator-writer`：支持自动匹配 `:=` 与 `A:EMA...` 双语句风格，兼容 `DRAWTEXT` 与 `STICKLINE` 绘图族，减少富途导入时的风格不兼容风险。
 ## [3.16.0] - 2026-05-10
 
 ### 发布亮点

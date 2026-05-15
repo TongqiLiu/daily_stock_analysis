@@ -95,6 +95,25 @@ def _classify_signal(key: str, signal_type: str, current: float, change: float) 
     if signal_type == "rate_bp":
         # change 单位为 %（如 0.12 表示 12bp）
         bp = change * 100.0
+        # US10Y 特殊判断：接近或逼近 4.5% 高风险区域
+        if key == "tnx":
+            # 优先级 1: 已达到或超过 4.5% 高危区
+            if current >= 4.5:
+                return "🔴", f"⚠️ 利率高危区 {current:.2f}%（≥4.5%）流动性紧缩风险极高"
+            # 优先级 2: 在 4.3-4.5% 之间且快速上涨
+            elif current >= 4.3 and bp > 5:
+                return "🔴", f"利率快速逼近 4.5%（当前 {current:.2f}%，5日+{bp:.0f}bp）风险升温"
+            # 优先级 3: 在 4.2-4.5% 警戒区
+            elif current >= 4.2:
+                return "🟡", f"利率进入警戒区 {current:.2f}%（接近 4.5%）需密切关注"
+            # 优先级 4: 通用涨跌幅判断
+            elif bp > 10:
+                return "🔴", "利率上行（流动性收紧）"
+            elif bp <= -5:
+                return "🟢", "利率下行（流动性宽松）"
+            else:
+                return "🟡", "利率横盘"
+        # 其他利率指标通用逻辑
         if bp < -10:
             return "🟢", "利率下行（流动性宽松）"
         if bp > 10:

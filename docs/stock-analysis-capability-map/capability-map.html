@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DSA 股票分析能力图谱</title>
+  <style>
+    :root {
+      --bg: #f3efe6;
+      --paper: #fffdfa;
+      --ink: #1e2b2f;
+      --muted: #5f6b70;
+      --line: #d9d3c6;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --olive: #3f6212;
+      --slate: #334155;
+      --shadow: 0 12px 28px rgba(31, 41, 55, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", serif;
+      background:
+        radial-gradient(circle at 8% 12%, rgba(15, 118, 110, 0.12), transparent 36%),
+        radial-gradient(circle at 92% 18%, rgba(180, 83, 9, 0.10), transparent 34%),
+        linear-gradient(145deg, #f8f4eb 0%, #f2ede3 45%, #ede7db 100%);
+      line-height: 1.55;
+    }
+
+    .wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 36px 20px 48px;
+    }
+
+    .hero {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 28px 24px;
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -80px auto;
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(15, 118, 110, 0.18), rgba(15, 118, 110, 0));
+      pointer-events: none;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 3vw, 42px);
+      letter-spacing: 0.4px;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 880px;
+    }
+
+    .tagline {
+      margin-top: 16px;
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      background: rgba(15, 118, 110, 0.10);
+      color: #115e59;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      border: 1px solid rgba(15, 118, 110, 0.24);
+    }
+
+    .metrics {
+      margin-top: 20px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      text-align: center;
+    }
+
+    .metric .num {
+      display: block;
+      font-size: 24px;
+      color: var(--teal);
+      font-weight: 700;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+
+    .metric .label {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.2px;
+    }
+
+    .toolbar {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .search-wrap {
+      position: relative;
+    }
+
+    .search-wrap input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--ink);
+      font-family: inherit;
+    }
+
+    .search-wrap input:focus {
+      outline: 2px solid rgba(15, 118, 110, 0.16);
+      border-color: rgba(15, 118, 110, 0.45);
+    }
+
+    .quick-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .quick-nav a {
+      text-decoration: none;
+      border: 1px solid rgba(15, 118, 110, 0.3);
+      color: #115e59;
+      background: rgba(15, 118, 110, 0.08);
+      border-radius: 999px;
+      font-size: 12px;
+      padding: 6px 10px;
+      transition: transform .15s ease, background .15s ease;
+    }
+
+    .quick-nav a:hover {
+      background: rgba(15, 118, 110, 0.16);
+      transform: translateY(-1px);
+    }
+
+    .section {
+      margin-top: 20px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0));
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.25;
+    }
+
+    .section-head small {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .flow {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1fr 60px 1fr 60px 1fr 60px 1fr;
+      align-items: stretch;
+      gap: 10px;
+    }
+
+    .node {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px 12px;
+      background: #fff;
+      min-height: 200px;
+    }
+
+    .node h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .node ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .node li + li {
+      margin-top: 6px;
+    }
+
+    .arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--amber);
+      font-size: 32px;
+      font-weight: 700;
+    }
+
+    .node.entry h3 { color: var(--slate); }
+    .node.data h3 { color: var(--teal); }
+    .node.analysis h3 { color: var(--amber); }
+    .node.output h3 { color: var(--olive); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      padding: 18px;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      transition: transform .16s ease, box-shadow .16s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.3;
+    }
+
+    .pill {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid;
+    }
+
+    .pill.teal {
+      color: #0f766e;
+      border-color: rgba(15, 118, 110, 0.35);
+      background: rgba(15, 118, 110, 0.09);
+    }
+
+    .pill.amber {
+      color: #9a3412;
+      border-color: rgba(180, 83, 9, 0.35);
+      background: rgba(180, 83, 9, 0.10);
+    }
+
+    .pill.olive {
+      color: #3f6212;
+      border-color: rgba(63, 98, 18, 0.34);
+      background: rgba(63, 98, 18, 0.10);
+    }
+
+    .card ul {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card.hidden-by-filter,
+    .searchable.hidden-by-filter {
+      display: none;
+    }
+
+    .source-map {
+      padding: 18px;
+      border-top: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(180, 83, 9, 0.03), rgba(255, 255, 255, 0));
+    }
+
+    .source-map details {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+
+    .source-map details + details {
+      margin-top: 10px;
+    }
+
+    .source-map summary {
+      cursor: pointer;
+      font-weight: 700;
+      color: var(--slate);
+      list-style: none;
+    }
+
+    .source-map summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .source-map summary::before {
+      content: "▸";
+      color: var(--amber);
+      margin-right: 8px;
+      display: inline-block;
+      transform: translateY(-1px);
+    }
+
+    .source-map details[open] summary::before {
+      content: "▾";
+    }
+
+    .path-list {
+      margin: 10px 0 2px;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .path-list li + li {
+      margin-top: 6px;
+    }
+
+    .path-list a {
+      color: #0f766e;
+      text-underline-offset: 2px;
+    }
+
+    .radar {
+      padding: 18px;
+      border-top: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(15, 118, 110, 0.03));
+    }
+
+    .radar h3 {
+      margin: 0 0 12px;
+      font-size: 16px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 170px 1fr 52px;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 12px;
+      border-radius: 999px;
+      background: #e7e2d8;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .bar > i {
+      display: block;
+      height: 100%;
+      width: var(--v);
+      border-radius: inherit;
+      background: linear-gradient(90deg, #0f766e, #0ea5a3);
+    }
+
+    .score {
+      text-align: right;
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .foot {
+      margin-top: 18px;
+      padding: 14px;
+      font-size: 12px;
+      color: var(--muted);
+      border-top: 1px dashed var(--line);
+    }
+
+    @media (max-width: 1080px) {
+      .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .flow {
+        grid-template-columns: 1fr;
+      }
+      .arrow {
+        font-size: 24px;
+        transform: rotate(90deg);
+        min-height: 28px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .bar-row { grid-template-columns: 1fr; gap: 6px; }
+      .score { text-align: left; }
+      .toolbar { grid-template-columns: 1fr; }
+      .quick-nav { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>Daily Stock Analysis<br/>股票分析能力图谱</h1>
+      <p class="subtitle">
+        这是一张面向维护者与协作者的能力全景图：从触发入口、数据层、分析决策、到报告与通知，帮助快速判断系统“现在能做什么、能力边界在哪里”。
+      </p>
+      <span class="tagline">基于当前仓库代码与文档校准 · 更新于 2026-05-16</span>
+
+      <div class="metrics">
+        <div class="metric"><span class="num">16</span><span class="label">策略 Skills</span></div>
+        <div class="metric"><span class="num">20</span><span class="label">Agent Tools</span></div>
+        <div class="metric"><span class="num">8+2</span><span class="label">数据源/适配层</span></div>
+        <div class="metric"><span class="num">13</span><span class="label">通知渠道</span></div>
+        <div class="metric"><span class="num">6</span><span class="label">触发入口类型</span></div>
+        <div class="metric"><span class="num">3</span><span class="label">覆盖市场 (A/HK/US)</span></div>
+      </div>
+
+      <div class="toolbar">
+        <label class="search-wrap" for="capability-search">
+          <input
+            id="capability-search"
+            type="search"
+            placeholder="筛选能力关键词，例如：估值 / 宏观 / 通知 / 回测 / Agent"
+            aria-label="筛选能力关键词"
+          />
+        </label>
+        <nav class="quick-nav" aria-label="能力图导航">
+          <a href="#flow-map">链路</a>
+          <a href="#layer-map">分层</a>
+          <a href="#source-map">源码映射</a>
+          <a href="#maturity-map">成熟度</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="section" id="flow-map">
+      <div class="section-head">
+        <h2>主流程能力链路</h2>
+        <small>入口 → 数据情报 → 分析决策 → 输出分发</small>
+      </div>
+      <div class="flow">
+        <article class="node entry searchable" data-search="入口 cli web desktop bot api schedule">
+          <h3>1) 触发入口</h3>
+          <ul>
+            <li>CLI 批量分析 / 大盘复盘 / 回测</li>
+            <li>Web：问股、立即分析、设置与组合</li>
+            <li>Desktop：Electron 单机运行</li>
+            <li>Bot：Discord/Telegram/飞书等命令触发</li>
+            <li>API：FastAPI 编排触发</li>
+            <li>Schedule：本地定时 + GitHub Actions</li>
+          </ul>
+        </article>
+        <div class="arrow">→</div>
+        <article class="node data searchable" data-search="数据 行情 fallback efinance akshare tushare pytdx yfinance longbridge tickflow 情报 新闻 贪恐">
+          <h3>2) 数据与情报层</h3>
+          <ul>
+            <li>行情 fallback：Efinance/Akshare/Tushare/Pytdx/Baostock/Yfinance/Longbridge/Tickflow</li>
+            <li>基本面聚合：fundamental_adapter</li>
+            <li>新闻检索：SearXNG + Anspire Search</li>
+            <li>情绪与风险：贪恐指数、社交舆情、资金流、行业排行</li>
+            <li>市场侧面板：Druckenmiller conviction、US 流动性</li>
+          </ul>
+        </article>
+        <div class="arrow">→</div>
+        <article class="node analysis searchable" data-search="分析 决策 策略 skill agent tool 技术分析 估值 pe pb ps 多策略">
+          <h3>3) 分析与决策层</h3>
+          <ul>
+            <li>16 个策略 Skills（趋势、结构、情绪、价值、股息）</li>
+            <li>20 个 Agent Tools（数据/分析/搜索/市场/回测）</li>
+            <li>技术分析：MA/MACD/RSI/KDJ/布林带/量价/形态</li>
+            <li>估值分析：PE/PB/PS 分位（A 股完整，美股 partial）</li>
+            <li>多策略联合评分：加权综合 + 仓位建议</li>
+          </ul>
+        </article>
+        <div class="arrow">→</div>
+        <article class="node output searchable" data-search="输出 报告 通知 回测 历史 sqlite web">
+          <h3>4) 报告与分发层</h3>
+          <ul>
+            <li>个股报告 + 大盘复盘（Markdown）</li>
+            <li>历史记录与对比、上下文快照</li>
+            <li>13 通知渠道并行分发（失败隔离）</li>
+            <li>回测结果沉淀（按策略/股票维度）</li>
+            <li>Web/桌面端可视化消费</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="layer-map">
+      <div class="section-head">
+        <h2>能力分层地图</h2>
+        <small>按“分析对象”而非“代码目录”组织</small>
+      </div>
+      <div class="grid">
+        <article class="card searchable" data-search="技术分析 趋势 均线 ma macd rsi kdj 布林 量价 形态">
+          <h3>技术分析</h3>
+          <span class="pill teal">趋势与形态信号</span>
+          <ul>
+            <li>趋势判断：均线排列、MACD、RSI、KDJ、布林带</li>
+            <li>量能结构：量比、放量/缩量、量价背离</li>
+            <li>K线形态：锤头、十字、双底、突破等模式识别</li>
+          </ul>
+        </article>
+
+        <article class="card searchable" data-search="情报 情绪 新闻 公告 风险 贪恐 社交舆情">
+          <h3>情报与情绪分析</h3>
+          <span class="pill amber">信息面与市场心理</span>
+          <ul>
+            <li>个股新闻与综合情报检索（公告/风险/预期）</li>
+            <li>贪恐指数（A/HK/US）逆向信号</li>
+            <li>社交舆情与催化线索补充</li>
+          </ul>
+        </article>
+
+        <article class="card searchable" data-search="估值 价值 长期 pe pb ps 分位 股息 复利 dcf">
+          <h3>估值与长期视角</h3>
+          <span class="pill olive">价值/复利/股息框架</span>
+          <ul>
+            <li>PE/PB/PS 历史分位：A 股可用度最高</li>
+            <li>价值投资、高质量复利、股息成长三类长期策略</li>
+            <li>当前美股估值历史分位能力为 partial（以当前值为主）</li>
+          </ul>
+        </article>
+
+        <article class="card searchable" data-search="市场 宏观 复盘 指数 行业 轮动 vix move tnx dxy hyg conviction">
+          <h3>市场与宏观侧写</h3>
+          <span class="pill teal">大盘复盘专题能力</span>
+          <ul>
+            <li>指数面板：A 股/美股核心指数</li>
+            <li>行业板块强弱与轮动观察</li>
+            <li>美股流动性（VIX/MOVE/TNX/DXY/HYG）与 conviction 面板</li>
+          </ul>
+        </article>
+
+        <article class="card searchable" data-search="策略 编排 agent 工具 协同 yaml 多策略 联合 评分">
+          <h3>策略编排能力</h3>
+          <span class="pill amber">规则策略 + Agent 工具协同</span>
+          <ul>
+            <li>16 个策略可在问股场景自由切换</li>
+            <li>多策略联合对 11 个策略 + 贪恐信号做统一评分</li>
+            <li>支持新增 YAML 策略并自动在前端加载</li>
+          </ul>
+        </article>
+
+        <article class="card searchable" data-search="运营 交付 报告 通知 回测 历史 自动化">
+          <h3>运营与可交付能力</h3>
+          <span class="pill olive">报告、通知、回测闭环</span>
+          <ul>
+            <li>报告沉淀与历史对比，支持复盘追踪</li>
+            <li>通知分发失败隔离，单渠道异常不拖垮主流程</li>
+            <li>回测与组合模块可支撑策略迭代</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="source-map" id="source-map">
+        <h3>能力到源码映射（点击可查看）</h3>
+        <details class="searchable" data-search="策略 skills yaml multi_strategy_consensus value dividend quality">
+          <summary>策略与问股技能层（Skills）</summary>
+          <ul class="path-list">
+            <li><a href="../../strategies/" target="_blank" rel="noopener">strategies/</a>（16 个策略定义）</li>
+            <li><a href="../../strategies/multi_strategy_consensus.yaml" target="_blank" rel="noopener">strategies/multi_strategy_consensus.yaml</a></li>
+            <li><a href="../../strategies/value_investing.yaml" target="_blank" rel="noopener">strategies/value_investing.yaml</a></li>
+            <li><a href="../../src/agent/skills/base.py" target="_blank" rel="noopener">src/agent/skills/base.py</a></li>
+          </ul>
+        </details>
+
+        <details class="searchable" data-search="agent tools data analysis search market backtest registry factory">
+          <summary>Agent 工具层（Tools）</summary>
+          <ul class="path-list">
+            <li><a href="../../src/agent/factory.py" target="_blank" rel="noopener">src/agent/factory.py</a>（ToolRegistry 装配）</li>
+            <li><a href="../../src/agent/tools/data_tools.py" target="_blank" rel="noopener">src/agent/tools/data_tools.py</a></li>
+            <li><a href="../../src/agent/tools/analysis_tools.py" target="_blank" rel="noopener">src/agent/tools/analysis_tools.py</a></li>
+            <li><a href="../../src/agent/tools/search_tools.py" target="_blank" rel="noopener">src/agent/tools/search_tools.py</a></li>
+            <li><a href="../../src/agent/tools/market_tools.py" target="_blank" rel="noopener">src/agent/tools/market_tools.py</a></li>
+            <li><a href="../../src/agent/tools/backtest_tools.py" target="_blank" rel="noopener">src/agent/tools/backtest_tools.py</a></li>
+          </ul>
+        </details>
+
+        <details class="searchable" data-search="数据源 fallback efinance akshare tushare pytdx baostock yfinance longbridge tickflow fundamental">
+          <summary>数据源与 fallback</summary>
+          <ul class="path-list">
+            <li><a href="../../data_provider/base.py" target="_blank" rel="noopener">data_provider/base.py</a></li>
+            <li><a href="../../data_provider/" target="_blank" rel="noopener">data_provider/</a>（fetcher 集合）</li>
+            <li><a href="../../data_provider/fundamental_adapter.py" target="_blank" rel="noopener">data_provider/fundamental_adapter.py</a></li>
+          </ul>
+        </details>
+
+        <details class="searchable" data-search="通知 notification telegram discord slack wechat feishu ntfy gotify email">
+          <summary>报告与通知分发层</summary>
+          <ul class="path-list">
+            <li><a href="../../src/notification.py" target="_blank" rel="noopener">src/notification.py</a></li>
+            <li><a href="../../src/notification_sender/" target="_blank" rel="noopener">src/notification_sender/</a></li>
+            <li><a href="../../src/reports/report_renderer.py" target="_blank" rel="noopener">src/reports/report_renderer.py</a></li>
+          </ul>
+        </details>
+      </div>
+
+      <div class="radar" id="maturity-map">
+        <h3>能力成熟度快照（主观工程视角，0-100）</h3>
+        <div class="bar-row"><span>多市场行情覆盖</span><div class="bar"><i style="--v:88%"></i></div><span class="score">88</span></div>
+        <div class="bar-row"><span>技术分析深度</span><div class="bar"><i style="--v:84%"></i></div><span class="score">84</span></div>
+        <div class="bar-row"><span>估值分析深度</span><div class="bar"><i style="--v:62%"></i></div><span class="score">62</span></div>
+        <div class="bar-row"><span>宏观市场分析</span><div class="bar"><i style="--v:66%"></i></div><span class="score">66</span></div>
+        <div class="bar-row"><span>策略组合与决策</span><div class="bar"><i style="--v:78%"></i></div><span class="score">78</span></div>
+        <div class="bar-row"><span>可交付与自动化</span><div class="bar"><i style="--v:86%"></i></div><span class="score">86</span></div>
+      </div>
+
+      <div class="foot">
+        说明：本图用于工程协作与能力盘点，非投资建议。建议配套阅读：
+        <code>docs/capabilities/README.md</code> 与
+        <code>docs/stock-analysis-capability-map/future-capabilities.md</code>。
+      </div>
+    </section>
+  </main>
+  <script>
+    (function () {
+      const input = document.getElementById('capability-search');
+      const items = Array.from(document.querySelectorAll('.searchable'));
+      if (!input || items.length === 0) return;
+
+      const normalize = (s) => (s || '').toLowerCase().trim();
+
+      const applyFilter = () => {
+        const query = normalize(input.value);
+        items.forEach((el) => {
+          const source = normalize(el.dataset.search) + ' ' + normalize(el.textContent);
+          const matched = !query || source.includes(query);
+          el.classList.toggle('hidden-by-filter', !matched);
+          if (el.tagName === 'DETAILS' && matched && query) {
+            el.open = true;
+          }
+        });
+      };
+
+      input.addEventListener('input', applyFilter);
+    })();
+  </script>
+</body>
+</html>
