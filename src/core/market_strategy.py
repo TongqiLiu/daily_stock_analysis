@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Market strategy blueprints for CN/US daily market recap."""
+"""Market strategy blueprints for CN/HK/US daily market recap."""
 
 from dataclasses import dataclass
 from typing import List
@@ -47,7 +47,7 @@ class MarketStrategyBlueprint:
     def to_markdown_block(self) -> str:
         """Render blueprint as markdown section for template fallback report."""
         dims = "\n".join([f"- **{dim.name}**: {dim.objective}" for dim in self.dimensions])
-        section_title = "### 六、策略框架"
+        section_title = "### VI. Strategy Framework" if self.region == "us" else "### 六、策略框架"
         return f"{section_title}\n{dims}\n"
 
 
@@ -86,50 +86,87 @@ CN_BLUEPRINT = MarketStrategyBlueprint(
 
 US_BLUEPRINT = MarketStrategyBlueprint(
     region="us",
-    title="美股市场复盘策略框架",
-    positioning="围绕美股指数趋势、宏观叙事与板块轮动，形成下一交易时段的风险姿态。",
+    title="US Market Regime Strategy",
+    positioning="Focus on index trend, macro narrative, and sector rotation to define next-session risk posture.",
     principles=[
-        "先判断标普 500、纳斯达克、道指是否同向，再区分 Beta 与主题驱动的 Alpha。",
-        "结论必须落到风险偏好（进攻/均衡/防守）、仓位与失效条件，避免空泛点评。",
-        "仅使用当日数据与近几日新闻，不臆测未验证信息。",
+        "Read market regime from S&P 500, Nasdaq, and Dow alignment first.",
+        "Separate beta move from theme-driven alpha rotation.",
+        "Translate recap into actionable risk-on/risk-off stance with clear invalidation points.",
     ],
     dimensions=[
         StrategyDimension(
-            name="趋势结构",
-            objective="判断市场处于趋势、震荡还是风险偏好下行阶段。",
+            name="Trend Regime",
+            objective="Classify the market as momentum, range, or risk-off.",
             checkpoints=[
-                "SPX/NDX/DJI 是否同向",
-                "量能是否印证方向",
-                "关键指数位是否守住或失守",
+                "Are SPX/NDX/DJI directionally aligned",
+                "Did volume confirm the move",
+                "Are key index levels reclaimed or lost",
             ],
         ),
         StrategyDimension(
-            name="宏观与资金流向",
-            objective="把利率、美元与政策叙事映射到权益风险偏好。",
+            name="Macro & Flows",
+            objective="Map policy/rates narrative into equity risk appetite.",
             checkpoints=[
-                "美债收益率与美元对相关资产的含义",
-                "广度与龙头集中度",
-                "防御 vs 成长风格轮动",
+                "Treasury yield and USD implications",
+                "Breadth and leadership concentration",
+                "Defensive vs growth factor rotation",
             ],
         ),
         StrategyDimension(
-            name="板块与主题",
-            objective="识别持续领涨方向与脆弱领跌方向。",
+            name="Sector Themes",
+            objective="Identify persistent leaders and vulnerable laggards.",
             checkpoints=[
-                "AI/半导体/软件等主题是否延续",
-                "能源、金融等对宏观数据的敏感度",
-                "VIX 与大型科技股财报等波动信号",
+                "AI/semiconductor/software trend persistence",
+                "Energy/financials sensitivity to macro data",
+                "Volatility signals from VIX and large-cap earnings",
             ],
         ),
     ],
     action_framework=[
-        "风险偏好上升：主要指数共振上行且参与度扩大。",
-        "均衡：指数信号分化，以选择性相对强度为主，控制仓位。",
-        "风险偏好下行：假突破或波动抬升，优先保本与减仓。",
+        "Risk-on: broad index breakout with expanding participation.",
+        "Neutral: mixed index signals; focus on selective relative strength.",
+        "Risk-off: failed breakouts and rising volatility; prioritize capital preservation.",
+    ],
+)
+
+HK_BLUEPRINT = MarketStrategyBlueprint(
+    region="hk",
+    title="港股市场三段式复盘策略",
+    positioning="聚焦恒生指数趋势、南向资金博弈与板块轮动，形成次日交易计划。",
+    principles=[
+        "先看恒指/恒科/国企指数方向，再看南向资金情绪，最后看板块持续性。",
+        "结论必须映射到仓位、节奏与风险控制动作。",
+        "判断使用当日数据与近3日新闻，不臆测未验证信息。",
+    ],
+    dimensions=[
+        StrategyDimension(
+            name="趋势结构",
+            objective="判断市场处于上升、震荡还是防守阶段。",
+            checkpoints=["恒指/恒科/国企指数是否同向", "放量上涨或缩量下跌是否成立", "关键支撑阻力是否被突破"],
+        ),
+        StrategyDimension(
+            name="资金情绪",
+            objective="识别南向资金风险偏好与情绪温度。",
+            checkpoints=["南向资金净流入方向与规模", "港元汇率与内地政策含义", "市场广度与龙头集中度"],
+        ),
+        StrategyDimension(
+            name="主线板块",
+            objective="提炼可交易主线与规避方向。",
+            checkpoints=["科技/互联网平台趋势持续性", "金融/地产对政策转向的敏感度", "防御与成长因子轮动"],
+        ),
+    ],
+    action_framework=[
+        "进攻：恒指共振上行 + 南向资金持续流入 + 主线强化。",
+        "均衡：指数分化或缩量震荡，控制仓位并等待确认。",
+        "防守：指数转弱 + 波动率上升，优先风控与减仓。",
     ],
 )
 
 
 def get_market_strategy_blueprint(region: str) -> MarketStrategyBlueprint:
     """Return strategy blueprint by market region."""
-    return US_BLUEPRINT if region == "us" else CN_BLUEPRINT
+    if region == "us":
+        return US_BLUEPRINT
+    if region == "hk":
+        return HK_BLUEPRINT
+    return CN_BLUEPRINT

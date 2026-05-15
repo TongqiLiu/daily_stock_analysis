@@ -35,6 +35,7 @@ from src.agent.protocols import (
     StageResult,
     StageStatus,
 )
+from src.config import AGENT_MAX_STEPS_DEFAULT
 
 
 # ============================================================
@@ -500,13 +501,9 @@ class TestOrchestratorModes(unittest.TestCase):
         self.assertEqual(orch.mode, "standard")
 
     def test_chain_agents_inherit_orchestrator_max_steps(self):
-        """Orchestrator max_steps acts as a *ceiling*, not a hard override.
-
-        Each agent keeps ``min(own_default, orchestrator_limit)`` so that
-        specialised agents with lower defaults are not inflated.
-        """
+        """Default/lowered limits cap agents; raised limits hard-override all agents."""
         orch = self._make_orchestrator("full")
-        orch.max_steps = 9
+        orch.max_steps = AGENT_MAX_STEPS_DEFAULT
         high_limit_chain = orch._build_agent_chain(AgentContext(query="test", stock_code="600519"))
         self.assertEqual(
             {agent.agent_name: agent.max_steps for agent in high_limit_chain},
@@ -519,6 +516,23 @@ class TestOrchestratorModes(unittest.TestCase):
             {agent.agent_name: agent.max_steps for agent in low_limit_chain},
             {"technical": 5, "intel": 4, "risk": 4, "decision": 3},
         )
+
+        orch.max_steps = AGENT_MAX_STEPS_DEFAULT + 2
+        raised_limit_chain = orch._build_agent_chain(AgentContext(query="test", stock_code="600519"))
+        self.assertEqual(
+            {agent.agent_name: agent.max_steps for agent in raised_limit_chain},
+            {"technical": AGENT_MAX_STEPS_DEFAULT + 2, "intel": AGENT_MAX_STEPS_DEFAULT + 2, "risk": AGENT_MAX_STEPS_DEFAULT + 2, "decision": AGENT_MAX_STEPS_DEFAULT + 2},
+        )
+
+    def test_prepare_agent_raised_limit_overrides_low_default_agent(self):
+        orch = self._make_orchestrator("full")
+        orch.max_steps = AGENT_MAX_STEPS_DEFAULT + 2
+        decision = MagicMock(agent_name="decision", max_steps=3)
+
+        prepared = orch._prepare_agent(decision)
+
+        self.assertIs(prepared, decision)
+        self.assertEqual(prepared.max_steps, AGENT_MAX_STEPS_DEFAULT + 2)
 
     def test_build_context_from_dict(self):
         orch = self._make_orchestrator()
@@ -565,6 +579,24 @@ class TestOrchestratorExecution(unittest.TestCase):
         result.meta["models_used"] = ["test/model"]
         return result
 
+    def test_prepare_agent_uses_default_constant_as_raise_threshold(self):
+        orch = self._make_orchestrator()
+        agent = MagicMock(agent_name="technical", max_steps=6)
+
+        prepared = orch._prepare_agent(agent)
+        self.assertIs(prepared, agent)
+        self.assertEqual(agent.max_steps, 6)
+
+        orch.max_steps = 12
+        agent.max_steps = 6
+        orch._prepare_agent(agent)
+        self.assertEqual(agent.max_steps, 12)
+
+        orch.max_steps = 5
+        agent.max_steps = 6
+        orch._prepare_agent(agent)
+        self.assertEqual(agent.max_steps, 5)
+
     def test_execute_pipeline_stops_on_critical_failure(self):
         orch = self._make_orchestrator()
         technical = MagicMock(agent_name="technical")
@@ -592,6 +624,32 @@ class TestOrchestratorExecution(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertIn("Analysis Summary", result.content)
+
+    def test_execute_pipeline_degrades_on_skill_agent_failure_and_continues_to_decision(self):
+        orch = self._make_orchestrator()
+        orch.mode = "specialist"
+        ctx = AgentContext(query="test", stock_code="600519")
+        ctx.add_opinion(AgentOpinion(agent_name="technical", signal="buy", confidence=0.8, reasoning="Strong trend"))
+
+        technical = MagicMock(agent_name="technical")
+        technical.run.return_value = self._stage_result("technical")
+        intel = MagicMock(agent_name="intel")
+        intel.run.return_value = self._stage_result("intel")
+        risk = MagicMock(agent_name="risk")
+        risk.run.return_value = self._stage_result("risk")
+        skill = MagicMock(agent_name="strategy_bull_trend")
+        skill.run.return_value = self._stage_result("strategy_bull_trend", StageStatus.FAILED, error="skill boom")
+        decision = MagicMock(agent_name="decision")
+        decision.run.return_value = self._stage_result("decision")
+
+        with patch.object(orch, "_build_agent_chain", return_value=[technical, intel, risk, decision]):
+            with patch.object(orch, "_build_specialist_agents", return_value=[skill]):
+                result = orch._execute_pipeline(ctx, parse_dashboard=False)
+
+        self.assertTrue(result.success)
+        self.assertIn("Analysis Summary", result.content)
+        skill.run.assert_called_once()
+        decision.run.assert_called_once()
 
     def test_execute_pipeline_skips_stage_when_remaining_budget_below_minimum(self):
         orch = self._make_orchestrator(config=SimpleNamespace(agent_orchestrator_timeout_s=20))
@@ -1037,18 +1095,22 @@ class TestEventMonitor(unittest.TestCase):
     """Test EventMonitor serialize/deserialize round-trip."""
 
     def test_round_trip(self):
-        from src.agent.events import EventMonitor, PriceAlert, VolumeAlert
+        from src.agent.events import EventMonitor, PriceAlert, PriceChangeAlert, VolumeAlert
         monitor = EventMonitor()
         monitor.add_alert(PriceAlert(stock_code="600519", direction="above", price=1800.0))
+        monitor.add_alert(PriceChangeAlert(stock_code="300750", direction="down", change_pct=3.5))
         monitor.add_alert(VolumeAlert(stock_code="000858", multiplier=3.0))
 
         data = monitor.to_dict_list()
-        self.assertEqual(len(data), 2)
+        self.assertEqual(len(data), 3)
+        self.assertEqual(data[1]["alert_type"], "price_change_percent")
+        self.assertEqual(data[1]["change_pct"], 3.5)
 
         restored = EventMonitor.from_dict_list(data)
-        self.assertEqual(len(restored.rules), 2)
+        self.assertEqual(len(restored.rules), 3)
         self.assertEqual(restored.rules[0].stock_code, "600519")
-        self.assertEqual(restored.rules[1].stock_code, "000858")
+        self.assertEqual(restored.rules[1].stock_code, "300750")
+        self.assertEqual(restored.rules[2].stock_code, "000858")
 
     def test_remove_expired(self):
         import time
@@ -1069,6 +1131,21 @@ class TestEventMonitor(unittest.TestCase):
         with self.assertRaises(ValueError):
             monitor.add_alert(SentimentAlert(stock_code="600519"))
 
+    def test_from_dict_list_skips_price_change_without_change_pct(self):
+        from src.agent.events import EventMonitor
+
+        data = [
+            {
+                "stock_code": "300750",
+                "alert_type": "price_change_percent",
+                "direction": "up",
+            }
+        ]
+
+        monitor = EventMonitor.from_dict_list(data)
+
+        self.assertEqual(monitor.rules, [])
+
 
 class TestEventMonitorAsync(unittest.IsolatedAsyncioTestCase):
     """Test async EventMonitor checks offload blocking fetches."""
@@ -1086,6 +1163,57 @@ class TestEventMonitorAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(triggered)
         self.assertEqual(triggered.rule.stock_code, "600519")
         to_thread.assert_awaited_once()
+
+    async def test_check_price_change_uses_to_thread_and_triggers(self):
+        from src.agent.events import EventMonitor, PriceChangeAlert
+
+        monitor = EventMonitor()
+        rule = PriceChangeAlert(stock_code="300750", direction="down", change_pct=3.0)
+        quote = SimpleNamespace(change_pct=-3.25)
+
+        with patch("src.agent.events.asyncio.to_thread", new=AsyncMock(return_value=quote)) as to_thread:
+            triggered = await monitor._check_price_change(rule)
+
+        self.assertIsNotNone(triggered)
+        self.assertEqual(triggered.rule.stock_code, "300750")
+        self.assertEqual(triggered.current_value, -3.25)
+        self.assertIn("current = -3.25%", triggered.message)
+        to_thread.assert_awaited_once()
+
+    async def test_check_price_change_accepts_dict_payload_alias(self):
+        from src.agent.events import EventMonitor, PriceChangeAlert
+
+        monitor = EventMonitor()
+        rule = PriceChangeAlert(stock_code="AAPL", direction="up", change_pct=2.0)
+
+        with patch("src.agent.events.asyncio.to_thread", new=AsyncMock(return_value={"pct_chg": "2.35%"})):
+            triggered = await monitor._check_price_change(rule)
+
+        self.assertIsNotNone(triggered)
+        self.assertEqual(triggered.current_value, 2.35)
+
+    async def test_realtime_rules_create_fetcher_manager_per_quote_check(self):
+        from src.agent.events import EventMonitor, PriceAlert, PriceChangeAlert
+
+        monitor = EventMonitor()
+        monitor.add_alert(PriceAlert(stock_code="600519", direction="above", price=1800.0))
+        monitor.add_alert(PriceChangeAlert(stock_code="600519", direction="up", change_pct=3.0))
+        managers = [MagicMock(), MagicMock()]
+        for manager in managers:
+            manager.get_realtime_quote.return_value = SimpleNamespace(price=1810.0, change_pct=3.25)
+
+        async def _run_inline(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("data_provider.DataFetcherManager", side_effect=managers) as manager_factory, patch(
+            "src.agent.events.asyncio.to_thread", new=_run_inline
+        ):
+            triggered = await monitor.check_all()
+
+        self.assertEqual(manager_factory.call_count, 2)
+        for manager in managers:
+            manager.get_realtime_quote.assert_called_once_with("600519")
+        self.assertEqual(len(triggered), 2)
 
     async def test_check_volume_safe_when_fetch_returns_none(self):
         """_check_volume must not crash when get_daily_data returns None."""
@@ -1136,6 +1264,43 @@ class TestEventMonitorConfigIntegration(unittest.TestCase):
         self.assertIsNotNone(monitor)
         self.assertEqual(len(monitor.rules), 1)
         self.assertEqual(monitor.rules[0].stock_code, "600519")
+
+    def test_configured_event_monitor_notification_uses_alert_route(self):
+        from src.agent.events import TriggeredAlert, build_event_monitor_from_config
+
+        config = SimpleNamespace(
+            agent_event_monitor_enabled=True,
+            agent_event_alert_rules_json='[{"stock_code":"600519","alert_type":"price_cross","direction":"above","price":1800}]',
+        )
+        notifier = MagicMock()
+        notifier.send.return_value = True
+
+        monitor = build_event_monitor_from_config(config=config, notifier=notifier)
+
+        self.assertIsNotNone(monitor)
+        monitor._callbacks[0](TriggeredAlert(rule=monitor.rules[0], message="hit"))
+        notifier.send.assert_called_once()
+        self.assertIn("hit", notifier.send.call_args.args[0])
+        self.assertEqual(notifier.send.call_args.kwargs["route_type"], "alert")
+
+    def test_build_event_monitor_from_config_accepts_price_change_percent(self):
+        from src.agent.events import PriceChangeAlert, build_event_monitor_from_config
+
+        config = SimpleNamespace(
+            agent_event_monitor_enabled=True,
+            agent_event_alert_rules_json=(
+                '[{"stock_code":"300750","alert_type":"price_change_percent",'
+                '"direction":"down","change_pct":3.5}]'
+            ),
+        )
+
+        with patch("src.notification.NotificationService", return_value=MagicMock()):
+            monitor = build_event_monitor_from_config(config=config)
+
+        self.assertIsNotNone(monitor)
+        self.assertEqual(len(monitor.rules), 1)
+        self.assertIsInstance(monitor.rules[0], PriceChangeAlert)
+        self.assertEqual(monitor.rules[0].change_pct, 3.5)
 
     def test_build_event_monitor_returns_none_on_invalid_json(self):
         from src.agent.events import build_event_monitor_from_config
@@ -1658,19 +1823,23 @@ class TestAgentResearchEndpoint(unittest.IsolatedAsyncioTestCase):
             is_agent_available=lambda: True,
         )
 
-        with patch("api.v1.endpoints.agent.get_config", return_value=config), \
-             patch("api.v1.endpoints.agent._run_research_in_background", new=AsyncMock(return_value=SimpleNamespace(
-                 success=False,
-                 report="",
-                 sub_questions=[],
-                 findings_count=0,
-                 total_tokens=0,
-                 duration_s=1.0,
-                 error="Deep research timed out after 1s",
-                 timed_out=True,
-             ))), \
-             patch("src.agent.factory.get_tool_registry", return_value=MagicMock()), \
-             patch("src.agent.llm_adapter.LLMToolAdapter", return_value=MagicMock()):
+        research_result = AsyncMock(return_value=SimpleNamespace(
+            success=False,
+            report="",
+            sub_questions=[],
+            findings_count=0,
+            total_tokens=0,
+            duration_s=1.0,
+            error="Deep research timed out after 1s",
+            timed_out=True,
+        ))
+
+        with (
+            patch("api.v1.endpoints.agent.get_config", return_value=config),
+            patch("api.v1.endpoints.agent._run_research_in_background", new=research_result),
+            patch("src.agent.factory.get_tool_registry", return_value=MagicMock()),
+            patch("src.agent.llm_adapter.LLMToolAdapter", return_value=MagicMock()),
+        ):
             response = await agent_research(ResearchRequest(question="600519 风险"))
 
         self.assertFalse(response.success)

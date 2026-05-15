@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-自选股智能分析系统 - 大盘复盘模块（支持 A 股 / 美股）
+股票智能分析系统 - 大盘复盘模块（支持 A 股 / 港股 / 美股）
 ===================================
 
 职责：
-1. 根据 MARKET_REVIEW_REGION 配置选择市场区域（cn / us / both）
+1. 根据 MARKET_REVIEW_REGION 配置选择市场区域（cn / hk / us / both）
 2. 执行大盘复盘分析并生成复盘报告
 3. 保存和发送复盘报告
 """
@@ -17,13 +17,33 @@ from typing import Optional
 from src.config import get_config
 from src.notification import NotificationService
 from src.market_analyzer import MarketAnalyzer
+from src.report_language import normalize_report_language
 from src.search_service import SearchService
 from src.analyzer import GeminiAnalyzer
-from src.services.druckenmiller_conviction_service import DruckenmillerConvictionService
-from src.services.us_liquidity_service import USLiquidityService
 
 
 logger = logging.getLogger(__name__)
+
+
+def _get_market_review_text(language: str) -> dict[str, str]:
+    normalized = normalize_report_language(language)
+    if normalized == "en":
+        return {
+            "root_title": "# 🎯 Market Review",
+            "push_title": "🎯 Market Review",
+            "cn_title": "# A-share Market Recap",
+            "us_title": "# US Market Recap",
+            "hk_title": "# HK Market Recap",
+            "separator": "> Next market recap follows",
+        }
+    return {
+        "root_title": "# 🎯 大盘复盘",
+        "push_title": "🎯 大盘复盘",
+        "cn_title": "# A股大盘复盘",
+        "us_title": "# 美股大盘复盘",
+        "hk_title": "# 港股大盘复盘",
+        "separator": "> 以下为下一市场大盘复盘",
+    }
 
 
 def run_market_review(
@@ -50,35 +70,43 @@ def run_market_review(
     """
     logger.info("开始执行大盘复盘分析...")
     config = get_config()
+    review_text = _get_market_review_text(getattr(config, "report_language", "zh"))
     region = (
         override_region
         if override_region is not None
         else (getattr(config, 'market_review_region', 'cn') or 'cn')
     )
-    if region not in ('cn', 'us', 'both'):
-        region = 'cn'
+    _ALL_MARKETS = [('cn', 'cn_title', 'A 股'), ('hk', 'hk_title', '港股'), ('us', 'us_title', '美股')]
+    _VALID_SINGLES = {'cn', 'us', 'hk'}
+
+    # Determine which markets to run.
+    # region can be: 'cn', 'hk', 'us', 'both', or a comma-joined subset like 'cn,us'.
+    if ',' in region:
+        run_markets = [m.strip() for m in region.split(',') if m.strip() in _VALID_SINGLES]
+    elif region == 'both':
+        run_markets = list(_VALID_SINGLES)
+    elif region in _VALID_SINGLES:
+        run_markets = [region]
+    else:
+        run_markets = ['cn']
 
     try:
-        if region == 'both':
-            # 顺序执行 A 股 + 美股，合并报告
-            cn_analyzer = MarketAnalyzer(
-                search_service=search_service, analyzer=analyzer, region='cn'
-            )
-            us_analyzer = MarketAnalyzer(
-                search_service=search_service, analyzer=analyzer, region='us'
-            )
-            logger.info("生成 A 股大盘复盘报告...")
-            cn_report = cn_analyzer.run_daily_review()
-            logger.info("生成美股大盘复盘报告...")
-            us_report = us_analyzer.run_daily_review()
-            review_report = ''
-            if cn_report:
-                review_report = f"# A股大盘复盘\n\n{cn_report}"
-            if us_report:
-                if review_report:
-                    review_report += "\n\n---\n\n> 以下为美股大盘复盘\n\n"
-                review_report += f"# 美股大盘复盘\n\n{us_report}"
-            if not review_report:
+        if len(run_markets) > 1:
+            # 多市场顺序执行，合并报告
+            parts = []
+            for mkt, title_key, label in _ALL_MARKETS:
+                if mkt not in run_markets:
+                    continue
+                logger.info("生成 %s 大盘复盘报告...", label)
+                mkt_analyzer = MarketAnalyzer(
+                    search_service=search_service, analyzer=analyzer, region=mkt
+                )
+                mkt_report = mkt_analyzer.run_daily_review()
+                if mkt_report:
+                    parts.append(f"{review_text[title_key]}\n\n{mkt_report}")
+            if parts:
+                review_report = f"\n\n---\n\n{review_text['separator']}\n\n".join(parts)
+            else:
                 review_report = None
         else:
             market_analyzer = MarketAnalyzer(
@@ -89,58 +117,31 @@ def run_market_review(
             review_report = market_analyzer.run_daily_review()
         
         if review_report:
-            # 附加 Druckenmiller Conviction 块（fail-open，不可用时静默跳过）
-            conviction_block = None
-            try:
-                druck_svc = DruckenmillerConvictionService(
-                    base_url=getattr(config, 'druckenmiller_base_url', None) or None
-                )
-                conviction_block = druck_svc.get_conviction_block()
-                if conviction_block:
-                    logger.info("Druckenmiller conviction 数据已获取，附加到复盘报告")
-            except Exception as e:
-                logger.warning("Druckenmiller conviction 获取失败，跳过: %s", e)
-
-            # 附加美股资金流动性面板（仅 us / both，fail-open）
-            liquidity_block = None
-            if region in ('us', 'both'):
-                try:
-                    liq_svc = USLiquidityService()
-                    liquidity_block = liq_svc.get_liquidity_block()
-                    if liquidity_block:
-                        logger.info("美股资金流动性面板已获取，附加到复盘报告")
-                except Exception as e:
-                    logger.warning("美股资金流动性面板获取失败，跳过: %s", e)
-
-            full_report = review_report
-            if liquidity_block:
-                full_report = full_report + "\n\n" + liquidity_block
-            if conviction_block:
-                full_report = full_report + "\n\n" + conviction_block
-
             # 保存报告到文件
             date_str = datetime.now().strftime('%Y%m%d')
             report_filename = f"market_review_{date_str}.md"
             filepath = notifier.save_report_to_file(
-                f"# 🎯 大盘复盘\n\n{full_report}",
+                f"{review_text['root_title']}\n\n{review_report}",
                 report_filename
             )
             logger.info(f"大盘复盘报告已保存: {filepath}")
-
+            
             # 推送通知（合并模式下跳过，由 main 层统一发送）
             if merge_notification and send_notification:
                 logger.info("合并推送模式：跳过大盘复盘单独推送，将在个股+大盘复盘后统一发送")
             elif send_notification and notifier.is_available():
-                report_content = f"🎯 大盘复盘\n\n{full_report}"
-                success = notifier.send(report_content, email_send_to_all=True)
+                # 添加标题
+                report_content = f"{review_text['push_title']}\n\n{review_report}"
+
+                success = notifier.send(report_content, email_send_to_all=True, route_type="report")
                 if success:
                     logger.info("大盘复盘推送成功")
                 else:
                     logger.warning("大盘复盘推送失败")
             elif not send_notification:
                 logger.info("已跳过推送通知 (--no-notify)")
-
-            return full_report
+            
+            return review_report
         
     except Exception as e:
         logger.error(f"大盘复盘分析失败: {e}")
