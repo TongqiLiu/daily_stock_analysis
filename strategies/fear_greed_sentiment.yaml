@@ -54,8 +54,9 @@ instructions: |
   ## 四、工具失败处理
 
   - 工具返回 `status='not_configured'` → 在报告中标注「贪恐指数未启用（SZDT_AUTH_TOKEN 未配置）」，仅基于趋势 / 量价分析
-  - 工具返回 `status='unavailable'` → 标注「该股票未在 szdt.tech 账户中绑定，需手动绑定后才能查询」，不阻塞回答
+  - 工具返回 `status='unavailable'` → 展示 `reason_code` / `reason_detail`（例如 `binding_quota_exhausted`），并给出 `suggested_action`
   - 工具返回 `status='error'` → 标注「贪恐指数获取失败」，继续基于其他工具分析
+  - 失败时可引用 `proxy_score`（默认 0）作为情绪中性占位，明确标注「代理分，非真实贪恐值」
 
   ## 五、输出结构（精简）
 

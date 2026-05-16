@@ -84,6 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 基于已验证样例 `CC/CD/NX.ftindex` 反测增强 `futu-indicator-writer`：支持自动匹配 `:=` 与 `A:EMA...` 双语句风格，兼容 `DRAWTEXT` 与 `STICKLINE` 绘图族，减少富途导入时的风格不兼容风险。
 - [新功能] 问股新增并列可选策略「📐 估值模型」(`valuation_model`)：与「😱 贪恐情绪」「放量突破」同级展示，基于 `get_valuation_percentile` + `get_stock_info` + `search_comprehensive_intel` 输出估值分位、成长质量与产业链景气三因子综合结论（对美股/港股数据不完整场景自动降级说明）。
 - [改进] 估值模型升级为“可计算版”：新增 Agent 工具 `get_dcf_valuation`（`stock_code`、`forecast_years`）输出 Bull/Base/Bear 三情景 DCF 估值区间，并接入 `valuation_model` 策略作为问股内在价值锚点（输入缺失时 fail-open 返回 `partial/unavailable`）。
+- [修复] 多策略联合增强情绪兜底：`get_fear_greed_index` 在 `unavailable` 时返回结构化失败原因（含 `reason_code/reason_detail/suggested_action`）与 `proxy_score`，`multi_strategy_consensus` 强制第 12 项「贪恐情绪极值」在源站失败时按代理分计权，避免再次出现「不适用」导致分析链路中断。
 ## [3.16.0] - 2026-05-10
 
 ### 发布亮点

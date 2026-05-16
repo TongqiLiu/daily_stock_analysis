@@ -724,6 +724,60 @@ def reset_fear_greed_service() -> None:
         _fear_greed_service_singleton = None
 
 
+def _classify_fear_greed_unavailable(reason: Optional[str]) -> Tuple[str, str, str]:
+    """Classify szdt unavailability reason into stable machine-readable buckets."""
+    text = (reason or "").strip()
+    lower_text = text.lower()
+
+    if not text:
+        return (
+            "unknown",
+            "No data returned from szdt.tech.",
+            "Fear/greed data source unavailable; using neutral proxy score 0.",
+        )
+
+    if "查询股票个数额度已用完" in text or "手动删减已查询股票" in text:
+        return (
+            "binding_quota_exhausted",
+            text,
+            "szdt account stock-binding quota exhausted; remove old bound symbols, then retry.",
+        )
+
+    if "无权限" in text or "forbidden" in lower_text or "unauthorized" in lower_text:
+        return (
+            "auth_failed",
+            text,
+            "SZDT_AUTH_TOKEN invalid/expired or permission denied.",
+        )
+
+    if "timeout" in lower_text:
+        return (
+            "timeout",
+            text,
+            "szdt request timed out; retry later.",
+        )
+
+    if "invalid stock code format" in lower_text:
+        return (
+            "invalid_symbol",
+            text,
+            "Stock code format not supported by szdt mapping.",
+        )
+
+    if "http 429" in lower_text or "too many requests" in lower_text:
+        return (
+            "rate_limited",
+            text,
+            "szdt rate-limited the request; retry later.",
+        )
+
+    return (
+        "api_error",
+        text,
+        "szdt returned an upstream error; fallback to proxy sentiment.",
+    )
+
+
 def _handle_get_fear_greed_index(stock_code: str) -> dict:
     """Fetch stock-level fear/greed index via szdt.tech."""
     svc = _get_fear_greed_service()
@@ -746,12 +800,19 @@ def _handle_get_fear_greed_index(stock_code: str) -> dict:
         }
 
     if score_pair is None:
+        raw_reason = svc.get_last_error(stock_code)
+        reason_code, reason_detail, suggested_action = _classify_fear_greed_unavailable(raw_reason)
         return {
             "stock_code": stock_code,
             "status": "unavailable",
+            "reason_code": reason_code,
+            "reason_detail": reason_detail,
+            "suggested_action": suggested_action,
+            "proxy_score": 0.0,
+            "proxy_label": "中性(代理)",
             "note": (
-                "No data returned. Possible reasons: stock code not yet bound to szdt.tech account "
-                "(account stock-binding quota exhausted), or symbol format not recognised."
+                "Fear/greed source unavailable. Use proxy_score=0 (neutral) in strategy scoring "
+                "instead of marking this strategy as not applicable."
             ),
         }
 

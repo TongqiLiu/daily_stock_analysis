@@ -21,6 +21,7 @@ _BASE_URL = "https://szdt.tech"
 _SCAN_PATH = "/api/partner/invest/stock/scan"
 _REQUEST_TIMEOUT = 8
 _CACHE_TTL = 1800  # 30 分钟；贪恐值变化慢，可较长缓存
+_ERROR_TTL = 600   # 10 分钟，避免短期重复失败时丢失原因
 
 
 def _score_label(score: float) -> str:
@@ -89,6 +90,7 @@ class FearGreedService:
     def __init__(self, auth_token: Optional[str] = None):
         self._token = (auth_token or "").strip() or None
         self._cache: Dict[str, Tuple[float, Any]] = {}
+        self._last_error: Dict[str, Tuple[float, str]] = {}
         self._lock = threading.RLock()
 
     @property
@@ -109,14 +111,26 @@ class FearGreedService:
             if resp.status_code == 200:
                 body = resp.json()
                 if body.get("status") == 1:
+                    with self._lock:
+                        self._last_error.pop(szdt_code, None)
                     return body.get("data")
-                logger.warning("贪恐 API 返回错误：%s / code=%s", body.get("msg"), szdt_code)
+                msg = str(body.get("msg") or "unknown api error")
+                logger.warning("贪恐 API 返回错误：%s / code=%s", msg, szdt_code)
+                with self._lock:
+                    self._last_error[szdt_code] = (time.monotonic(), msg)
             else:
+                msg = f"http {resp.status_code}"
                 logger.warning("贪恐 API HTTP %s / code=%s", resp.status_code, szdt_code)
+                with self._lock:
+                    self._last_error[szdt_code] = (time.monotonic(), msg)
         except requests.exceptions.Timeout:
             logger.warning("贪恐 API 请求超时 / code=%s", szdt_code)
+            with self._lock:
+                self._last_error[szdt_code] = (time.monotonic(), "request timeout")
         except Exception as e:
             logger.warning("贪恐 API 异常 / code=%s: %s", szdt_code, e)
+            with self._lock:
+                self._last_error[szdt_code] = (time.monotonic(), f"request error: {e}")
         return None
 
     def _fetch_cached(self, szdt_code: str, emo_area: str) -> Optional[Dict]:
@@ -181,6 +195,24 @@ class FearGreedService:
             return None
 
         return self._format(code, data)
+
+    def get_last_error(self, code: str) -> Optional[str]:
+        """
+        返回最近一次查询失败原因（短期缓存），用于上层提示具体不可用原因。
+        """
+        mapping = to_szdt_code(code)
+        if mapping is None:
+            return "invalid stock code format for szdt"
+        szdt_code, _ = mapping
+        with self._lock:
+            payload = self._last_error.get(szdt_code)
+            if not payload:
+                return None
+            ts, msg = payload
+            if (time.monotonic() - ts) > _ERROR_TTL:
+                self._last_error.pop(szdt_code, None)
+                return None
+            return msg
 
     # ------------------------------------------------------------------
     # 格式化

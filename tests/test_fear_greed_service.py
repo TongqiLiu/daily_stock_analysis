@@ -176,6 +176,25 @@ class TestFearGreedServiceGetScore(unittest.TestCase):
             result = self.svc.get_score("AAPL")
         self.assertIsNone(result)
 
+    def test_records_last_error_message_on_api_failure(self):
+        body = {"status": 0, "msg": "查询股票个数额度已用完，需手动删减已查询股票"}
+        with patch("requests.post", return_value=_make_response(json_body=body)):
+            result = self.svc.get_score("NOW")
+        self.assertIsNone(result)
+        msg = self.svc.get_last_error("NOW")
+        self.assertIsNotNone(msg)
+        self.assertIn("查询股票个数额度已用完", msg)
+
+    def test_last_error_cleared_after_success(self):
+        fail_body = {"status": 0, "msg": "无权限"}
+        with patch("requests.post", return_value=_make_response(json_body=fail_body)):
+            self.svc.get_score("AAPL")
+        self.assertIsNotNone(self.svc.get_last_error("AAPL"))
+
+        with patch("requests.post", return_value=_make_response(json_body=_success_body(score=10))):
+            self.svc.get_score("AAPL")
+        self.assertIsNone(self.svc.get_last_error("AAPL"))
+
     def test_returns_none_on_http_error(self):
         with patch("requests.post", return_value=_make_response(status=401)):
             result = self.svc.get_score("AAPL")
@@ -199,6 +218,10 @@ class TestFearGreedServiceGetScore(unittest.TestCase):
             ctx = self.svc.get_fear_greed_context("AAPL")
         self.assertEqual(mock_post.call_count, 1)
         self.assertIsNotNone(ctx)
+
+    def test_get_last_error_invalid_code(self):
+        msg = self.svc.get_last_error("????")
+        self.assertEqual(msg, "invalid stock code format for szdt")
 
 
 # ---------------------------------------------------------------------------
