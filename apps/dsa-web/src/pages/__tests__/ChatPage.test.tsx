@@ -279,6 +279,25 @@ describe('ChatPage', () => {
     expect(screen.getByRole('checkbox', { name: '通用分析' })).not.toBeChecked();
   });
 
+  it('prefers multi-strategy consensus as default when available', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'bull_trend', name: '趋势分析', description: '默认趋势' },
+        { id: 'multi_strategy_consensus', name: '⚡ 多策略联合', description: '联合评分' },
+      ],
+      default_skill_id: 'bull_trend',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('checkbox', { name: '⚡ 多策略联合' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '趋势分析' })).not.toBeChecked();
+  });
+
   it('sends multiple selected skills in order', async () => {
     mockGetSkills.mockResolvedValue({
       skills: [

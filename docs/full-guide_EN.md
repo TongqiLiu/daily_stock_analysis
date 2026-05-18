@@ -316,6 +316,8 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 > - **ETFs**: Returns available items, marks missing capabilities as `not_supported`, and does not affect the original flow overall.
 > - **US/HK stocks**: Returns `not_supported` fallback block.
 > - Any exception uses fail-open logic, only logs errors without affecting the main technical/news/chip pipeline.
+>
+> Chip-distribution note: A-shares use native Tushare/AkShare chip endpoints when available. For US/HK symbols (no equivalent native endpoint), the system falls back to a volume-profile approximation based on the latest ~120 daily OHLCV bars. Treat it as a heuristic, not exchange-native chip data.
 > - **Field contracts**:
 >   - `fundamental_context.belong_boards` = related board list for the stock (currently populated for A-shares only; `[]` when unavailable);
 >   - `fundamental_context.boards.data` = `sector_rankings` (sector rise/fall leaderboard, structure `{top, bottom}`);

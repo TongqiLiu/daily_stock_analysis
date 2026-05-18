@@ -100,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 问股新增并列可选策略「📐 估值模型」(`valuation_model`)：与「😱 贪恐情绪」「放量突破」同级展示，基于 `get_valuation_percentile` + `get_stock_info` + `search_comprehensive_intel` 输出估值分位、成长质量与产业链景气三因子综合结论（对美股/港股数据不完整场景自动降级说明）。
 - [改进] 估值模型升级为“可计算版”：新增 Agent 工具 `get_dcf_valuation`（`stock_code`、`forecast_years`）输出 Bull/Base/Bear 三情景 DCF 估值区间，并接入 `valuation_model` 策略作为问股内在价值锚点（输入缺失时 fail-open 返回 `partial/unavailable`）。
 - [修复] 多策略联合增强情绪兜底：`get_fear_greed_index` 在 `unavailable` 时返回结构化失败原因（含 `reason_code/reason_detail/suggested_action`）与 `proxy_score`，`multi_strategy_consensus` 强制第 12 项「贪恐情绪极值」在源站失败时按代理分计权，避免再次出现「不适用」导致分析链路中断。
+- [修复] 美股大盘复盘语言判定改为遵循 `REPORT_LANGUAGE`，修复 `REPORT_LANGUAGE=zh` 时仍被强制输出英文的问题，并统一美股市场名在中文模式下显示为“美股市场”。
+- [改进] 筹码分布能力新增美股/港股近似估算路径：当原生筹码接口不可用时，自动基于近 120 日 OHLCV 的 volume profile 估算获利比例、平均成本和 90%/70% 集中度，并在日志与 source 字段标注为近似值。
+- [修复] 问股页技能默认选择优先级调整为 `multi_strategy_consensus` > `default_skill_id` > 首个技能，确保前端默认选中「⚡ 多策略联合」。
 ## [3.16.0] - 2026-05-10
 
 ### 发布亮点

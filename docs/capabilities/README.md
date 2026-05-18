@@ -161,7 +161,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 |---|---|---|
 | `get_realtime_quote` | stock_code | 实时行情：价格、涨跌幅、量比、换手率、PE/PB、市值 |
 | `get_daily_history` | stock_code, days | 日 K 线 OHLCV + MA5/10/20 |
-| `get_chip_distribution` | stock_code | 筹码分布：盈亏比、平均成本、90%/70% 集中度 |
+| `get_chip_distribution` | stock_code | 筹码分布：盈亏比、平均成本、90%/70% 集中度（A 股为原生接口；美股/港股为基于近 120 日 OHLCV 的近似估算） |
 | `get_analysis_context` | stock_code | 数据库中的历史分析上下文 |
 | `get_stock_info` | stock_code | 基本面：估值、增长、机构持仓、所属板块 |
 | `get_portfolio_snapshot` | account_id?, cost_method? | 组合快照 + 风险指标 |

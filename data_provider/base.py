@@ -20,7 +20,7 @@ import random
 import time
 from threading import BoundedSemaphore, RLock, Thread
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, date
 from typing import Callable, Optional, List, Tuple, Dict, Any
 
 import pandas as pd
@@ -1590,6 +1590,157 @@ class DataFetcherManager:
         """Shortcut kept for backward-compat with A-share general loop."""
         return self._supplement_quote(stock_code, primary_quote, "LongbridgeFetcher")
 
+    @staticmethod
+    def _weighted_percentile(prices: np.ndarray, weights: np.ndarray, percentile: float) -> float:
+        """
+        Return weighted percentile price from sorted price/weight vectors.
+
+        Percentile is in [0, 1]. If weights are invalid, fallback to simple quantile.
+        """
+        if prices.size == 0:
+            return 0.0
+
+        q = float(min(max(percentile, 0.0), 1.0))
+        valid_weight_sum = float(np.sum(weights))
+        if valid_weight_sum <= 0:
+            return float(np.quantile(prices, q))
+
+        cdf = np.cumsum(weights) / valid_weight_sum
+        idx = int(np.searchsorted(cdf, q, side="left"))
+        idx = max(0, min(idx, prices.size - 1))
+        return float(prices[idx])
+
+    @staticmethod
+    def _normalize_chip_date(raw_value: Any) -> str:
+        """Normalize daily-row date values to YYYY-MM-DD."""
+        if isinstance(raw_value, datetime):
+            return raw_value.strftime("%Y-%m-%d")
+        if isinstance(raw_value, date):
+            return raw_value.strftime("%Y-%m-%d")
+        if raw_value is None:
+            return datetime.now().strftime("%Y-%m-%d")
+        text = str(raw_value).strip()
+        if not text:
+            return datetime.now().strftime("%Y-%m-%d")
+        if " " in text:
+            text = text.split(" ", 1)[0]
+        return text
+
+    def _build_approx_chip_distribution(
+        self,
+        stock_code: str,
+        daily_df: pd.DataFrame,
+        *,
+        realtime_price: Optional[float] = None,
+        source_hint: str = "",
+    ):
+        """
+        Build an approximate chip distribution from OHLCV history.
+
+        Designed for US/HK markets where native "筹码分布" endpoints are unavailable.
+        Uses volume-weighted daily typical prices as a rough cost-distribution proxy.
+        """
+        from .realtime_types import ChipDistribution
+
+        if daily_df is None or daily_df.empty:
+            return None
+
+        required_price_cols = [c for c in ("open", "high", "low", "close") if c in daily_df.columns]
+        if not required_price_cols:
+            logger.debug(f"[筹码分布-近似] {stock_code} 日线缺少价格列，无法计算")
+            return None
+
+        frame = daily_df.copy()
+        for col in required_price_cols:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+
+        if {"open", "high", "low", "close"}.issubset(frame.columns):
+            price_series = (frame["open"] + frame["high"] + frame["low"] + frame["close"]) / 4.0
+        else:
+            price_series = frame["close"]
+
+        if "volume" in frame.columns:
+            volume_series = pd.to_numeric(frame["volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
+        else:
+            volume_series = pd.Series(1.0, index=frame.index, dtype="float64")
+
+        valid_mask = price_series.notna() & (price_series > 0) & volume_series.notna() & (volume_series >= 0)
+        if not bool(valid_mask.any()):
+            logger.debug(f"[筹码分布-近似] {stock_code} 日线无有效量价样本，无法计算")
+            return None
+
+        prices = price_series.loc[valid_mask].astype(float).to_numpy()
+        weights = volume_series.loc[valid_mask].astype(float).to_numpy()
+        if prices.size == 0:
+            return None
+
+        weight_sum = float(np.sum(weights))
+        if weight_sum <= 0:
+            weights = np.ones_like(prices, dtype=float)
+            weight_sum = float(np.sum(weights))
+
+        order = np.argsort(prices)
+        sorted_prices = prices[order]
+        sorted_weights = weights[order]
+
+        # Realtime quote has priority; fallback to latest close when quote is unavailable.
+        current_price = None
+        try:
+            if realtime_price is not None:
+                current_price = float(realtime_price)
+        except (TypeError, ValueError):
+            current_price = None
+        if current_price is None or current_price <= 0:
+            close_series = pd.to_numeric(frame.get("close"), errors="coerce")
+            close_series = close_series[close_series > 0]
+            if not close_series.empty:
+                current_price = float(close_series.iloc[-1])
+        if current_price is None or current_price <= 0:
+            logger.debug(f"[筹码分布-近似] {stock_code} 无可用当前价，无法估算")
+            return None
+
+        profit_ratio = float(np.sum(sorted_weights[sorted_prices <= current_price]) / weight_sum)
+        avg_cost = float(np.average(sorted_prices, weights=sorted_weights))
+
+        cost_90_low = self._weighted_percentile(sorted_prices, sorted_weights, 0.05)
+        cost_90_high = self._weighted_percentile(sorted_prices, sorted_weights, 0.95)
+        cost_70_low = self._weighted_percentile(sorted_prices, sorted_weights, 0.15)
+        cost_70_high = self._weighted_percentile(sorted_prices, sorted_weights, 0.85)
+
+        def _calc_concentration(low_price: float, high_price: float) -> float:
+            denom = low_price + high_price
+            if denom <= 0:
+                return 0.0
+            return float((high_price - low_price) / denom)
+
+        concentration_90 = _calc_concentration(cost_90_low, cost_90_high)
+        concentration_70 = _calc_concentration(cost_70_low, cost_70_high)
+        last_date_raw = frame.iloc[-1]["date"] if "date" in frame.columns else None
+        chip_date = self._normalize_chip_date(last_date_raw)
+
+        source_name = "approx_volume_profile"
+        if source_hint:
+            source_name = f"{source_name}:{source_hint}"
+
+        chip = ChipDistribution(
+            code=stock_code,
+            date=chip_date,
+            source=source_name,
+            profit_ratio=max(0.0, min(1.0, profit_ratio)),
+            avg_cost=avg_cost,
+            cost_90_low=cost_90_low,
+            cost_90_high=cost_90_high,
+            concentration_90=max(0.0, concentration_90),
+            cost_70_low=cost_70_low,
+            cost_70_high=cost_70_high,
+            concentration_70=max(0.0, concentration_70),
+        )
+        logger.info(
+            f"[筹码分布-近似] {stock_code} 日期={chip.date}: 获利比例={chip.profit_ratio:.1%}, "
+            f"平均成本={chip.avg_cost:.4f}, 90%集中度={chip.concentration_90:.2%}, 来源={chip.source}"
+        )
+        return chip
+
     def get_chip_distribution(self, stock_code: str):
         """
         获取筹码分布数据（带熔断和多数据源降级）
@@ -1617,6 +1768,26 @@ class DataFetcherManager:
         # 如果筹码分布功能被禁用，直接返回 None
         if not config.enable_chip_distribution:
             logger.debug(f"[筹码分布] 功能已禁用，跳过 {stock_code}")
+            return None
+
+        # 美股/港股无原生筹码接口：尝试基于 OHLCV 的 volume profile 近似估算。
+        if _is_us_market(stock_code) or _is_hk_market(stock_code):
+            market_label = "美股" if _is_us_market(stock_code) else "港股"
+            try:
+                daily_df, daily_source = self.get_daily_data(stock_code, days=120)
+                realtime_quote = self.get_realtime_quote(stock_code, log_final_failure=False)
+                realtime_price = getattr(realtime_quote, "price", None) if realtime_quote else None
+                chip = self._build_approx_chip_distribution(
+                    stock_code,
+                    daily_df,
+                    realtime_price=realtime_price,
+                    source_hint=daily_source,
+                )
+                if chip is not None:
+                    return chip
+            except Exception as e:
+                logger.info(f"[筹码分布-近似] {market_label} {stock_code} 估算失败: {e}")
+            logger.info(f"[筹码分布] {market_label} {stock_code} 无法估算筹码分布，已跳过")
             return None
 
         circuit_breaker = get_chip_circuit_breaker()

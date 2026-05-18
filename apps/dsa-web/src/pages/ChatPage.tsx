@@ -37,6 +37,7 @@ const QUICK_QUESTIONS = [
 ];
 
 const MAX_SELECTED_SKILLS = 3;
+const PREFERRED_DEFAULT_SKILL_ID = 'multi_strategy_consensus';
 
 const getMessageSkillNames = (msg: Message): string[] => {
   if (msg.skillNames?.length) return msg.skillNames;
@@ -183,7 +184,11 @@ const ChatPage: React.FC = () => {
     agentApi.getSkills()
       .then((res) => {
         setSkills(res.skills);
+        const preferredDefaultSkillId = res.skills.some((skill) => skill.id === PREFERRED_DEFAULT_SKILL_ID)
+          ? PREFERRED_DEFAULT_SKILL_ID
+          : '';
         const defaultId =
+          preferredDefaultSkillId ||
           res.default_skill_id ||
           res.skills[0]?.id ||
           '';
