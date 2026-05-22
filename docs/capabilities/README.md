@@ -120,29 +120,36 @@ CLI 全部参数见 `main.py:222-358`，重点：
 
 ---
 
-## 四、Skills（策略）清单 — 17 个
+## 四、Skills（策略）清单 — 24 个
 
 YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载。
 
 | # | id | 显示名 | 默认优先级 | 类别 | 用途简介 |
 |---|---|---|---|---|---|
-| 1 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：调用 11 个内置策略 + 贪恐情绪逐项打分，输出 12 行表格 + 加权综合得分 + 决策映射（前端默认勾选） |
+| 1 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：调用 12 个子策略逐项打分，输出表格 + 加权综合得分 + 决策映射（前端默认勾选） |
 | 2 | `bull_trend` | 默认多头趋势 | 10 | trend | 后端 `default_skill_id`：MA5>MA10>MA20 + MACD 金叉，关注 7 条核心交易基线 |
-| 3 | `ma_golden_cross` | 均线金叉 | 70 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
-| 4 | `volume_breakout` | 放量突破 | 70 | breakout | 突破 20 日新高 + 量比 ≥ 1.5 |
-| 5 | `shrink_pullback` | 缩量回踩 | 70 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
-| 6 | `box_oscillation` | 箱体震荡 | 70 | range | 区间震荡：下沿低吸、上沿减仓 |
-| 7 | `bottom_volume` | 底部放量 | 70 | reversal | 周线底部 + 日线放量 + 长下影 |
-| 8 | `chan_theory` | 缠论 | 80 | structure | 中枢 / 背驰 / 三买信号 |
-| 9 | `wave_theory` | 波浪理论 | 80 | structure | 5 浪推进 + ABC 调整识别 |
-| 10 | `dragon_head` | 龙头策略 | 80 | sector | 板块强势 + 个股领涨 |
-| 11 | `emotion_cycle` | 情绪周期 | 80 | sentiment | 市场情绪冷热周期，逆向布局 |
-| 12 | `one_yang_three_yin` | 一阳夹三阴 | 80 | pattern | K 线形态识别 |
-| 13 | `fear_greed_sentiment` | 😱 贪恐情绪 | 30 | sentiment | 基于 szdt.tech 贪恐分（-100~100）的逆向情绪分析 |
-| 14 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河 + 安全边际 + ROE，判断"是否值得长期持有 5 年+" |
-| 15 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP（成长配估值）|
-| 16 | `dividend_growth` | 💵 股息成长 | 35 | income | 收益型 / 退休账户视角：股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
-| 17 | `valuation_model` | 📐 估值模型 | 30 | framework | 估值模型分析：PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级，适配 AI 周期成长股 |
+| 3 | `ma_golden_cross` | 均线金叉 | 20 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
+| 4 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河 + 安全边际 + ROE |
+| 5 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP |
+| 6 | `volume_breakout` | 放量突破 | 30 | trend | 突破 20 日新高 + 量比确认 |
+| 7 | `valuation_model` | 📐 估值模型 | 30 | framework | PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级 |
+| 8 | `fear_greed_sentiment` | 😱 贪恐情绪 | 30 | sentiment | 基于 szdt.tech 贪恐分（-100~100）的逆向情绪分析 |
+| 9 | `ema5_200_setup` | ema5_200_setup | 32 | pattern | EMA200 回踩/触碰后短窗口 reclaim 候选判断，输出 0/1/2 结构等级 |
+| 10 | `ema_200_highlow` | ema_200_highlow | 33 | pattern | EMA200 reclaim 后检查 higher low / 双底、结构止损与 1R 空间，输出 0-3 结构等级 |
+| 11 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
+| 12 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
+| 13 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
+| 14 | `event_driven` | 事件驱动 | 45 | framework | 业绩、政策、并购、订单、产品发布等事件催化评估 |
+| 15 | `box_oscillation` | 箱体震荡 | 50 | framework | 区间震荡：下沿低吸、上沿减仓 |
+| 16 | `growth_quality` | 成长质量 | 55 | framework | 收入利润增长、ROE、现金流和行业空间的成长质量判断 |
+| 17 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
+| 18 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
+| 19 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
+| 20 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
+| 21 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、楔形、主备计数切换与失效位 |
+| 22 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
+| 23 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
+| 24 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
 
 **新增 skill 的最简流程**：
 1. 在 `strategies/` 下加一个 yaml（参考已有 yaml 字段）
@@ -151,7 +158,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 
 ---
 
-## 五、Agent Tools（21 个）
+## 五、Agent Tools（23 个）
 
 工具注册见 `src/agent/tools/`，按 `category` 分类：
 
@@ -170,7 +177,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `get_valuation_percentile` | stock_code, metric?, lookback_years? | PE/PB/PS 历史分位（A 股完整 5 年，美股仅当前值 status='partial'，港股 unavailable）|
 | `get_dcf_valuation` | stock_code, forecast_years? | 轻量 DCF 三情景估值（Bull/Base/Bear），返回内在价值区间与相对现价偏离 |
 
-### 5.2 分析类（`analysis_tools.py`，4 个）
+### 5.2 分析类（`analysis_tools.py` + `value_analysis_tools.py`，6 个）
 
 | 工具名 | 用途 |
 |---|---|
@@ -178,6 +185,8 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `calculate_ma` | 多周期均线计算（MA5/10/20/30/60/120/250）+ 乖离率 |
 | `get_volume_analysis` | 量比、放量/缩量、量价配合/背离 |
 | `analyze_pattern` | K 线 / 图表形态识别：Doji / Hammer / 双底 / 突破 等 |
+| `analyze_ema200_setup` | EMA200 setup 结构判断：基础 reclaim candidate、HL/双底、结构止损与 1R 空间 |
+| `run_value_analysis` | 系统化价值投资分析：行业、公司、估值、逆向投资和定价权综合评估 |
 
 ### 5.3 搜索类（`search_tools.py`，2 个）
 
@@ -464,8 +473,8 @@ Chat SSE 协议（`POST /agent/chat/stream`）事件类型：
 
 当某主题膨胀（>200 行 / 多次修改），建议从本文件拆出到 `docs/capabilities/<topic>.md` 并在此保留导航：
 
-- [ ] `agent-tools.md` — 19 个工具的详细参数 / 输出 schema / 异常码
-- [ ] `strategies.md` — 13 个 skill 的完整 instructions 与打分阈值
+- [ ] `agent-tools.md` — 23 个工具的详细参数 / 输出 schema / 异常码
+- [ ] `strategies.md` — 24 个 skill 的完整 instructions 与打分阈值
 - [ ] `data-sources.md` — 10 个数据源每个 API 的稳定性 / 字段映射
 - [ ] `notifications.md` — 11 个渠道的格式化样式 + 限流 + 重试
 - [ ] `extensibility.md` — 把"扩展指南"章节抽出
@@ -475,4 +484,4 @@ Chat SSE 协议（`POST /agent/chat/stream`）事件类型：
 
 ---
 
-*Last updated: 2026-05-15。本文件随用户可见能力变化同步更新；规则见首段维护原则。*
+*Last updated: 2026-05-22。本文件随用户可见能力变化同步更新；规则见首段维护原则。*

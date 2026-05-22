@@ -512,9 +512,139 @@ analyze_pattern_tool = ToolDefinition(
 )
 
 
+def _handle_analyze_ema200_setup(
+    stock_code: str,
+    setup_id: str = "ema_200_highlow",
+    timeframe: str = "5m",
+    days: int = 300,
+) -> dict:
+    """Run deterministic EMA200 setup checks on intraday or daily OHLCV history.
+
+    Args:
+        stock_code: Stock code
+        setup_id: 'ema5_200_setup' or 'ema_200_highlow'
+        timeframe: Chart timeframe ('5m', '15m', '30m', '1H', '4H', 'daily')
+        days: Number of days history (for daily) or bars (for intraday)
+    """
+    from src.services.ema200_setup_service import analyze_ema200_setup
+
+    if not (stock_code and str(stock_code).strip()):
+        return {"error": "stock_code is required"}
+
+    # Determine HTF timeframe based on chart timeframe
+    htf_timeframe_map = {
+        "5m": "4H",
+        "15m": "4H",
+        "30m": "4H",
+        "1H": "daily",
+        "4H": "daily",
+        "daily": None,  # No HTF for daily (or could use weekly if available)
+    }
+    htf_timeframe = htf_timeframe_map.get(timeframe, None)
+
+    try:
+        requested_bars = max(int(days or 300), 300)
+
+        # Load chart timeframe data
+        if timeframe == "daily":
+            from src.services.history_loader import load_history_df
+            df, source = load_history_df(stock_code, days=requested_bars)
+        else:
+            from src.services.intraday_history_loader import load_intraday_history
+            df, source = load_intraday_history(
+                stock_code,
+                timeframe=timeframe,
+                bars=requested_bars,
+            )
+
+        if df is None or df.empty:
+            return {
+                "error": f"No historical data available for EMA200 setup analysis on {stock_code}",
+                "timeframe": timeframe,
+            }
+
+        # Load HTF data for bias filter (if applicable)
+        htf_df = None
+        if htf_timeframe:
+            if htf_timeframe == "daily":
+                from src.services.history_loader import load_history_df
+                htf_df, _ = load_history_df(stock_code, days=260)
+            else:
+                from src.services.intraday_history_loader import load_intraday_history
+                htf_df, _ = load_intraday_history(
+                    stock_code,
+                    timeframe=htf_timeframe,
+                    bars=300,
+                )
+
+        result = analyze_ema200_setup(
+            df,
+            setup_id=setup_id,
+            source=source,
+            timeframe=timeframe,
+            htf_df=htf_df,
+        )
+        result["code"] = stock_code
+        result["requested_bars"] = requested_bars
+        return result
+
+    except Exception as e:
+        return {
+            "error": f"EMA200 setup analysis failed: {str(e)}",
+            "code": stock_code,
+            "timeframe": timeframe,
+        }
+
+
+analyze_ema200_setup_tool = ToolDefinition(
+    name="analyze_ema200_setup",
+    description=(
+        "Deterministically evaluate EMA200 intraday/daily setup rules on OHLCV history. "
+        "Supports setup_id='ema5_200_setup' for EMA200 touch/reclaim candidate checks and "
+        "setup_id='ema_200_highlow' for candidate + higher-low/double-bottom + stop/1R checks. "
+        "Includes HTF (Higher TimeFrame) EMA200 bias filter: "
+        "5m chart uses 4H EMA200, 1H chart uses daily EMA200 for trend confirmation. "
+        "Only returns long setups when HTF trend is bullish."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519', 'AAPL', or 'HK00700'.",
+        ),
+        ToolParameter(
+            name="setup_id",
+            type="string",
+            description="EMA200 setup id to evaluate.",
+            required=False,
+            enum=["ema5_200_setup", "ema_200_highlow"],
+            default="ema_200_highlow",
+        ),
+        ToolParameter(
+            name="timeframe",
+            type="string",
+            description="Chart timeframe for entry signals.",
+            required=False,
+            enum=["5m", "15m", "30m", "1H", "4H", "daily"],
+            default="5m",
+        ),
+        ToolParameter(
+            name="days",
+            type="integer",
+            description="Number of bars to fetch (300+ recommended for EMA200 calculation).",
+            required=False,
+            default=300,
+        ),
+    ],
+    handler=_handle_analyze_ema200_setup,
+    category="analysis",
+)
+
+
 ALL_ANALYSIS_TOOLS = [
     analyze_trend_tool,
     calculate_ma_tool,
     get_volume_analysis_tool,
     analyze_pattern_tool,
+    analyze_ema200_setup_tool,
 ]

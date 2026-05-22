@@ -23,7 +23,7 @@ import logging
 import os
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -716,6 +716,77 @@ class LongbridgeFetcher(BaseFetcher):
                 "close": safe_float(getattr(c, "close", None)),
                 "volume": int(getattr(c, "volume", 0) or 0),
                 "turnover": safe_float(getattr(c, "turnover", None)),
+            })
+
+        return pd.DataFrame(rows)
+
+    def fetch_intraday_candlesticks(
+        self,
+        stock_code: str,
+        start_date: date,
+        end_date: date,
+        period,  # longbridge.openapi.Period enum
+    ) -> Optional[pd.DataFrame]:
+        """Fetch intraday candlesticks (minute/hourly) from Longbridge.
+
+        Args:
+            stock_code: Normalized stock code
+            start_date: Start date
+            end_date: End date
+            period: Longbridge Period enum (e.g., Period.Min_5, Period.Min_240)
+
+        Returns:
+            DataFrame with columns [date, open, high, low, close, volume]
+            or None on error.
+        """
+        if not self.is_available_for_request("intraday_data"):
+            raise RuntimeError("Longbridge temporarily unavailable for intraday_data")
+
+        symbol = _to_longbridge_symbol(stock_code)
+        if symbol is None:
+            raise ValueError(f"Cannot convert {stock_code} to Longbridge symbol")
+
+        ctx = self._get_ctx()
+        if ctx is None:
+            raise RuntimeError("Longbridge QuoteContext not available")
+
+        from longbridge.openapi import AdjustType
+
+        try:
+            candles = ctx.history_candlesticks_by_date(
+                symbol,
+                period,
+                AdjustType.ForwardAdjust,
+                start_date,
+                end_date,
+            )
+        except Exception as e:
+            if self._is_connection_error(e):
+                self._mark_connection_cooldown(e)
+            raise
+
+        if not candles:
+            return pd.DataFrame()
+
+        rows = []
+        for c in candles:
+            ts = getattr(c, "timestamp", None)
+            if ts is None:
+                continue
+
+            # Parse timestamp to datetime
+            if hasattr(ts, "date"):
+                dt = ts
+            else:
+                dt = datetime.fromtimestamp(int(ts))
+
+            rows.append({
+                "date": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "open": safe_float(getattr(c, "open", None)),
+                "high": safe_float(getattr(c, "high", None)),
+                "low": safe_float(getattr(c, "low", None)),
+                "close": safe_float(getattr(c, "close", None)),
+                "volume": int(getattr(c, "volume", 0) or 0),
             })
 
         return pd.DataFrame(rows)

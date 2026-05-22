@@ -89,3 +89,6 @@ static/
 docs/options-pic/
 docs/options-review/期权记录_*.xlsx
 docs/specs/
+
+# Local Codex skill mirror; canonical repo skills live in .claude/skills/
+.agents/

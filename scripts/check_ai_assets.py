@@ -99,7 +99,7 @@ def ensure_gitignore_rules() -> None:
 
 def ensure_no_tracked_claude_artifacts() -> None:
     result = subprocess.run(
-        ["git", "ls-files", "--", ".claude"],
+        ["git", "-c", "core.quotePath=false", "ls-files", "--", ".claude"],
         cwd=ROOT,
         capture_output=True,
         text=True,

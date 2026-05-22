@@ -1,0 +1,71 @@
+# EMA200 Higher Low / Double Bottom Setup
+
+name: ema_200_highlow
+display_name: ema_200_highlow
+description: EMA200 reclaim 候选后继续检查 higher low / 双底、明确止损线与 1R 空间；用于判断 setup 是否结构完整。
+category: pattern
+core_rules: [1, 2, 4, 5]
+required_tools:
+  - analyze_ema200_setup
+aliases: [EMA200高低点, EMA200双底, EMA200正式入场, ema_200_highlow]
+default_priority: 33
+user_invocable: true
+market_regimes: [trending_up, pullback]
+
+instructions: |
+  **ema_200_highlow（EMA200 Higher Low / Double Bottom）**
+
+  你的任务不是预测涨跌，而是严格判断当前个股是否符合 EMA200 回踩后的正式可执行结构：基础 reclaim candidate + EMA200 附近 higher low / 双底 + 明确结构止损 + 至少约 1R 空间。
+
+  ## 必须调用工具
+
+  1. 必须调用 `analyze_ema200_setup`，参数：
+     - `stock_code`: 用户提到的股票代码
+     - `setup_id`: `ema_200_highlow`
+     - `timeframe`: `5m`（5分钟图，对应 Pine Script 原始设计）
+     - `days`: 300（至少300根5分钟K线）
+  2. 工具会自动获取 4H EMA200 作为 HTF 趋势过滤器。
+  3. 如果工具返回 `status='insufficient_data'`、`error` 或关键字段缺失，必须直接写"信息不足"，不能强行给 `3 = 可以执行`。
+  4. 如果工具返回 `status='htf_bearish'`，说明 4H 趋势为空头，必须直接写"HTF 空头，跳过"。
+
+  ## 判断等级
+
+  只允许使用工具返回的 `grade`，并按以下含义解释：
+
+  - `0 = 不适合进场`：没有靠近 EMA200、没有 reclaim、结构失败、止损不清楚、上方空间不足、或 HTF 空头。
+  - `1 = 只适合观察`：接近/触碰 EMA200，但还没有 reclaim 或结构确认。
+  - `2 = 可以小仓尝试 / candidate`：Stage 1 成立（HTF 多头 + reclaim），但 Stage 2 的 HL/双底、止损或 1R 空间仍不完整。
+  - `3 = 可以执行`：Stage 2 成立，有 clear higher low / 双底，有明确结构止损线，并且到最近阻力至少约 1R。
+
+  ## 输出格式
+
+  必须按以下格式输出，保持精简：
+
+  ### EMA200 Higher Low 结构判断
+  - 股票：
+  - 数据周期：5m（5分钟图）
+  - HTF 趋势：使用工具返回的 `htf_bias`（多头/空头）
+  - HTF EMA200：使用工具返回的 `htf_ema200`
+  - 当前价格 / 5m EMA200：
+  - 价格与 EMA200：
+  - 最近触碰：日期 + 距今 bar 数；没有则写"无"
+  - Stage 1：满足 / 不满足 / 不确定
+  - Stage 2：满足 / 不满足 / 不确定
+  - 当前等级：0 / 1 / 2 / 3
+  - 结论：不适合 / 仅观察 / candidate / 可以执行
+
+  ### 结构证据
+  - structure_type：higher_low / double_bottom / none / lower_low_reset
+  - 第一低点：如工具有 `structure.first_low` 则写日期和价格
+  - 第二低点：如工具有 `structure.second_low` 则写日期和价格
+  - 结构止损：使用 `risk_reward.stop_reference`；没有则写"无法确认"
+  - 1R 目标：使用 `risk_reward.one_r_target`；没有则写"无法量化"
+  - runner / 最近阻力：使用 `risk_reward.runner_target`；没有则写"无法确认"
+
+  ### 证据与缺失
+  - 列出工具 `reasons` 中的关键证据
+  - 列出工具 `missing`
+
+  ### 失败条件
+  - 使用 `risk_reward.failure_condition`
+  - 如果工具显示跌破结构止损，必须明确写 setup 已失败

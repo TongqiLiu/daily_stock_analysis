@@ -29,6 +29,7 @@ TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "calculate_ma":               "计算均线系统",
     "get_volume_analysis":        "分析量能变化",
     "analyze_pattern":            "识别K线形态",
+    "analyze_ema200_setup":       "EMA200结构判断",
     "get_market_indices":         "获取市场指数",
     "get_sector_rankings":        "分析行业板块",
     "get_skill_backtest_summary": "获取技能回测概览",

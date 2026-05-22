@@ -43,6 +43,7 @@ _THINKING_TOOL_LABELS: Dict[str, str] = {
     "get_analysis_context": "历史分析上下文",
     "get_stock_info": "基本信息获取",
     "analyze_pattern": "K线形态识别",
+    "analyze_ema200_setup": "EMA200结构判断",
     "get_volume_analysis": "量能分析",
     "calculate_ma": "均线计算",
     "get_skill_backtest_summary": "技能回测概览",

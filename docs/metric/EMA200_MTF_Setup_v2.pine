@@ -1,0 +1,109 @@
+//@version=6
+indicator("EMA200 MTF Setup v2", overlay=true, shorttitle="E200v2")
+
+// ====== Inputs ======
+htf = input.timeframe("240", "HTF for swing bias")
+test_window = input.int(8, "Test window (bars after touch)", minval=2, maxval=30)
+confirm_pct_input = input.float(0.1, "Confirmation buffer %", minval=0.0, step=0.05)
+confirm_pct = confirm_pct_input / 100.0
+show_panel = input.bool(true, "Show status panel (top-right)")
+show_rules = input.bool(true, "Show rules box (bottom-left)")
+show_bg = input.bool(true, "Color background by HTF bias")
+
+// ====== EMAs ======
+ema200 = ta.ema(close, 200)
+ema200_htf = request.security(syminfo.tickerid, htf, ta.ema(close, 200), lookahead=barmerge.lookahead_off)
+
+// ====== Bias ======
+swing_long = close > ema200_htf
+swing_short = close < ema200_htf
+
+// ====== Touch detection ======
+touch = low <= ema200 and high >= ema200
+
+// ====== State machine: idle(0) → testing(1) ======
+var int state = 0
+var int touch_bar = -1
+
+new_touch = state == 0 and touch and swing_long
+if new_touch
+    state := 1
+    touch_bar := bar_index
+
+bars_in_test = state == 1 ? bar_index - touch_bar : 0
+
+is_buy = state == 1 and bars_in_test >= 1 and close > ema200 * (1 + confirm_pct) and bars_in_test <= test_window
+is_fail = state == 1 and bars_in_test >= 1 and close < ema200 * (1 - confirm_pct) and bars_in_test <= test_window
+is_timeout = state == 1 and bars_in_test > test_window
+
+if is_buy or is_fail or is_timeout
+    state := 0
+    touch_bar := -1
+
+// ====== Track last signals ======
+var float last_break_price = na
+var float last_buy_price = na
+var float last_fail_price = na
+
+if new_touch
+    last_break_price := close
+if is_buy
+    last_buy_price := close
+if is_fail
+    last_fail_price := close
+
+// ====== Plots ======
+plot(ema200, color=color.new(color.blue, 0), linewidth=2, title="5m EMA200")
+plot(ema200_htf, color=color.new(color.red, 0), linewidth=3, title="HTF EMA200")
+
+bgcolor(show_bg and swing_long ? color.new(color.green, 92) : show_bg and swing_short ? color.new(color.red, 94) : na, title="Bias bg")
+
+plotshape(new_touch, title="突破", style=shape.labelup, location=location.belowbar, color=color.aqua, textcolor=color.black, text="突破", size=size.small)
+plotshape(is_buy, title="買入", style=shape.labelup, location=location.belowbar, color=color.lime, textcolor=color.black, text="買入", size=size.normal)
+plotshape(is_fail, title="失敗", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, text="失敗", size=size.normal)
+plotshape(is_timeout, title="超時", style=shape.xcross, location=location.abovebar, color=color.gray, size=size.tiny)
+
+// ====== Status Panel ======
+if show_panel and barstate.islast
+    var table panel = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
+    bias_text = swing_long ? "🟢 LONG (可做多)" : "🔴 SHORT (跳過)"
+    bias_color = swing_long ? color.lime : color.red
+    dist_pct = (close - ema200) / ema200 * 100
+    dist_htf = (close - ema200_htf) / ema200_htf * 100
+    state_text = state == 1 ? "⏳ 測試中 (" + str.tostring(test_window - bars_in_test) + " bars 內)" : "⏸️ 等突破"
+
+    table.cell(panel, 0, 0, "EMA200 MTF Setup", text_color=color.white, bgcolor=color.new(color.blue, 30))
+    table.cell(panel, 1, 0, syminfo.ticker + " · " + timeframe.period, text_color=color.white, bgcolor=color.new(color.blue, 30))
+    table.cell(panel, 0, 1, "4H Bias", text_color=color.gray)
+    table.cell(panel, 1, 1, bias_text, text_color=bias_color)
+    table.cell(panel, 0, 2, "現價", text_color=color.gray)
+    table.cell(panel, 1, 2, str.tostring(close, "#.##"), text_color=color.white)
+    table.cell(panel, 0, 3, "5m EMA200", text_color=color.gray)
+    table.cell(panel, 1, 3, str.tostring(ema200, "#.##") + " (" + str.tostring(dist_pct, "+0.00") + "%)", text_color=color.white)
+    table.cell(panel, 0, 4, "4H EMA200", text_color=color.gray)
+    table.cell(panel, 1, 4, str.tostring(ema200_htf, "#.##") + " (" + str.tostring(dist_htf, "+0.00") + "%)", text_color=color.white)
+    table.cell(panel, 0, 5, "狀態", text_color=color.gray)
+    table.cell(panel, 1, 5, state_text, text_color=color.yellow)
+    table.cell(panel, 0, 6, "最後突破", text_color=color.aqua)
+    table.cell(panel, 1, 6, na(last_break_price) ? "—" : "$" + str.tostring(last_break_price, "#.##"), text_color=color.white)
+    table.cell(panel, 0, 7, "最後買入", text_color=color.lime)
+    table.cell(panel, 1, 7, na(last_buy_price) ? "—" : "$" + str.tostring(last_buy_price, "#.##"), text_color=color.white)
+    table.cell(panel, 0, 8, "最後失敗", text_color=color.red)
+    table.cell(panel, 1, 8, na(last_fail_price) ? "—" : "$" + str.tostring(last_fail_price, "#.##"), text_color=color.white)
+
+// ====== Rules box ======
+if show_rules and barstate.islast
+    var table rules = table.new(position.bottom_left, 1, 8, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
+    table.cell(rules, 0, 0, "📋 操作規則", text_color=color.yellow, bgcolor=color.new(color.navy, 30))
+    table.cell(rules, 0, 1, "① 綠底 = 4H 多頭, 可做多", text_color=color.white)
+    table.cell(rules, 0, 2, "② 紅底 = 4H 空頭, 換別檔", text_color=color.red)
+    table.cell(rules, 0, 3, "③ 「突破」= 觸碰 EMA200, 開始觀察", text_color=color.aqua)
+    table.cell(rules, 0, 4, "④ 等決於後續 " + str.tostring(test_window) + " 根 K", text_color=color.gray)
+    table.cell(rules, 0, 5, "⑤ 「買入」(綠) = 收回 EMA200, 進場", text_color=color.lime)
+    table.cell(rules, 0, 6, "⑥ 「失敗」(紅) = 跌破 EMA200, 不進場/出場", text_color=color.red)
+    table.cell(rules, 0, 7, "⚠️ 無止損不進場", text_color=color.orange)
+
+// ====== Alerts ======
+alertcondition(new_touch, title="突破 EMA200", message="{{ticker}} 觸碰 EMA200, 進入測試期")
+alertcondition(is_buy, title="買入 - Setup Confirmed", message="{{ticker}} 回到 EMA200 上方 - BUY at {{close}}")
+alertcondition(is_fail, title="失敗 - Setup Failed", message="{{ticker}} 跌破 EMA200 - 出場 at {{close}}")
