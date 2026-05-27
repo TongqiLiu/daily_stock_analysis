@@ -379,6 +379,35 @@ class TestBuiltinSkills(unittest.TestCase):
         # Verify all strategy names from YAML are loaded
         self.assertEqual(names, expected)
 
+    def test_five_dimension_skill_metadata_and_selector_order(self):
+        """Five-dimension analysis should be the first backend skill after the UI general option."""
+        from src.agent.factory import get_tool_registry
+        from src.agent.skills.base import SkillManager
+
+        manager = SkillManager()
+        manager.load_builtin_strategies()
+
+        skill = manager.get("five_dimension_analysis")
+        self.assertIsNotNone(skill)
+        self.assertEqual(skill.display_name, "五维分析")
+        self.assertEqual(skill.category, "framework")
+        self.assertTrue(skill.user_invocable)
+        self.assertEqual(skill.default_priority, 4)
+
+        registered_tools = set(get_tool_registry().list_names())
+        missing_tools = set(skill.required_tools) - registered_tools
+        self.assertEqual(missing_tools, set())
+
+        user_visible = sorted(
+            [item for item in manager.list_skills() if item.user_invocable],
+            key=lambda item: (item.default_priority, item.display_name, item.name),
+        )
+        self.assertEqual(user_visible[0].name, "five_dimension_analysis")
+        self.assertLess(
+            skill.default_priority,
+            manager.get("multi_strategy_consensus").default_priority,
+        )
+
 
 # ============================================================
 # Built-in tools import test

@@ -120,36 +120,37 @@ CLI 全部参数见 `main.py:222-358`，重点：
 
 ---
 
-## 四、Skills（策略）清单 — 24 个
+## 四、Skills（策略）清单 — 25 个
 
 YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载。
 
 | # | id | 显示名 | 默认优先级 | 类别 | 用途简介 |
 |---|---|---|---|---|---|
-| 1 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：调用 12 个子策略逐项打分，输出表格 + 加权综合得分 + 决策映射（前端默认勾选） |
-| 2 | `bull_trend` | 默认多头趋势 | 10 | trend | 后端 `default_skill_id`：MA5>MA10>MA20 + MACD 金叉，关注 7 条核心交易基线 |
-| 3 | `ma_golden_cross` | 均线金叉 | 20 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
-| 4 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河 + 安全边际 + ROE |
-| 5 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP |
-| 6 | `volume_breakout` | 放量突破 | 30 | trend | 突破 20 日新高 + 量比确认 |
-| 7 | `valuation_model` | 📐 估值模型 | 30 | framework | PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级 |
-| 8 | `fear_greed_sentiment` | 😱 贪恐情绪 | 30 | sentiment | 基于 szdt.tech 贪恐分（-100~100）的逆向情绪分析 |
-| 9 | `ema5_200_setup` | ema5_200_setup | 32 | pattern | EMA200 回踩/触碰后短窗口 reclaim 候选判断，输出 0/1/2 结构等级 |
-| 10 | `ema_200_highlow` | ema_200_highlow | 33 | pattern | EMA200 reclaim 后检查 higher low / 双底、结构止损与 1R 空间，输出 0-3 结构等级 |
-| 11 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
-| 12 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
-| 13 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
-| 14 | `event_driven` | 事件驱动 | 45 | framework | 业绩、政策、并购、订单、产品发布等事件催化评估 |
-| 15 | `box_oscillation` | 箱体震荡 | 50 | framework | 区间震荡：下沿低吸、上沿减仓 |
-| 16 | `growth_quality` | 成长质量 | 55 | framework | 收入利润增长、ROE、现金流和行业空间的成长质量判断 |
-| 17 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
-| 18 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
-| 19 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
-| 20 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
-| 21 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、楔形、主备计数切换与失效位 |
-| 22 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
-| 23 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
-| 24 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
+| 1 | `five_dimension_analysis` | 五维分析 | 4 | framework | 基本面、技术面、消息面、情绪面、期权结构五维共振；缺少期权/情绪数据时显式降级 |
+| 2 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：调用 12 个子策略逐项打分，输出表格 + 加权综合得分 + 决策映射（前端默认勾选） |
+| 3 | `bull_trend` | 默认多头趋势 | 10 | trend | 后端 `default_skill_id`：MA5>MA10>MA20 + MACD 金叉，关注 7 条核心交易基线 |
+| 4 | `ma_golden_cross` | 均线金叉 | 20 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
+| 5 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河 + 安全边际 + ROE |
+| 6 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP |
+| 7 | `volume_breakout` | 放量突破 | 30 | trend | 突破 20 日新高 + 量比确认 |
+| 8 | `valuation_model` | 📐 估值模型 | 30 | framework | PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级 |
+| 9 | `fear_greed_sentiment` | 😱 贪恐情绪 | 30 | sentiment | 基于 szdt.tech 贪恐分（-100~100）的逆向情绪分析 |
+| 10 | `ema5_200_setup` | ema5_200_setup | 32 | pattern | EMA200 回踩/触碰后短窗口 reclaim 候选判断，输出 0/1/2 结构等级 |
+| 11 | `ema_200_highlow` | ema_200_highlow | 33 | pattern | EMA200 reclaim 后检查 higher low / 双底、结构止损与 1R 空间，输出 0-3 结构等级 |
+| 12 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
+| 13 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
+| 14 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
+| 15 | `event_driven` | 事件驱动 | 45 | framework | 业绩、政策、并购、订单、产品发布等事件催化评估 |
+| 16 | `box_oscillation` | 箱体震荡 | 50 | framework | 区间震荡：下沿低吸、上沿减仓 |
+| 17 | `growth_quality` | 成长质量 | 55 | framework | 收入利润增长、ROE、现金流和行业空间的成长质量判断 |
+| 18 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
+| 19 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
+| 20 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
+| 21 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
+| 22 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、楔形、主备计数切换与失效位 |
+| 23 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
+| 24 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
+| 25 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
 
 **新增 skill 的最简流程**：
 1. 在 `strategies/` 下加一个 yaml（参考已有 yaml 字段）
@@ -474,7 +475,7 @@ Chat SSE 协议（`POST /agent/chat/stream`）事件类型：
 当某主题膨胀（>200 行 / 多次修改），建议从本文件拆出到 `docs/capabilities/<topic>.md` 并在此保留导航：
 
 - [ ] `agent-tools.md` — 23 个工具的详细参数 / 输出 schema / 异常码
-- [ ] `strategies.md` — 24 个 skill 的完整 instructions 与打分阈值
+- [ ] `strategies.md` — 25 个 skill 的完整 instructions 与打分阈值
 - [ ] `data-sources.md` — 10 个数据源每个 API 的稳定性 / 字段映射
 - [ ] `notifications.md` — 11 个渠道的格式化样式 + 限流 + 重试
 - [ ] `extensibility.md` — 把"扩展指南"章节抽出
