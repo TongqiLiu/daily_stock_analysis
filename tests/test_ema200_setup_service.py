@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 import pandas as pd
 
 from src.services.ema200_setup_service import analyze_ema200_setup
@@ -97,3 +99,60 @@ def test_ema200_setup_requires_enough_history():
     assert result["status"] == "insufficient_data"
     assert result["grade"] == 0
     assert result["verdict"] == "信息不足"
+
+
+def _spy_orb_fixture() -> pd.DataFrame:
+    rows = []
+    start = datetime(2026, 1, 5, 9, 30)
+    for i in range(220):
+        session_day = i // 78
+        session_bar = i % 78
+        close = 99.75 if i % 2 == 0 else 100.25
+        rows.append(
+            {
+                "date": (start + timedelta(days=session_day, minutes=session_bar * 5)).isoformat(sep=" "),
+                "open": close,
+                "high": close + 0.1,
+                "low": close - 0.1,
+                "close": close,
+                "volume": 1000,
+            }
+        )
+
+    current_day = datetime(2026, 1, 12, 9, 30)
+    for bar in range(12):
+        close = 99.85 if bar % 2 == 0 else 100.15
+        rows.append(
+            {
+                "date": (current_day + timedelta(minutes=bar * 5)).isoformat(sep=" "),
+                "open": close,
+                "high": 100.2,
+                "low": 99.8,
+                "close": close,
+                "volume": 1000,
+            }
+        )
+
+    rows.append(
+        {
+            "date": (current_day + timedelta(minutes=12 * 5)).isoformat(sep=" "),
+            "open": 100.05,
+            "high": 100.35,
+            "low": 100.0,
+            "close": 100.3,
+            "volume": 1300,
+        }
+    )
+    return pd.DataFrame(rows)
+
+
+def test_spy_orb_ema200_returns_long_signal_after_orb_breakout():
+    result = analyze_ema200_setup(_spy_orb_fixture(), setup_id="spy_orb_ema200", timeframe="5m")
+
+    assert result["status"] == "ok"
+    assert result["grade"] == 3
+    assert result["verdict"] == "顺势多头信号"
+    assert result["latest_signal"] == "long"
+    assert result["orb"]["break_up_seen"] is True
+    assert result["filters"]["can_trade"] is True
+    assert result["risk_plan"]["long_stop_reference"] is not None

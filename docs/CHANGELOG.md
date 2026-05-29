@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] Web 首页个股分析支持选择策略。
 - [新功能] 问股新增「五维分析」策略（`five_dimension_analysis`），按基本面、技术面、消息面、情绪面、期权结构做共振评分；期权结构或情绪数据缺失时按未知/中性降级，不臆造衍生品指标。
 - [新功能] 问股新增 `ema5_200_setup` 与 `ema_200_highlow` 两个 EMA200 setup 技能，并新增 `analyze_ema200_setup` Agent 工具输出候选/正式结构等级、止损参考与 1R 空间判断。
+- [改进] 问股将两个旧 EMA200 setup 入口收敛为一个 `EMA200回踩` 选项，底层同步 SPY_ORB_EMA200_v2 自适应过伸的 5m RTH ORB + EMA200 顺势信号，并继续隐藏 `ema_200_highlow`。
+- [新功能] 问股新增 `VCP H1/H2` 策略，基于 VCP_H1_H2_BUY 日线指标输出 VCP 准备区、枢轴突破、H1/H2 与 BUY 去重判断。
 - [新功能] 新增热点题材、事件驱动、成长质量和预期重估策略。
 - [新功能] Web 新增告警中心 MVP，支持现有三类告警规则的创建、列表、启停、删除、dry-run 测试和触发历史查看。
 - [新功能] 告警中心 P4 记录真实通知尝试结果，并为持久化规则新增可查询的业务冷却状态。

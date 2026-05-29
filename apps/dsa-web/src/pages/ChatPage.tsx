@@ -35,8 +35,8 @@ const QUICK_QUESTIONS = [
   { label: '估值模型看 NVDA', skill: 'valuation_model' },
   { label: '分析腾讯 hk00700', skill: 'bull_trend' },
   { label: '用情绪周期分析东方财富', skill: 'emotion_cycle' },
-  { label: 'EMA200候选看 AAPL', skill: 'ema5_200_setup' },
-  { label: 'EMA200高低点看 TSLA', skill: 'ema_200_highlow' },
+  { label: 'EMA200回踩看 SPY', skill: 'ema5_200_setup' },
+  { label: 'VCP H1/H2 看 NVDA', skill: 'vcp_h1_h2_buy' },
 ];
 
 const MAX_SELECTED_SKILLS = 3;

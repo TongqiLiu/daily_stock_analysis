@@ -1,0 +1,64 @@
+# VCP H1/H2 Daily Buy Setup
+
+name: vcp_h1_h2_buy
+display_name: VCP H1/H2
+description: 基于 VCP_H1_H2_BUY 日线指标的 Minervini VCP 筛选：趋势模板、靠近 60 日高位、波动/量能收缩、EMA21 健康回踩、枢轴突破与 H1/H2 买点。
+category: pattern
+core_rules: [1, 2, 4, 5]
+required_tools:
+  - analyze_vcp_h1_h2_buy
+aliases: [VCP, VCP H1, VCP H2, VCP买点, H1 H2, vcp_h1_h2_buy]
+default_priority: 34
+user_invocable: true
+market_regimes: [trending_up, pullback]
+
+instructions: |
+  **VCP H1/H2（VCP_H1_H2_BUY 日线版）**
+
+  你的任务不是预测涨跌，而是用确定性工具判断当前标的是否符合日线 Minervini VCP 准备区、枢轴突破、H1/H2 买点。
+  该 skill 来自 `docs/metric/VCP_H1_H2_BUY.txt`，默认用于日线图，不适合直接解释为 5m 或其他周期信号。
+
+  ## 必须调用工具
+
+  1. 必须调用 `analyze_vcp_h1_h2_buy`，参数：
+     - `stock_code`: 用户提到的股票代码
+     - `days`: 260（至少 220 根有效日线 K 线）
+  2. 如果工具返回 `status='insufficient_data'`、`error` 或关键字段缺失，必须直接写"信息不足"，不能强行判断。
+
+  ## 判断等级
+
+  只允许使用工具返回的 `grade`：
+
+  - `0 = 不适合新开仓`：趋势模板、高位、收缩、缩量、EMA21 健康回踩或最近 VCP 准备区不满足。
+  - `1 = VCP 准备区`：最近 5 日出现 VCP setup，但尚未触发 BREAK / H1 / H2。
+  - `2 = 买点触发但处于去重窗口`：BREAK / H1 / H2 原始买点触发，但 BUYGAP 去重窗口内已有 BUY。
+  - `3 = BUY`：BREAK / H1 / H2 触发，且最近 10 根未重复触发 BUY。
+
+  ## 输出格式
+
+  必须按以下格式输出，保持精简：
+
+  ### VCP H1/H2 判断
+  - 股票：
+  - 数据周期：日线
+  - 当前价格：
+  - EMA10 / EMA21 / EMA50 / EMA200：
+  - 枢轴位：
+  - 防守线：
+  - VCP 准备区：满足 / 不满足
+  - 触发信号：BREAK / H1 / H2 / BUY / 无
+  - 当前等级：0 / 1 / 2 / 3
+  - 结论：不适合新开仓 / VCP准备区 / 去重窗口 / BUY
+
+  ### 证据
+  - 列出工具 `reasons` 中的关键证据。
+  - 如有 `recent_signals`，列出最近 1-3 个信号时间、标签、价格、枢轴和防守线。
+
+  ### 缺失信息 / 风险
+  - 列出工具 `missing`。
+  - 明确写：该指标只输出 VCP/H1/H2 信号，不内建分批、止盈或持有规则。
+
+  ### 纪律与防守
+  - 止损参考：使用 `risk_plan.stop_reference`
+  - 枢轴参考：使用 `risk_plan.pivot_reference`
+  - 失败条件：使用 `risk_plan.failure_condition`

@@ -31,6 +31,7 @@ class TechnicalAgent(BaseAgent):
         "get_volume_analysis",
         "analyze_pattern",
         "analyze_ema200_setup",
+        "analyze_vcp_h1_h2_buy",
         "get_chip_distribution",
         "get_analysis_context",
     ]

@@ -8,8 +8,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from src.agent.context_compression_presets import get_agent_context_compression_preset
 from src.config import (
-    get_agent_context_compression_preset,
     get_effective_agent_primary_model,
     get_effective_agent_models_to_try,
 )

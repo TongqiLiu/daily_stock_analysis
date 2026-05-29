@@ -1,64 +1,69 @@
-# EMA200 Reclaim Candidate / EMA200 回踩候选
+# EMA200 Pullback / ORB Trend Setup
 
 name: ema5_200_setup
-display_name: ema5_200_setup
-description: EMA200 回踩/触碰后短窗口 reclaim 候选判断；用于筛出"可以观察或小仓尝试"的基础 setup。
+display_name: EMA200回踩
+description: 基于 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势信号；用开盘区间、EMA200 偏向、自适应过伸过滤和去重窗口判断是否出现多/空信号。
 category: pattern
 core_rules: [1, 2, 4]
 required_tools:
   - analyze_ema200_setup
-aliases: [EMA200候选, EMA200回踩, ema5_200_setup]
+aliases: [EMA200回踩, EMA200 ORB, SPY ORB EMA200, ema5_200_setup]
 default_priority: 32
 user_invocable: true
-market_regimes: [trending_up, pullback]
+market_regimes: [trending_up, pullback, volatile]
 
 instructions: |
-  **ema5_200_setup（EMA200 reclaim candidate）**
+  **EMA200回踩（SPY_ORB_EMA200_v2 / 5m ORB + EMA200）**
 
-  你的任务不是预测涨跌，而是判断当前个股是否符合 EMA200 回踩后 reclaim 的基础候选结构。
+  你的任务不是预测涨跌，而是用确定性工具判断当前标的是否符合 5 分钟图的 ORB + EMA200 顺势信号。
+  该 skill 来自 `docs/metric/SPY_ORB_EMA200_v2.txt`，默认假设标的是 SPY 或高流动性美股 ETF/指数产品，并且使用常规交易时段 RTH 的 5m K 线。
 
   ## 必须调用工具
 
   1. 必须调用 `analyze_ema200_setup`，参数：
      - `stock_code`: 用户提到的股票代码
-     - `setup_id`: `ema5_200_setup`
-     - `timeframe`: `5m`（5分钟图，对应 Pine Script 原始设计）
-     - `days`: 300（至少300根5分钟K线）
-  2. 工具会自动获取 4H EMA200 作为 HTF 趋势过滤器。
-  3. 如果工具返回 `status='insufficient_data'`、`error` 或历史 K 线不足，必须直接写"信息不足"，不能强行判断。
-  4. 如果工具返回 `status='htf_bearish'`，说明 4H 趋势为空头，必须直接写"HTF 空头，跳过"。
+     - `setup_id`: `spy_orb_ema200`
+     - `timeframe`: `5m`
+     - `days`: 300（至少 220 根有效 5m K 线，建议 300+）
+  2. 如果工具返回 `status='insufficient_data'`、`error` 或关键字段缺失，必须直接写"信息不足"，不能强行判断。
+  3. 如果用户问的不是 SPY / 高流动性 ETF / 指数产品，仍可输出工具结论，但必须提示"该指标原设计偏 SPY 日内 RTH，迁移到个股需要回测确认"。
 
   ## 判断等级
 
-  只允许输出以下等级：
+  只允许使用工具返回的 `grade`：
 
-  - `0 = 不适合进场`：没有近期 EMA200 触碰、触碰后跌破、或候选窗口超时、或 HTF 空头。
-  - `1 = 只适合观察`：价格接近/触碰 EMA200，但还没有明确 reclaim。
-  - `2 = 可以小仓尝试 / candidate`：近期触碰 EMA200 后，在测试窗口内重新站回 EMA200 buffer 上方，且 HTF 多头。
-
-  本 skill 不允许给 `3 = 可以执行`，因为它不验证 higher low / 双底低点、结构止损与 1R 空间。
+  - `0 = 不适合新开仓`：ORB 未完成、接近 EOD、过伸、ORB 中性、或尚未突破 ORB 高/低。
+  - `1 = 只适合观察`：在可交易窗口，但 EMA200 / ORB / 突破条件尚未同时满足。
+  - `2 = 条件满足但处于去重窗口`：同方向信号已出现，避免重复追单。
+  - `3 = 出现顺势多/空信号`：满足 EMA200 偏向 + ORB 偏向 + ORB 突破 + 未过伸 + 可交易窗口。
 
   ## 输出格式
 
   必须按以下格式输出，保持精简：
 
-  ### EMA200 基础候选判断
+  ### EMA200回踩 / ORB 判断
   - 股票：
-  - 数据周期：5m（5分钟图）
-  - HTF 趋势：使用工具返回的 `htf_bias`（多头/空头）
-  - HTF EMA200：使用工具返回的 `htf_ema200`
-  - 当前价格 / 5m EMA200：
-  - 价格与 EMA200：
-  - 最近触碰：日期 + 距今 bar 数；没有则写"无"
-  - 当前等级：0 / 1 / 2
-  - 结论：不适合 / 仅观察 / candidate
+  - 数据周期：5m（RTH 常规时段）
+  - 当前价格 / EMA200：
+  - 价格与 EMA200：上方 / 下方 / 附近
+  - ORB 高 / 低 / 中线：
+  - ORB 偏向：多头 / 空头 / 中性
+  - 当日突破：是否已突破 ORB 高 / 跌破 ORB 低
+  - 过伸过滤：当前乖离是否超过近 50 根平均乖离 × 2.0
+  - 当前等级：0 / 1 / 2 / 3
+  - 结论：不适合新开仓 / 观察 / 去重窗口 / 顺势多头信号 / 顺势空头信号
 
   ### 证据
-  - 列出工具 `reasons` 中的关键证据
+  - 列出工具 `reasons` 中的关键证据。
+  - 如有 `recent_signals`，列出最近 1-3 个信号时间、方向和价格。
 
   ### 缺失信息 / 风险
-  - 列出工具 `missing`
-  - 明确写：本 skill 只给基础候选，不确认正式入场结构
+  - 列出工具 `missing`。
+  - 明确写：该指标只输出信号和画线，不内建自动止损、止盈、最少持有或 EOD 平仓。
+  - 若非 SPY / 高流动性 ETF，提示需要回测确认。
 
-  ### 失效条件
-  - 使用工具 `risk_plan.failure_condition`（如有）
+  ### 纪律与防守
+  - 多头止损参考：使用 `risk_plan.long_stop_reference`
+  - 空头止损参考：使用 `risk_plan.short_stop_reference`
+  - 目标规则：使用 `risk_plan.target_rule`
+  - 失败条件：使用 `risk_plan.failure_condition`

@@ -9,7 +9,7 @@ required_tools:
   - analyze_ema200_setup
 aliases: [EMA200高低点, EMA200双底, EMA200正式入场, ema_200_highlow]
 default_priority: 33
-user_invocable: true
+user_invocable: false
 market_regimes: [trending_up, pullback]
 
 instructions: |

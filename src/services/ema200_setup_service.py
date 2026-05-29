@@ -69,6 +69,7 @@ class EMA200SetupParams:
 _SETUP_NAMES = {
     "ema5_200_setup": "EMA200 reclaim candidate",
     "ema_200_highlow": "EMA200 higher-low / double-bottom setup",
+    "spy_orb_ema200": "SPY ORB + EMA200 trend setup",
 }
 
 
@@ -320,6 +321,307 @@ def _base_payload(
     return payload
 
 
+def _date_key_at(frame: pd.DataFrame, idx: int) -> str:
+    if "date" not in frame.columns:
+        return "session"
+    raw_value = str(frame.iloc[idx].get("date") or "").strip()
+    parsed = pd.to_datetime(raw_value, errors="coerce")
+    if not pd.isna(parsed):
+        return parsed.date().isoformat()
+    return raw_value.split()[0] if raw_value else "session"
+
+
+def _previous_true_count(values: List[bool], idx: int, window: int) -> int:
+    start = max(0, idx - window)
+    return sum(1 for item in values[start:idx] if item)
+
+
+def _analyze_spy_orb_ema200_setup(
+    df: pd.DataFrame,
+    *,
+    setup_id: str,
+    source: str,
+    timeframe: str,
+) -> Dict[str, Any]:
+    """Evaluate the SPY 5m RTH ORB + EMA200 trend setup."""
+    frame = _coerce_numeric_frame(df)
+    required_points = 220
+    if len(frame) < required_points:
+        return {
+            "setup_id": setup_id,
+            "setup_name": _SETUP_NAMES[setup_id],
+            "status": "insufficient_data",
+            "data_points": len(frame),
+            "required_data_points": required_points,
+            "grade": 0,
+            "verdict": "信息不足",
+            "reasons": ["ORB + EMA200 setup 至少需要约 220 根有效 5m K 线以稳定计算 EMA200。"],
+        }
+
+    overext_multiple = 2.0
+    average_distance_window = 50
+    orb_bars = 12
+    orb_buffer_pct = 0.03
+    require_break = True
+    eod_bar = 77
+    session_bars = 78
+    dedup_bars = 12
+    enable_countertrend = False
+
+    frame["ema200"] = frame["close"].ewm(span=200, adjust=False).mean()
+    n = len(frame)
+    day_bar = [0] * n
+    orb_high: List[Optional[float]] = [None] * n
+    orb_low: List[Optional[float]] = [None] * n
+    orb_mid: List[Optional[float]] = [None] * n
+    brk_up_latched = [False] * n
+    brk_dn_latched = [False] * n
+
+    session_indices: Dict[str, List[int]] = {}
+    for idx in range(n):
+        session_indices.setdefault(_date_key_at(frame, idx), []).append(idx)
+
+    for indices in session_indices.values():
+        if len(indices) < orb_bars:
+            for pos, idx in enumerate(indices, start=1):
+                day_bar[idx] = pos
+            continue
+
+        first_orb = frame.iloc[indices[:orb_bars]]
+        fixed_orb_high = float(first_orb["high"].max())
+        fixed_orb_low = float(first_orb["low"].min())
+        fixed_orb_mid = (fixed_orb_high + fixed_orb_low) / 2
+        seen_up = False
+        seen_dn = False
+
+        for pos, idx in enumerate(indices, start=1):
+            day_bar[idx] = pos
+            if pos <= orb_bars:
+                continue
+
+            orb_high[idx] = fixed_orb_high
+            orb_low[idx] = fixed_orb_low
+            orb_mid[idx] = fixed_orb_mid
+            close = float(frame.iloc[idx]["close"])
+            if close > fixed_orb_high:
+                seen_up = True
+            if close < fixed_orb_low:
+                seen_dn = True
+            brk_up_latched[idx] = seen_up
+            brk_dn_latched[idx] = seen_dn
+
+    is_complete = [bar > orb_bars for bar in day_bar]
+    in_session = [bar <= session_bars for bar in day_bar]
+    is_eod = [bar >= eod_bar for bar in day_bar]
+    dist_pct: List[Optional[float]] = [None] * n
+    avg_dist_pct: List[Optional[float]] = [None] * n
+    overextended = [False] * n
+    ema_bull = [False] * n
+    ema_bear = [False] * n
+    orb_bull = [False] * n
+    orb_bear = [False] * n
+    orb_neutral = [False] * n
+    can_trade = [False] * n
+    long_raw = [False] * n
+    short_raw = [False] * n
+    counter_long_raw = [False] * n
+    counter_short_raw = [False] * n
+
+    for idx in range(n):
+        row = frame.iloc[idx]
+        close = float(row["close"])
+        ema200 = float(row["ema200"])
+        dist = abs(close - ema200) / ema200 * 100 if ema200 else None
+        dist_pct[idx] = dist
+        if dist is not None:
+            start = max(0, idx - average_distance_window + 1)
+            window_values = [value for value in dist_pct[start : idx + 1] if value is not None]
+            avg_dist = sum(window_values) / len(window_values) if window_values else None
+            avg_dist_pct[idx] = avg_dist
+            overextended[idx] = bool(avg_dist is not None and dist > avg_dist * overext_multiple)
+        ema_bull[idx] = close > ema200
+        ema_bear[idx] = close < ema200
+
+        mid = orb_mid[idx]
+        if is_complete[idx] and mid is not None:
+            buffer_amount = mid * orb_buffer_pct / 100
+            orb_bull[idx] = close > mid + buffer_amount
+            orb_bear[idx] = close < mid - buffer_amount
+            orb_neutral[idx] = not orb_bull[idx] and not orb_bear[idx]
+
+        can_trade[idx] = (
+            is_complete[idx]
+            and in_session[idx]
+            and not is_eod[idx]
+            and not overextended[idx]
+            and not orb_neutral[idx]
+        )
+        long_ok = brk_up_latched[idx] or not require_break
+        short_ok = brk_dn_latched[idx] or not require_break
+        long_raw[idx] = can_trade[idx] and ema_bull[idx] and orb_bull[idx] and long_ok
+        short_raw[idx] = can_trade[idx] and ema_bear[idx] and orb_bear[idx] and short_ok
+        counter_long_raw[idx] = can_trade[idx] and enable_countertrend and ema_bull[idx] and orb_bear[idx]
+        counter_short_raw[idx] = can_trade[idx] and enable_countertrend and ema_bear[idx] and orb_bull[idx]
+
+    long_entry = [
+        bool(raw and _previous_true_count(long_raw, idx, dedup_bars) == 0)
+        for idx, raw in enumerate(long_raw)
+    ]
+    short_entry = [
+        bool(raw and _previous_true_count(short_raw, idx, dedup_bars) == 0)
+        for idx, raw in enumerate(short_raw)
+    ]
+    counter_long_entry = [
+        bool(raw and _previous_true_count(counter_long_raw, idx, dedup_bars) == 0)
+        for idx, raw in enumerate(counter_long_raw)
+    ]
+    counter_short_entry = [
+        bool(raw and _previous_true_count(counter_short_raw, idx, dedup_bars) == 0)
+        for idx, raw in enumerate(counter_short_raw)
+    ]
+
+    def _signal_at(idx: int) -> Optional[str]:
+        if long_entry[idx]:
+            return "long"
+        if short_entry[idx]:
+            return "short"
+        if counter_long_entry[idx]:
+            return "counter_long"
+        if counter_short_entry[idx]:
+            return "counter_short"
+        return None
+
+    recent_signals: List[Dict[str, Any]] = []
+    for idx in range(max(0, n - 60), n):
+        signal = _signal_at(idx)
+        if signal is None:
+            continue
+        recent_signals.append(
+            {
+                "type": signal,
+                "label": {
+                    "long": "多",
+                    "short": "空",
+                    "counter_long": "逆多",
+                    "counter_short": "逆空",
+                }[signal],
+                "date": _date_at(frame, idx),
+                "day_bar": day_bar[idx],
+                "close": _round_price(frame.iloc[idx]["close"]),
+                "ema200": _round_price(frame.iloc[idx]["ema200"]),
+                "orb_high": _round_price(orb_high[idx]),
+                "orb_low": _round_price(orb_low[idx]),
+            }
+        )
+
+    latest_idx = n - 1
+    latest = frame.iloc[latest_idx]
+    latest_signal = _signal_at(latest_idx)
+    close = float(latest["close"])
+    ema200 = float(latest["ema200"])
+    long_stop = None
+    short_stop = None
+    if orb_low[latest_idx] is not None:
+        long_stop = max(float(orb_low[latest_idx]), ema200)
+    if orb_high[latest_idx] is not None:
+        short_stop = min(float(orb_high[latest_idx]), ema200)
+
+    missing: List[str] = []
+    reasons: List[str] = []
+    if not is_complete[latest_idx]:
+        missing.append("等待开盘 ORB 区间完成")
+    if not in_session[latest_idx] or is_eod[latest_idx]:
+        missing.append("不在允许新仓的 RTH 窗口")
+    if overextended[latest_idx]:
+        missing.append(f"距离 EMA200 超过近 {average_distance_window} 根平均乖离的 {overext_multiple:.1f} 倍")
+    if orb_neutral[latest_idx]:
+        missing.append("价格仍在 ORB 中线缓冲带内")
+    if require_break and not (brk_up_latched[latest_idx] or brk_dn_latched[latest_idx]):
+        missing.append("当天尚未收盘突破 ORB 高/低")
+
+    if latest_signal == "long":
+        grade = 3
+        verdict = "顺势多头信号"
+        reasons.append("价格在 EMA200 上方、ORB 中线上方，并已收盘突破 ORB 高点。")
+    elif latest_signal == "short":
+        grade = 3
+        verdict = "顺势空头信号"
+        reasons.append("价格在 EMA200 下方、ORB 中线下方，并已收盘跌破 ORB 低点。")
+    elif long_raw[latest_idx] or short_raw[latest_idx]:
+        grade = 2
+        verdict = "条件满足但处于去重窗口"
+        reasons.append("顺势条件仍成立，但同方向信号在去重窗口内已出现。")
+    elif can_trade[latest_idx]:
+        grade = 1
+        verdict = "只适合观察"
+        reasons.append("处于可交易窗口，但 EMA200 / ORB / 突破条件尚未同时满足。")
+    else:
+        grade = 0
+        verdict = "不适合新开仓"
+        reasons.append("当前未通过 ORB + EMA200 可交易过滤。")
+
+    return {
+        "setup_id": setup_id,
+        "setup_name": _SETUP_NAMES[setup_id],
+        "status": "ok",
+        "timeframe": timeframe,
+        "source": source,
+        "data_points": len(frame),
+        "as_of": _date_at(frame, latest_idx),
+        "current_price": _round_price(close),
+        "ema200": _round_price(ema200),
+        "price_vs_ema200": "上方" if ema_bull[latest_idx] else "下方" if ema_bear[latest_idx] else "附近",
+        "distance_to_ema200_pct": _round_pct(dist_pct[latest_idx]),
+        "average_distance_to_ema200_pct": _round_pct(avg_dist_pct[latest_idx]),
+        "day_bar": day_bar[latest_idx],
+        "orb": {
+            "bars": orb_bars,
+            "high": _round_price(orb_high[latest_idx]),
+            "low": _round_price(orb_low[latest_idx]),
+            "mid": _round_price(orb_mid[latest_idx]),
+            "buffer_pct": orb_buffer_pct,
+            "bias": "多头" if orb_bull[latest_idx] else "空头" if orb_bear[latest_idx] else "中性",
+            "break_up_seen": brk_up_latched[latest_idx],
+            "break_down_seen": brk_dn_latched[latest_idx],
+        },
+        "filters": {
+            "orb_complete": is_complete[latest_idx],
+            "in_session": in_session[latest_idx],
+            "is_eod": is_eod[latest_idx],
+            "overextended": overextended[latest_idx],
+            "can_trade": can_trade[latest_idx],
+            "require_orb_break": require_break,
+            "dedup_bars": dedup_bars,
+            "countertrend_enabled": enable_countertrend,
+        },
+        "latest_signal": latest_signal,
+        "recent_signals": recent_signals[-5:],
+        "grade": grade,
+        "verdict": verdict,
+        "reasons": reasons,
+        "missing": list(dict.fromkeys(missing)),
+        "risk_plan": {
+            "long_stop_reference": _round_price(long_stop),
+            "short_stop_reference": _round_price(short_stop),
+            "target_rule": "顺势信号按约 2R 手动止盈；逆势信号默认关闭。",
+            "failure_condition": "跌破/突破对应止损参考、ORB/EMA200 偏向翻转，或接近 15:50 ET 按纪律平仓。",
+            "notes": [
+                "该指标只输出信号和画线，不内建自动止损、止盈、最少持有或 EOD 平仓。",
+                "设计前提是 5m 常规时段 RTH；包含盘前盘后时 ORB bar 计数会失真。",
+            ],
+        },
+        "parameters": {
+            "overextension_multiple": overext_multiple,
+            "average_distance_window": average_distance_window,
+            "orb_bars": orb_bars,
+            "orb_buffer_pct": orb_buffer_pct,
+            "eod_bar": eod_bar,
+            "session_bars": session_bars,
+            "dedup_bars": dedup_bars,
+        },
+    }
+
+
 def analyze_ema200_setup(
     df: pd.DataFrame,
     *,
@@ -333,7 +635,7 @@ def analyze_ema200_setup(
 
     Args:
         df: OHLCV DataFrame (chart timeframe)
-        setup_id: 'ema5_200_setup' or 'ema_200_highlow'
+        setup_id: 'ema5_200_setup', 'ema_200_highlow', or 'spy_orb_ema200'
         source: Data source name
         timeframe: Chart timeframe ('5m', 'daily', etc.)
         htf_df: Optional higher-timeframe OHLCV for HTF EMA200 bias filter
@@ -351,6 +653,14 @@ def analyze_ema200_setup(
             "error": f"Unsupported setup_id: {setup_id}",
             "supported_setup_ids": sorted(_SETUP_NAMES),
         }
+
+    if setup_id == "spy_orb_ema200":
+        return _analyze_spy_orb_ema200_setup(
+            df,
+            setup_id=setup_id,
+            source=source,
+            timeframe=timeframe,
+        )
 
     frame = _coerce_numeric_frame(df)
     if len(frame) < 220:

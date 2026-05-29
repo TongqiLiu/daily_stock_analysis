@@ -1,0 +1,129 @@
+{ SPY_ORB_EMA200_v2 富途主图翻译版 }
+{ 5分钟图 · 常规时段 RTH · EMA200顺势 + ORB突破 }
+{ 仅信号/画线：SL/TP/最少持有/EOD平仓需按纪律手动执行 }
+{ 源: Downloads/SPY_ORB_EMA200_v2_with_alerts.pine (TradingView Pine v5) }
+
+E200:EMA(CLOSE,200),COLORBLUE;
+
+{ ---- 参数 ---- }
+OVEREXTK:=2.0;
+ADN:=50;
+ORBN:=12;
+ORBBUF:=0.03;
+REQBRK:=1;
+EODN:=77;
+SESSN:=78;
+DEDUP:=12;
+ENCNT:=0;
+
+{ ---- 日内 bar 定位 ---- }
+NEWDAY:=DATE<>REF(DATE,1);
+DAYB:=BARSLAST(NEWDAY)+1;
+ISCOMP:=DAYB>ORBN;
+INSESS:=DAYB<=SESSN;
+ISEOD:=DAYB>=EODN;
+
+{ ---- ORB 高低中 ---- }
+SHIFT:=IF(ISCOMP,DAYB-ORBN,0);
+ORBHIGH:=HHV(REF(HIGH,SHIFT),ORBN);
+ORBLOW:=LLV(REF(LOW,SHIFT),ORBN);
+ORBMID:=(ORBHIGH+ORBLOW)/2;
+BUFAMT:=ORBMID*ORBBUF/100;
+
+{ ---- EMA 偏向 / 过伸(自适应:相对自身近端平均乖离) ---- }
+DIST:=ABS(CLOSE-E200)/E200*100;
+AVGDIST:=MA(DIST,ADN);
+OVEREXT:=DIST>AVGDIST*OVEREXTK;
+EMABULL:=CLOSE>E200;
+EMABEAR:=CLOSE<E200;
+
+{ ---- ORB 偏向(含缓冲带) ---- }
+ORBBULL:=ISCOMP AND CLOSE>ORBMID+BUFAMT;
+ORBBEAR:=ISCOMP AND CLOSE<ORBMID-BUFAMT;
+ORBNEU:=ISCOMP AND NOT(ORBBULL) AND NOT(ORBBEAR);
+
+{ ---- ORB 突破当日锁存 ---- }
+BRKUPNOW:=ISCOMP AND CLOSE>ORBHIGH;
+BRKDNNOW:=ISCOMP AND CLOSE<ORBLOW;
+BRKUP:=BARSLAST(BRKUPNOW)<DAYB;
+BRKDN:=BARSLAST(BRKDNNOW)<DAYB;
+LONGOK:=BRKUP OR REQBRK=0;
+SHORTOK:=BRKDN OR REQBRK=0;
+
+{ ---- 可交易过滤 ---- }
+CANTRADE:=ISCOMP AND INSESS AND NOT(ISEOD) AND NOT(OVEREXT) AND NOT(ORBNEU);
+
+{ ---- 顺势进场 ---- }
+LONGRAW:=CANTRADE AND EMABULL AND ORBBULL AND LONGOK;
+SHORTRAW:=CANTRADE AND EMABEAR AND ORBBEAR AND SHORTOK;
+LONGENT:=LONGRAW AND COUNT(REF(LONGRAW,1),DEDUP)=0;
+SHORTENT:=SHORTRAW AND COUNT(REF(SHORTRAW,1),DEDUP)=0;
+
+{ ---- 逆势进场(默认关闭 ENCNT=1 开启) ---- }
+CNTLONG:=CANTRADE AND ENCNT=1 AND EMABULL AND ORBBEAR;
+CNTSHORT:=CANTRADE AND ENCNT=1 AND EMABEAR AND ORBBULL;
+CLENT:=CNTLONG AND COUNT(REF(CNTLONG,1),DEDUP)=0;
+CSENT:=CNTSHORT AND COUNT(REF(CNTSHORT,1),DEDUP)=0;
+
+{ ---- 画 ORB 区间线 ---- }
+ORBH:IF(ISCOMP,ORBHIGH,DRAWNULL),COLORGREEN;
+ORBL:IF(ISCOMP,ORBLOW,DRAWNULL),COLORRED;
+ORBM:IF(ISCOMP,ORBMID,DRAWNULL),COLORGRAY;
+
+{ ---- 信号标注 ---- }
+DRAWTEXT(LONGENT,LOW*0.996,'多'),COLORGREEN;
+DRAWTEXT(SHORTENT,HIGH*1.004,'空'),COLORRED;
+DRAWTEXT(CLENT,LOW*0.992,'逆多'),COLORYELLOW;
+DRAWTEXT(CSENT,HIGH*1.008,'逆空'),COLORMAGENTA;
+OVEREXT1:=OVEREXT AND REF(OVEREXT,1)=0;
+DRAWTEXT(OVEREXT1 AND ISCOMP,HIGH*1.012,'伸'),COLORGRAY;
+
+{ ============================================================ }
+{ 参数说明 }
+{ E200      EMA200(写死)：牛熊分界 }
+{ OVEREXTK  2.0  自适应过伸: 乖离>近端均值×该倍数=过伸, 1.5~3.0 }
+{ ADN       50   过伸自适应的乖离均值窗口 }
+{ ORBN      12   ORB占用bar数, 5min×12=60min; 30min改6 }
+{ ORBBUF    0.03 ORB中线上下缓冲带%, 0.02~0.05 }
+{ REQBRK    1    1=必须突破ORB高/低才进场; 0=不要求 }
+{ EODN      77   第≥77根bar(≈15:50 ET)起禁新仓 }
+{ SESSN     78   常规时段总bar数(09:30-16:00) }
+{ DEDUP     12   同方向信号去重窗口 }
+{ ENCNT     0    1=开启逆势信号 }
+{ }
+{ ------------------------------------------------------------ }
+{ 关键信号说明(主图标注/画线含义) }
+{ }
+{ [蓝线 E200] EMA200, 牛熊与多空分界; 价在其上偏多, 其下偏空。}
+{ }
+{ [ORBH/ORBL/ORBM 三条阶梯线] 开盘区间(ORB)。}
+{   ORBH=开盘前60分钟最高, ORBL=最低, ORBM=两者中点(50%)。}
+{   ORB完成(第13根起)才画; 中点上下加 ORBBUF% 缓冲带, }
+{   带内视为方向不明(ORBNEU), 不交易, 防来回穿。}
+{ }
+{ [多 绿字·K线下方] 顺势做多进场信号 LONGENT。}
+{   成立条件(全满足): }
+{   1) ORB已完成且在常规时段内、未到EOD; }
+{   2) 未过伸(OVEREXT为否); }
+{   3) EMA偏多(收盘>EMA200); }
+{   4) ORB偏多(收盘站上ORB中点+缓冲带); }
+{   5) REQBRK=1时还需当日已突破ORB高点(BRKUP)。}
+{   且 DEDUP 根内首次出现(去重)。}
+{ }
+{ [空 红字·K线上方] 顺势做空信号 SHORTENT, 与"多"完全对称: }
+{   EMA偏空 + 收盘跌破ORB中点-缓冲带 + (REQBRK时)已破ORB低点。}
+{ }
+{ [逆多 黄字 / 逆空 品红字] 逆势信号(默认关, ENCNT=1开启): }
+{   逆多=EMA偏多但ORB偏空(回踩抢反弹); 逆空反之。}
+{   仅供参考, 胜率低, 需快进快出(原策略最多持2根)。}
+{ }
+{ [伸 灰字·K线上方] 过伸 OVEREXT: 当前乖离 > 近ADN根平均乖离 }
+{   ×OVEREXTK。表示价格短期离EMA200过远、追风险大, 暂停开仓; }
+{   只标进入过伸的第一根(已去重)。}
+{ }
+{ 核心决策链: ORB完成 -> 看EMA与ORB是否同向 -> 不过伸/不在缓冲带 }
+{ -> (需要时)确认ORB突破 -> 出"多/空"信号。}
+{ }
+{ 仅纪律执行、未内建：止损=max(ORB低,EMA200), R:R=2, }
+{ 最少持有3bar, 偏向翻转/15:50平仓, 逆势TP0.15%/最多持2bar }
+{ ============================================================ }

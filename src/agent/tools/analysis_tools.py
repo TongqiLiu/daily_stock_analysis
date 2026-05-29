@@ -522,7 +522,7 @@ def _handle_analyze_ema200_setup(
 
     Args:
         stock_code: Stock code
-        setup_id: 'ema5_200_setup' or 'ema_200_highlow'
+        setup_id: 'ema5_200_setup', 'ema_200_highlow', or 'spy_orb_ema200'
         timeframe: Chart timeframe ('5m', '15m', '30m', '1H', '4H', 'daily')
         days: Number of days history (for daily) or bars (for intraday)
     """
@@ -530,6 +530,8 @@ def _handle_analyze_ema200_setup(
 
     if not (stock_code and str(stock_code).strip()):
         return {"error": "stock_code is required"}
+
+    setup_id = (setup_id or "ema_200_highlow").strip()
 
     # Determine HTF timeframe based on chart timeframe
     htf_timeframe_map = {
@@ -540,7 +542,7 @@ def _handle_analyze_ema200_setup(
         "4H": "daily",
         "daily": None,  # No HTF for daily (or could use weekly if available)
     }
-    htf_timeframe = htf_timeframe_map.get(timeframe, None)
+    htf_timeframe = None if setup_id == "spy_orb_ema200" else htf_timeframe_map.get(timeframe, None)
 
     try:
         requested_bars = max(int(days or 300), 300)
@@ -602,9 +604,10 @@ analyze_ema200_setup_tool = ToolDefinition(
         "Deterministically evaluate EMA200 intraday/daily setup rules on OHLCV history. "
         "Supports setup_id='ema5_200_setup' for EMA200 touch/reclaim candidate checks and "
         "setup_id='ema_200_highlow' for candidate + higher-low/double-bottom + stop/1R checks. "
+        "Also supports setup_id='spy_orb_ema200' for SPY-style 5m RTH ORB + EMA200 trend signals. "
         "Includes HTF (Higher TimeFrame) EMA200 bias filter: "
         "5m chart uses 4H EMA200, 1H chart uses daily EMA200 for trend confirmation. "
-        "Only returns long setups when HTF trend is bullish."
+        "The legacy reclaim/high-low setup only returns long setups when HTF trend is bullish."
     ),
     parameters=[
         ToolParameter(
@@ -617,7 +620,7 @@ analyze_ema200_setup_tool = ToolDefinition(
             type="string",
             description="EMA200 setup id to evaluate.",
             required=False,
-            enum=["ema5_200_setup", "ema_200_highlow"],
+            enum=["ema5_200_setup", "ema_200_highlow", "spy_orb_ema200"],
             default="ema_200_highlow",
         ),
         ToolParameter(
@@ -641,10 +644,69 @@ analyze_ema200_setup_tool = ToolDefinition(
 )
 
 
+def _handle_analyze_vcp_h1_h2_buy(stock_code: str, days: int = 260) -> dict:
+    """Run deterministic daily VCP + H1/H2 buy setup checks."""
+    from src.services.history_loader import load_history_df
+    from src.services.vcp_h1_h2_service import analyze_vcp_h1_h2_buy
+
+    if not (stock_code and str(stock_code).strip()):
+        return {"error": "stock_code is required"}
+
+    try:
+        requested_days = max(int(days or 260), 220)
+    except (TypeError, ValueError):
+        requested_days = 260
+
+    try:
+        df, source = load_history_df(stock_code, days=requested_days)
+        if df is None or df.empty:
+            return {
+                "error": f"No historical data available for VCP H1/H2 analysis on {stock_code}",
+                "timeframe": "daily",
+            }
+        result = analyze_vcp_h1_h2_buy(df, source=source, timeframe="daily")
+        result["code"] = stock_code
+        result["requested_days"] = requested_days
+        return result
+    except Exception as e:
+        return {
+            "error": f"VCP H1/H2 analysis failed: {str(e)}",
+            "code": stock_code,
+            "timeframe": "daily",
+        }
+
+
+analyze_vcp_h1_h2_buy_tool = ToolDefinition(
+    name="analyze_vcp_h1_h2_buy",
+    description=(
+        "Deterministically evaluate the daily VCP_H1_H2_BUY rules: Minervini-style trend template, "
+        "near-60-day-high filter, volatility contraction, dry volume, EMA21 hold, pivot breakout, H1/H2, "
+        "and BUY de-duplication."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519', 'AAPL', or 'HK00700'.",
+        ),
+        ToolParameter(
+            name="days",
+            type="integer",
+            description="Number of daily bars to fetch (260 recommended; 220+ required).",
+            required=False,
+            default=260,
+        ),
+    ],
+    handler=_handle_analyze_vcp_h1_h2_buy,
+    category="analysis",
+)
+
+
 ALL_ANALYSIS_TOOLS = [
     analyze_trend_tool,
     calculate_ma_tool,
     get_volume_analysis_tool,
     analyze_pattern_tool,
     analyze_ema200_setup_tool,
+    analyze_vcp_h1_h2_buy_tool,
 ]
