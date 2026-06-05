@@ -32,6 +32,7 @@ class TechnicalAgent(BaseAgent):
         "analyze_pattern",
         "analyze_ema200_setup",
         "analyze_vcp_h1_h2_buy",
+        "analyze_vcp_breakout_trader",
         "get_chip_distribution",
         "get_analysis_context",
     ]

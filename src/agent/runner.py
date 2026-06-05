@@ -45,6 +45,7 @@ _THINKING_TOOL_LABELS: Dict[str, str] = {
     "analyze_pattern": "K线形态识别",
     "analyze_ema200_setup": "EMA200结构判断",
     "analyze_vcp_h1_h2_buy": "VCP买点判断",
+    "analyze_vcp_breakout_trader": "VCP突破判断",
     "get_volume_analysis": "量能分析",
     "calculate_ma": "均线计算",
     "get_skill_backtest_summary": "技能回测概览",

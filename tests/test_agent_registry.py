@@ -418,20 +418,25 @@ class TestBuiltinSkills(unittest.TestCase):
         pullback = manager.get("ema5_200_setup")
         highlow = manager.get("ema_200_highlow")
         vcp = manager.get("vcp_h1_h2_buy")
+        vcp_breakout = manager.get("vcp_breakout_trader")
         self.assertIsNotNone(pullback)
         self.assertIsNotNone(highlow)
         self.assertIsNotNone(vcp)
+        self.assertIsNotNone(vcp_breakout)
         self.assertEqual(pullback.display_name, "EMA200回踩")
         self.assertTrue(pullback.user_invocable)
         self.assertFalse(highlow.user_invocable)
         self.assertEqual(vcp.display_name, "VCP H1/H2")
         self.assertTrue(vcp.user_invocable)
+        self.assertEqual(vcp_breakout.display_name, "VCP突破交易员")
+        self.assertTrue(vcp_breakout.user_invocable)
 
         user_visible_ids = {
             skill.name for skill in manager.list_skills() if skill.user_invocable
         }
         self.assertIn("ema5_200_setup", user_visible_ids)
         self.assertIn("vcp_h1_h2_buy", user_visible_ids)
+        self.assertIn("vcp_breakout_trader", user_visible_ids)
         self.assertNotIn("ema_200_highlow", user_visible_ids)
 
 

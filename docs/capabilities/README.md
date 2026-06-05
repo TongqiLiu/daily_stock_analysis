@@ -120,9 +120,9 @@ CLI 全部参数见 `main.py:222-358`，重点：
 
 ---
 
-## 四、Skills（策略）清单 — 26 个定义 / 25 个用户可见
+## 四、Skills（策略）清单 — 27 个定义 / 26 个用户可见
 
-YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载 `user_invocable: true` 的技能。目前 `ema5_200_setup` 作为用户可见的 `EMA200回踩` 入口，底层使用 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势逻辑；新增 `vcp_h1_h2_buy` 对应 VCP_H1_H2_BUY 日线指标；`ema_200_highlow` 保留定义和底层工具能力，但暂不在问股 / 策略选择中展示。
+YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载 `user_invocable: true` 的技能。目前 `ema5_200_setup` 作为用户可见的 `EMA200回踩` 入口，底层使用 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势逻辑；`vcp_h1_h2_buy` 对应 VCP_H1_H2_BUY 日线指标；`vcp_breakout_trader` 对应 VCP_BREAKOUT_TRADER 日线突破交易员指标；`ema_200_highlow` 保留定义和底层工具能力，但暂不在问股 / 策略选择中展示。
 
 | # | id | 显示名 | 默认优先级 | 类别 | 用途简介 |
 |---|---|---|---|---|---|
@@ -138,20 +138,21 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 10 | `ema5_200_setup` | EMA200回踩 | 32 | pattern | 基于 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势信号，输出多/空信号、自适应过伸过滤、ORB 区间和手动防守纪律 |
 | 11 | `ema_200_highlow` | ema_200_highlow | 33 | pattern | 暂隐藏；EMA200 reclaim 后检查 higher low / 双底、结构止损与 1R 空间，输出 0-3 结构等级 |
 | 12 | `vcp_h1_h2_buy` | VCP H1/H2 | 34 | pattern | 基于 VCP_H1_H2_BUY 日线指标，输出 VCP 准备区、枢轴突破、H1/H2 和 BUY 去重判断 |
-| 13 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
-| 14 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
-| 15 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
-| 16 | `event_driven` | 事件驱动 | 45 | framework | 业绩、政策、并购、订单、产品发布等事件催化评估 |
-| 17 | `box_oscillation` | 箱体震荡 | 50 | framework | 区间震荡：下沿低吸、上沿减仓 |
-| 18 | `growth_quality` | 成长质量 | 55 | framework | 收入利润增长、ROE、现金流和行业空间的成长质量判断 |
-| 19 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
-| 20 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
-| 21 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
-| 22 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
-| 23 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、楔形、主备计数切换与失效位 |
-| 24 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
-| 25 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
-| 26 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
+| 13 | `vcp_breakout_trader` | VCP突破交易员 | 35 | pattern | 基于 VCP_BREAKOUT_TRADER 日线指标，输出 VCP/牛旗准备区、LC、突破 BUY、过度延展与结构失败判断 |
+| 14 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
+| 15 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
+| 16 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
+| 17 | `event_driven` | 事件驱动 | 45 | framework | 业绩、政策、并购、订单、产品发布等事件催化评估 |
+| 18 | `box_oscillation` | 箱体震荡 | 50 | framework | 区间震荡：下沿低吸、上沿减仓 |
+| 19 | `growth_quality` | 成长质量 | 55 | framework | 收入利润增长、ROE、现金流和行业空间的成长质量判断 |
+| 20 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
+| 21 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
+| 22 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
+| 23 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
+| 24 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、楔形、主备计数切换与失效位 |
+| 25 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
+| 26 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
+| 27 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
 
 **新增 skill 的最简流程**：
 1. 在 `strategies/` 下加一个 yaml（参考已有 yaml 字段）
@@ -160,7 +161,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 
 ---
 
-## 五、Agent Tools（24 个）
+## 五、Agent Tools（25 个）
 
 工具注册见 `src/agent/tools/`，按 `category` 分类：
 
@@ -179,7 +180,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `get_valuation_percentile` | stock_code, metric?, lookback_years? | PE/PB/PS 历史分位（A 股完整 5 年，美股仅当前值 status='partial'，港股 unavailable）|
 | `get_dcf_valuation` | stock_code, forecast_years? | 轻量 DCF 三情景估值（Bull/Base/Bear），返回内在价值区间与相对现价偏离 |
 
-### 5.2 分析类（`analysis_tools.py` + `value_analysis_tools.py`，7 个）
+### 5.2 分析类（`analysis_tools.py` + `value_analysis_tools.py`，8 个）
 
 | 工具名 | 用途 |
 |---|---|
@@ -189,6 +190,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `analyze_pattern` | K 线 / 图表形态识别：Doji / Hammer / 双底 / 突破 等 |
 | `analyze_ema200_setup` | EMA200 setup 结构判断：基础 reclaim candidate、HL/双底、SPY_ORB_EMA200_v2 5m ORB + EMA200 顺势信号、结构止损与 1R 空间 |
 | `analyze_vcp_h1_h2_buy` | VCP_H1_H2_BUY 日线判断：趋势模板、波动/量能收缩、枢轴突破、H1/H2 和 BUY 去重 |
+| `analyze_vcp_breakout_trader` | VCP_BREAKOUT_TRADER 日线判断：VCP/牛旗准备区、higher lows、Low-Cheat、放量突破、过度延展与结构失败 |
 | `run_value_analysis` | 系统化价值投资分析：行业、公司、估值、逆向投资和定价权综合评估 |
 
 ### 5.3 搜索类（`search_tools.py`，2 个）

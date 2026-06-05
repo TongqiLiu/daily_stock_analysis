@@ -22,6 +22,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
+
+
+def _safe_set(ws, row: int, col: int, value) -> None:
+    """Write value only if the cell is not a read-only MergedCell."""
+    cell = ws.cell(row, col)
+    if not isinstance(cell, MergedCell):
+        cell.value = value
 
 
 COLS = 16
@@ -467,10 +475,10 @@ def refresh_weekly_section(ws, settled_rows: List[Dict[str, Any]], payload: Dict
         note = str(weekly_overrides.get(exp, default_note))
         write_rows.append((exp, label, cnt, otm, itm, pnl, note))
 
-    # clear old rows
+    # clear old rows (skip merged cells which are read-only)
     for rr in range(header_row + 1, total_row):
         for c in range(1, 7):
-            ws.cell(rr, c).value = None
+            _safe_set(ws, rr, c, None)
 
     # ensure enough rows
     needed = len(write_rows)
@@ -486,12 +494,12 @@ def refresh_weekly_section(ws, settled_rows: List[Dict[str, Any]], payload: Dict
     sum_pnl = 0.0
     for i, (_exp, label, cnt, otm, itm, pnl, note) in enumerate(write_rows):
         rr = header_row + 1 + i
-        ws.cell(rr, 1).value = label
-        ws.cell(rr, 2).value = cnt
-        ws.cell(rr, 3).value = otm
-        ws.cell(rr, 4).value = itm
-        ws.cell(rr, 5).value = money(pnl)
-        ws.cell(rr, 6).value = note
+        _safe_set(ws, rr, 1, label)
+        _safe_set(ws, rr, 2, cnt)
+        _safe_set(ws, rr, 3, otm)
+        _safe_set(ws, rr, 4, itm)
+        _safe_set(ws, rr, 5, money(pnl))
+        _safe_set(ws, rr, 6, note)
         copy_row_style(ws, sample_style_row, rr)
 
         sum_cnt += cnt
@@ -499,19 +507,19 @@ def refresh_weekly_section(ws, settled_rows: List[Dict[str, Any]], payload: Dict
         sum_itm += itm
         sum_pnl += pnl
 
-    ws.cell(total_row, 1).value = "合计"
-    ws.cell(total_row, 2).value = sum_cnt
-    ws.cell(total_row, 3).value = sum_otm
-    ws.cell(total_row, 4).value = sum_itm
-    ws.cell(total_row, 5).value = money(sum_pnl)
-    ws.cell(total_row, 6).value = "—"
+    _safe_set(ws, total_row, 1, "合计")
+    _safe_set(ws, total_row, 2, sum_cnt)
+    _safe_set(ws, total_row, 3, sum_otm)
+    _safe_set(ws, total_row, 4, sum_itm)
+    _safe_set(ws, total_row, 5, money(sum_pnl))
+    _safe_set(ws, total_row, 6, "—")
 
     # narrative sync row (best effort): row with "卖方到期策略稳定"
     for rr in range(1, ws.max_row + 1):
         if ws.cell(rr, 2).value == "卖方到期策略稳定":
             win_rate = round((sum_otm / sum_cnt) * 100) if sum_cnt else 0
             week_labels = [w[1].split()[0] for w in write_rows]
-            ws.cell(rr, 3).value = f"{'/'.join(week_labels)} 共 {sum_cnt} 笔到期无价值，胜率 {win_rate}%（{sum_otm}/{sum_cnt}）"
+            _safe_set(ws, rr, 3, f"{'/'.join(week_labels)} 共 {sum_cnt} 笔到期无价值，胜率 {win_rate}%（{sum_otm}/{sum_cnt}）")
             break
 
 

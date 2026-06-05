@@ -702,6 +702,64 @@ analyze_vcp_h1_h2_buy_tool = ToolDefinition(
 )
 
 
+def _handle_analyze_vcp_breakout_trader(stock_code: str, days: int = 260) -> dict:
+    """Run deterministic daily VCP / bull-flag breakout trader setup checks."""
+    from src.services.history_loader import load_history_df
+    from src.services.vcp_breakout_trader_service import analyze_vcp_breakout_trader
+
+    if not (stock_code and str(stock_code).strip()):
+        return {"error": "stock_code is required"}
+
+    try:
+        requested_days = max(int(days or 260), 220)
+    except (TypeError, ValueError):
+        requested_days = 260
+
+    try:
+        df, source = load_history_df(stock_code, days=requested_days)
+        if df is None or df.empty:
+            return {
+                "error": f"No historical data available for VCP breakout trader analysis on {stock_code}",
+                "timeframe": "daily",
+            }
+        result = analyze_vcp_breakout_trader(df, source=source, timeframe="daily")
+        result["code"] = stock_code
+        result["requested_days"] = requested_days
+        return result
+    except Exception as e:
+        return {
+            "error": f"VCP breakout trader analysis failed: {str(e)}",
+            "code": stock_code,
+            "timeframe": "daily",
+        }
+
+
+analyze_vcp_breakout_trader_tool = ToolDefinition(
+    name="analyze_vcp_breakout_trader",
+    description=(
+        "Deterministically evaluate the daily VCP_BREAKOUT_TRADER rules: VCP setup, bull-flag setup, "
+        "higher lows, dry volume, EMA10/21 reclaim, 20-day pivot breakout, Low-Cheat, extension warning, "
+        "and structural failure."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519', 'AAPL', or 'HK00700'.",
+        ),
+        ToolParameter(
+            name="days",
+            type="integer",
+            description="Number of daily bars to fetch (260 recommended; 220+ required).",
+            required=False,
+            default=260,
+        ),
+    ],
+    handler=_handle_analyze_vcp_breakout_trader,
+    category="analysis",
+)
+
+
 ALL_ANALYSIS_TOOLS = [
     analyze_trend_tool,
     calculate_ma_tool,
@@ -709,4 +767,5 @@ ALL_ANALYSIS_TOOLS = [
     analyze_pattern_tool,
     analyze_ema200_setup_tool,
     analyze_vcp_h1_h2_buy_tool,
+    analyze_vcp_breakout_trader_tool,
 ]

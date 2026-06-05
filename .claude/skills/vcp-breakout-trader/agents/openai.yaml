@@ -1,0 +1,4 @@
+interface:
+  display_name: "VCP Breakout Trader"
+  short_description: "VCP and bull-flag breakout planner"
+  default_prompt: "Use $vcp-breakout-trader to analyze this stock for VCP, bull flag, higher lows, pivot, extension risk, and trade management."

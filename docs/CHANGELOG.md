@@ -71,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 为 Akshare 新浪/腾讯 A 股历史兜底接口增加调用级超时，并补齐 Tushare `605xxx` 沪市代码路由回归测试，避免定时分析因数据源无响应而挂起。
 - [修复] 将 `exchange-calendars` 依赖下限提升到 `4.13.0`，避免 pandas 3 环境导入交易日历时因 Timedelta 单位 `T` 失效导致分析失败。
 - [测试] 执行 `python -c "import exchange_calendars as xcals; xcals.get_calendar('XSHG'); print('ok')"` 通过验证，以覆盖导入与交易日历初始化兼容性。
+- [新功能] 新增 `vcp-breakout-trader` 协作技能，支持 VCP、旗形盘整、higher lows、突破枢轴、延展风险和失败管理分析，并提供基础行情扫描脚本。
+- [新功能] 新增 `VCP_BREAKOUT_TRADER` 富途日线主图指标，标记 VCP/牛旗准备区、Low-Cheat、突破买点、过度延展和结构失败。
+- [新功能] 问股新增 `VCP突破交易员` 策略选项，调用 `analyze_vcp_breakout_trader` 确定性工具判断 VCP/牛旗准备区、LC、突破 BUY、过度延展和结构失败。
 
 ## [3.19.0] - 2026-05-29
 
