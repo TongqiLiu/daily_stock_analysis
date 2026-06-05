@@ -24,9 +24,9 @@ class TestMarketStrategyBlueprint(unittest.TestCase):
         blueprint = get_market_strategy_blueprint("us")
         block = blueprint.to_prompt_block()
 
-        self.assertIn("美股市场复盘策略框架", block)
-        self.assertIn("风险偏好上升", block)
-        self.assertIn("宏观与资金流向", block)
+        self.assertIn("US Market Regime Strategy", block)
+        self.assertIn("Risk-on", block)
+        self.assertIn("Macro & Flows", block)
 
 
 class TestMarketAnalyzerStrategyPrompt(unittest.TestCase):
@@ -40,12 +40,24 @@ class TestMarketAnalyzerStrategyPrompt(unittest.TestCase):
         self.assertIn("A股市场三段式复盘策略", prompt)
 
     def test_us_prompt_contains_strategy_plan_section(self):
-        analyzer = MarketAnalyzer(region="us")
+        with patch("src.market_analyzer.get_config", return_value=SimpleNamespace(report_language="en")):
+            analyzer = MarketAnalyzer(region="us")
+
         prompt = analyzer._build_review_prompt(MarketOverview(date="2026-02-24"), [])
 
-        self.assertIn("策略计划", prompt)
-        self.assertIn("美股市场复盘策略框架", prompt)
-        self.assertIn("全文必须使用简体中文", prompt)
+        self.assertIn("Strategy Plan", prompt)
+        self.assertIn("US Market Regime Strategy", prompt)
+
+    def test_us_prompt_localizes_strategy_markdown_when_report_language_is_zh(self):
+        with patch("src.market_analyzer.get_config", return_value=SimpleNamespace(report_language="zh")):
+            analyzer = MarketAnalyzer(region="us")
+
+        prompt = analyzer._build_review_prompt(MarketOverview(date="2026-02-24"), [])
+
+        self.assertIn("美股市场", prompt)
+        self.assertNotIn("US Market Regime Strategy", prompt)
+        self.assertNotIn("Strategy Blueprint", prompt)
+        self.assertIn("风险偏好", prompt)
 
     def test_cn_prompt_uses_english_shell_when_report_language_is_en(self):
         with patch("src.market_analyzer.get_config", return_value=SimpleNamespace(report_language="en")):

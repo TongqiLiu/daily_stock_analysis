@@ -24,6 +24,16 @@ def test_dockerfile_uses_entrypoint_to_drop_privileges() -> None:
     assert "USER dsa" not in dockerfile
 
 
+def test_dockerfile_bundles_default_alphasift_adapter() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "git \\" in dockerfile
+    assert "git+https://github.com/ZhuLinsen/alphasift.git@1a0ed8c99b3615c0cb1076e6029827ffc6de2344#egg=alphasift" in requirements
+    assert "pip install --no-cache-dir -r requirements.txt" in dockerfile
+    assert "import alphasift.dsa_adapter" in dockerfile
+
+
 def test_docker_entrypoint_repairs_ownership_and_user_permissions() -> None:
     entrypoint = (REPO_ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
 

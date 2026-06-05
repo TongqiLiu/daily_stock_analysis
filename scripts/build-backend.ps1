@@ -51,6 +51,11 @@ if (-not (Test-PythonCode -Python $pythonBin -Code "import multipart, multipart.
   throw 'python-multipart is not importable in the selected Python environment.'
 }
 
+Write-Host 'Checking AlphaSift adapter availability...'
+if (-not (Test-PythonCode -Python $pythonBin -Code "import alphasift.dsa_adapter")) {
+  throw 'alphasift.dsa_adapter is not importable after installing requirements.'
+}
+
 if (Test-Path 'dist\backend') {
   Remove-Item -Recurse -Force 'dist\backend'
 }
@@ -81,6 +86,9 @@ $hiddenImports = @(
   'api.v1.endpoints.history',
   'api.v1.endpoints.stocks',
   'api.v1.endpoints.health',
+  'api.v1.endpoints.alphasift',
+  'alphasift',
+  'alphasift.dsa_adapter',
   'api.v1.schemas',
   'api.v1.schemas.analysis',
   'api.v1.schemas.history',
@@ -92,6 +100,7 @@ $hiddenImports = @(
   'src.services.task_queue',
   'src.services.analysis_service',
   'src.services.history_service',
+  'src.services.alphasift_service',
   'uvicorn.logging',
   'uvicorn.loops',
   'uvicorn.loops.auto',
@@ -114,7 +123,8 @@ $pyInstallerArgs = @(
   '--add-data', 'static;static',
   '--add-data', 'strategies;strategies',
   '--collect-data', 'litellm',
-  '--collect-data', 'tiktoken'
+  '--collect-data', 'tiktoken',
+  '--collect-all', 'alphasift'
 )
 $pyInstallerArgs += $hiddenImportArgs
 $pyInstallerArgs += 'main.py'
