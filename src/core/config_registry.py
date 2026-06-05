@@ -80,6 +80,9 @@ WEB_SETTINGS_HIDDEN_FROM_UI = {
     "USE_PROXY",
     "PROXY_HOST",
     "PROXY_PORT",
+    # 美股收盘后定时分析时间：高级 .env 调度项，仅 --schedule 模式生效，
+    # 通过环境变量配置，不在 Web 设置页暴露。
+    "US_CLOSE_SCHEDULE_TIME",
 }
 
 _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
@@ -3487,13 +3490,13 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "600",
+        "default_value": "900",
         "options": [],
         "validation": {"min": 0, "max": 3600},
         "display_order": 62,
         "help_key": "settings.agent.AGENT_ORCHESTRATOR_TIMEOUT_S",
         "examples": [
-            "AGENT_ORCHESTRATOR_TIMEOUT_S=600",
+            "AGENT_ORCHESTRATOR_TIMEOUT_S=900",
             "AGENT_ORCHESTRATOR_TIMEOUT_S=0",
         ],
         "docs": [

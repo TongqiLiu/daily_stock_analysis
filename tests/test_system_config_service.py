@@ -17,11 +17,20 @@ ensure_litellm_stub()
 
 from src.config import ANSPIRE_LLM_MODEL_DEFAULT, Config
 from src.core.config_manager import ConfigManager
+from src.core.config_registry import get_registered_field_keys
 from src.services.system_config_service import ConfigConflictError, ConfigImportError, SystemConfigService
 
 
 class SystemConfigServiceTestCase(unittest.TestCase):
     def setUp(self) -> None:
+        # Snapshot and strip any leaked managed-config env vars so Config reads
+        # only this test's temp .env file. Without this, another test in the
+        # full suite that loads the real project .env into os.environ (e.g.
+        # LITELLM_MODEL) would pollute these channel/model validation cases.
+        self._saved_environ = dict(os.environ)
+        for key in get_registered_field_keys():
+            os.environ.pop(key, None)
+
         self.temp_dir = tempfile.TemporaryDirectory()
         self.env_path = Path(self.temp_dir.name) / ".env"
         self.env_path.write_text(
@@ -44,8 +53,9 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         Config.reset_instance()
-        os.environ.pop("ENV_FILE", None)
         self.temp_dir.cleanup()
+        os.environ.clear()
+        os.environ.update(self._saved_environ)
 
     def _rewrite_env(self, *lines: str) -> None:
         self.env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

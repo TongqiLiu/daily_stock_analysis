@@ -44,10 +44,16 @@ class TestClassifySignal(unittest.TestCase):
         self.assertEqual(_classify_signal("move", "level", 160.0, 0)[0], "🔴")
 
     def test_tnx_rate_bp_loose(self):
-        # 5d 变化 -15bp → 利率下行 → 🟢
-        sig, text = _classify_signal("tnx", "rate_bp", 4.2, -0.15)
+        # 5d 变化 -15bp 且利率在警戒区(≥4.2%)以下 → 利率下行 → 🟢
+        sig, text = _classify_signal("tnx", "rate_bp", 4.0, -0.15)
         self.assertEqual(sig, "🟢")
         self.assertIn("宽松", text)
+
+    def test_tnx_warning_zone_overrides_direction(self):
+        # 利率进入 4.2-4.5% 警戒区时，等级风险优先于方向性下行 → 🟡
+        sig, text = _classify_signal("tnx", "rate_bp", 4.2, -0.15)
+        self.assertEqual(sig, "🟡")
+        self.assertIn("警戒区", text)
 
     def test_tnx_rate_bp_tighten(self):
         # 5d 变化 +12bp → 收紧 → 🔴
@@ -96,11 +102,11 @@ class TestUSLiquidityService(unittest.TestCase):
 
     def test_all_indicators_green(self):
         """5 指标全部偏宽松 → 综合判断偏宽松。"""
-        # VIX 15 (低)、MOVE 85 (低)、TNX 5d 下行 15bp、DXY -1.5%、HYG +1.5%
+        # VIX 15 (低)、MOVE 85 (低)、TNX 5d 下行 15bp 且在 4.2% 警戒区以下、DXY -1.5%、HYG +1.5%
         ticker_map = {
             "^VIX": _mock_ticker([20, 19, 18, 17, 16, 15.0, 15.0]),
             "^MOVE": _mock_ticker([95, 94, 93, 91, 89, 87, 85.0]),
-            "^TNX": _mock_ticker([4.55, 4.50, 4.45, 4.40, 4.38, 4.35, 4.32]),
+            "^TNX": _mock_ticker([4.10, 4.05, 4.00, 3.96, 3.94, 3.92, 3.90]),
             "DX-Y.NYB": _mock_ticker([105, 104.5, 104, 103.5, 103.2, 103.5, 103.43]),
             "HYG": _mock_ticker([77.0, 77.2, 77.3, 77.6, 77.8, 78.1, 78.16]),
         }
