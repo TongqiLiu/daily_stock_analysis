@@ -738,8 +738,8 @@ analyze_vcp_breakout_trader_tool = ToolDefinition(
     name="analyze_vcp_breakout_trader",
     description=(
         "Deterministically evaluate the daily VCP_BREAKOUT_TRADER rules: VCP setup, bull-flag setup, "
-        "higher lows, dry volume, EMA10/21 reclaim, 20-day pivot breakout, Low-Cheat, extension warning, "
-        "and structural failure."
+        "higher lows, dry volume, 10-day valid setup, EMA10/21 Low-Cheat before the 20-day pivot, "
+        "20-day pivot breakout, 10% stop-risk filter, extension warning, and structural failure."
     ),
     parameters=[
         ToolParameter(

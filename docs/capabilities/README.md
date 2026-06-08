@@ -138,7 +138,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 10 | `ema5_200_setup` | EMA200回踩 | 32 | pattern | 基于 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势信号，输出多/空信号、自适应过伸过滤、ORB 区间和手动防守纪律 |
 | 11 | `ema_200_highlow` | ema_200_highlow | 33 | pattern | 暂隐藏；EMA200 reclaim 后检查 higher low / 双底、结构止损与 1R 空间，输出 0-3 结构等级 |
 | 12 | `vcp_h1_h2_buy` | VCP H1/H2 | 34 | pattern | 基于 VCP_H1_H2_BUY 日线指标，输出 VCP 准备区、枢轴突破、H1/H2 和 BUY 去重判断 |
-| 13 | `vcp_breakout_trader` | VCP突破交易员 | 35 | pattern | 基于 VCP_BREAKOUT_TRADER 日线指标，输出 VCP/牛旗准备区、LC、突破 BUY、过度延展与结构失败判断 |
+| 13 | `vcp_breakout_trader` | VCP突破交易员 | 35 | pattern | 基于 VCP_BREAKOUT_TRADER 最终优化版日线指标，输出 VCP/牛旗准备区、LC、突破 BUY、过度延展、10%风险过滤与结构失败判断 |
 | 14 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
 | 15 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
 | 16 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
@@ -190,7 +190,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `analyze_pattern` | K 线 / 图表形态识别：Doji / Hammer / 双底 / 突破 等 |
 | `analyze_ema200_setup` | EMA200 setup 结构判断：基础 reclaim candidate、HL/双底、SPY_ORB_EMA200_v2 5m ORB + EMA200 顺势信号、结构止损与 1R 空间 |
 | `analyze_vcp_h1_h2_buy` | VCP_H1_H2_BUY 日线判断：趋势模板、波动/量能收缩、枢轴突破、H1/H2 和 BUY 去重 |
-| `analyze_vcp_breakout_trader` | VCP_BREAKOUT_TRADER 日线判断：VCP/牛旗准备区、higher lows、Low-Cheat、放量突破、过度延展与结构失败 |
+| `analyze_vcp_breakout_trader` | VCP_BREAKOUT_TRADER 日线判断：VCP/牛旗准备区、higher lows、突破前 Low-Cheat、放量突破、10%风险过滤、过度延展与结构失败 |
 | `run_value_analysis` | 系统化价值投资分析：行业、公司、估值、逆向投资和定价权综合评估 |
 
 ### 5.3 搜索类（`search_tools.py`，2 个）

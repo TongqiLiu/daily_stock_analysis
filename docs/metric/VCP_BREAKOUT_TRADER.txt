@@ -1,6 +1,6 @@
-{VCP_BREAKOUT_TRADER 日线主图指标}
-{ VCP / 牛旗 / Higher Lows / 突破交易员版 }
-{ 建议加载在日线图；用于观察 setup，不等于自动交易信号 }
+{VCP_BREAKOUT_TRADER 日线主图指标 最终优化版}
+{用途：VCP / 牛旗 / HIGHER LOWS / 突破 SETUP 观察}
+{建议：加载在日线图；只做结构提示，不等于自动交易}
 
 E10:=EMA(CLOSE,10);
 E21:=EMA(CLOSE,21);
@@ -10,112 +10,144 @@ E200:=EMA(CLOSE,200);
 EMA10:E10,COLORWHITE;
 EMA21:E21,COLORYELLOW;
 EMA50:E50,COLORBLUE;
-EMA200:E200,COLORGRAY;
+EMA200:E200,COLORGREEN;
 
-{ ---- 参数 ---- }
-NEARP:=0.80;
-RMAX:=0.22;
+{====================}
+{参数区}
+{====================}
+
+NEARP:=0.88;
+RMAX:=0.18;
 DRY:=0.90;
 VOLBRK:=1.35;
-BUYGAP:=10;
 USELONG:=1;
 EXTATR:=3.50;
 EXTPCT:=0.18;
+RISKMAX:=0.10;
 
+{====================}
 {一、趋势模板}
+{====================}
+
 TBASE:=CLOSE>E21 AND E21>E50 AND E21>REF(E21,5) AND E50>REF(E50,5);
-LONG_OK:=E50>E200 OR USELONG=0;
+LONG_OK:=(E50>E200) OR (USELONG=0);
 TREND:=TBASE AND LONG_OK;
 
-{二、靠近高位/强势区}
-NEAR_HIGH:=CLOSE>=HHV(HIGH,60)*NEARP;
-RS_TURN:=CLOSE>HHV(REF(HIGH,1),20)*0.92 AND E21>REF(E21,3);
-LEADER_ZONE:=NEAR_HIGH OR RS_TURN;
+{====================}
+{二、龙头区间}
+{====================}
 
-{三、波动收缩：20日 -> 10日 -> 5日}
+HH60:=HHV(HIGH,60);
+LEADER_ZONE:=CLOSE>=HH60*NEARP;
+
+{====================}
+{三、波动收缩}
+{====================}
+
 R20:=(HHV(HIGH,20)-LLV(LOW,20))/MA(CLOSE,20);
 R10:=(HHV(HIGH,10)-LLV(LOW,10))/MA(CLOSE,10);
 R5:=(HHV(HIGH,5)-LLV(LOW,5))/MA(CLOSE,5);
+
 CONTRACT:=R10<R20*0.85 AND R5<R10*0.95 AND R10<RMAX;
 
-{四、Higher Lows：最近低点高于前一段低点}
+{====================}
+{四、HIGHER LOWS}
+{====================}
+
 HL1:=LLV(LOW,5)>LLV(REF(LOW,5),10)*0.995;
 HL2:=LLV(LOW,10)>LLV(REF(LOW,10),20)*0.970;
 HIGHER_LOW:=HL1 AND HL2;
 
-{五、量能收缩与均线健康}
+{====================}
+{五、缩量与均线健康}
+{====================}
+
 DRYVOL:=MA(VOL,5)<MA(VOL,20)*DRY;
 HOLD21:=COUNT(CLOSE<E21,10)<=3 AND LLV(LOW,10)>E21*0.94;
 
-{六、牛旗/旗形盘整}
+{====================}
+{六、牛旗结构}
+{====================}
+
 IMPULSE:=HHV(HIGH,45)/LLV(LOW,60)-1>0.25;
 FLAG_TIGHT:=R10<R20*0.95 AND R10<RMAX*1.10;
 BULL_FLAG:=TREND AND IMPULSE AND FLAG_TIGHT AND HOLD21;
 
-{七、VCP / 盘整准备区}
+{====================}
+{七、VCP / FLAG SETUP}
+{====================}
+
 VCP_SETUP:=TREND AND LEADER_ZONE AND CONTRACT AND DRYVOL AND HOLD21 AND HIGHER_LOW;
 FLAG_SETUP:=BULL_FLAG AND DRYVOL AND HIGHER_LOW;
-SETUP:=VCP_SETUP OR FLAG_SETUP;
-VALID_SETUP:=COUNT(SETUP,5)>=1;
 
-{八、枢轴位：排除当日，无未来函数}
+SETUP:=VCP_SETUP OR FLAG_SETUP;
+
+{SETUP不能过期太久，且当前结构仍需有效}
+VALID_SETUP:=COUNT(SETUP,10)>=1 AND TREND AND HOLD21 AND HIGHER_LOW;
+
+{====================}
+{八、枢轴与防守线}
+{====================}
+
 PIVOT:=HHV(REF(HIGH,1),20);
 PIVOT_SHORT:=HHV(REF(HIGH,1),10);
-
-{九、低位提前买点 Low-Cheat / LC}
-LC_RAW:=VALID_SETUP AND CLOSE>E10 AND CLOSE>E21 AND CLOSE>OPEN AND HIGH>PIVOT_SHORT*0.985;
-LC:=LC_RAW AND COUNT(REF(LC_RAW,1),BUYGAP)=0;
-
-{十、标准突破买点}
-BREAK_RAW:=VALID_SETUP AND CLOSE>PIVOT AND CLOSE>OPEN AND VOL>MA(VOL,20)*VOLBRK;
-BREAK_BUY:=BREAK_RAW AND COUNT(REF(BREAK_RAW,1),BUYGAP)=0;
-
-{十一、失败与延展}
 STOP_BASE:=LLV(REF(LOW,1),10);
-FAIL:=COUNT(VALID_SETUP,5)>=1 AND CLOSE<STOP_BASE AND VOL>MA(VOL,20)*0.90;
+
+{====================}
+{九、延展过滤与风险过滤}
+{====================}
 
 ATRAPP:=MA(HIGH-LOW,14);
 EXTEND:=CLOSE>E21 AND ((CLOSE-E21)>ATRAPP*EXTATR OR CLOSE>E21*(1+EXTPCT));
+EXTEND_FIRST:=EXTEND AND REF(EXTEND,1)=0;
 
-{十二、图形标记}
+RISK_OK:=STOP_BASE>0 AND CLOSE>STOP_BASE AND (CLOSE-STOP_BASE)/STOP_BASE<=RISKMAX;
+
+{====================}
+{十、LOW CHEAT 提前买点}
+{====================}
+{LC只在接近短枢轴但尚未突破20日枢轴时触发}
+
+LC_RAW:=VALID_SETUP AND CLOSE>E10 AND CLOSE>E21 AND CLOSE>OPEN AND HIGH>PIVOT_SHORT*0.985 AND CLOSE>PIVOT_SHORT*0.975 AND CLOSE<PIVOT AND RISK_OK AND EXTEND=0;
+
+LC:=LC_RAW AND COUNT(REF(LC_RAW,1),10)=0;
+
+{====================}
+{十一、标准突破买点}
+{====================}
+
+BREAK_RAW:=VALID_SETUP AND CLOSE>PIVOT AND CLOSE>OPEN AND VOL>MA(VOL,20)*VOLBRK AND RISK_OK AND EXTEND=0;
+
+BREAK_BUY:=BREAK_RAW AND COUNT(REF(BREAK_RAW,1),10)=0;
+
+{====================}
+{十二、失败信号}
+{====================}
+
+FAIL_RAW:=COUNT(VALID_SETUP,10)>=1 AND CLOSE<STOP_BASE AND VOL>MA(VOL,20)*0.90;
+FAIL:=FAIL_RAW AND REF(FAIL_RAW,1)=0;
+
+{====================}
+{十三、图形标记}
+{====================}
+
 VCP_START:=VCP_SETUP AND REF(VCP_SETUP,1)=0;
 FLAG_START:=FLAG_SETUP AND REF(FLAG_SETUP,1)=0 AND VCP_SETUP=0;
 
-DRAWTEXT(VCP_START,LOW*0.960,'VCP'),COLORCYAN;
-DRAWTEXT(FLAG_START,LOW*0.945,'FLAG'),COLORYELLOW;
-DRAWTEXT(LC,LOW*0.930,'LC'),COLORMAGENTA;
-DRAWTEXT(BREAK_BUY,LOW*0.910,'BUY'),COLORRED;
-DRAWTEXT(EXTEND,HIGH*1.018,'伸'),COLORGRAY;
+DRAWTEXT(VCP_START,LOW*0.985,'VCP'),COLORCYAN;
+DRAWTEXT(FLAG_START,LOW*0.970,'FLAG'),COLORYELLOW;
+DRAWTEXT(LC,LOW*0.955,'LC'),COLORMAGENTA;
+DRAWTEXT(BREAK_BUY,LOW*0.940,'BUY'),COLORRED;
+
+DRAWTEXT(EXTEND_FIRST,HIGH*1.018,'EXT'),COLORWHITE;
 DRAWTEXT(FAIL,HIGH*1.035,'FAIL'),COLORGREEN;
 
 STICKLINE(BREAK_BUY,LOW*0.990,LOW*0.970,2,0),COLORRED;
 STICKLINE(LC,LOW*0.990,LOW*0.975,1,0),COLORMAGENTA;
 
-{十三、防守线与枢轴线}
+{====================}
+{十四、枢轴线与防守线}
+{====================}
+
 PIVOTLINE:PIVOT,COLORCYAN;
 STOPLINE:STOP_BASE,COLORRED;
-
-{ ============================================================ }
-{ 参数说明 }
-{ NEARP   0.80  距60日高比例下限；越大越要求靠近高位，建议 0.75~0.90 }
-{ RMAX    0.22  10日波动率上限；高波动股可放宽到 0.25~0.30 }
-{ DRY     0.90  5日均量/20日均量收缩阈值；越小越严格 }
-{ VOLBRK  1.35  突破量能倍数；强势突破可用 1.40~1.80 }
-{ BUYGAP  10    信号去重窗口，避免连续刷 BUY/LC }
-{ USELONG 1     1=要求 E50>E200；0=允许早期反转股 }
-{ EXTATR  3.50  距 E21 的 ATR 延展阈值 }
-{ EXTPCT  0.18  距 E21 的百分比延展阈值 }
-{ }
-{ 信号解释 }
-{ VCP   = VCP准备区：趋势、高位、收缩、缩量、守E21、higher lows }
-{ FLAG  = 牛旗/旗形准备区：有前期脉冲，随后收缩整理并守E21 }
-{ LC    = Low-Cheat：未正式突破前，贴近短枢轴并收回E10/E21 }
-{ BUY   = 标准突破：突破20日枢轴且放量 }
-{ 伸    = 距 E21 过度延展；新仓慎追，持仓考虑跟踪/减仓 }
-{ FAIL  = 跌破最近10日结构低点，setup 失效 }
-{ }
-{ 使用纪律 }
-{ 1) 指标只做日线结构提示，不替代复盘和盘口确认。 }
-{ 2) BUY/LC 后的止损优先看 STOPLINE 或最后一个 higher low。 }
-{ 3) 财报前后、跳空、低流动性标的需要人工过滤。 }
-{ ============================================================ }

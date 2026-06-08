@@ -110,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 为 AlphaSift runtime bridge 增加官方兼容依据落点：补充 `docs/alphasift-integration.md` 中 LiteLLM/OpenAI 官方文档锚点与 `requirements.txt`/`alphasift` commit 版本依据，明确 provider/model/base_url/extra_headers/fallback 与回退边界。
 - [修复] 桌面/镜像打包链路保持与运行时一致的 AlphaSift 适配层预置，避免 `pip install` 作为线上修复依赖。
 - [测试] 增补 AlphaSift runtime bridge 与打包脚本静态验证，覆盖 `LLM_CHANNELS`、`LITELLM_FALLBACK_MODELS`、`alphasift.dsa_adapter`、`--collect-all alphasift`。
+- [改进] `VCP突破交易员` 策略同步最终优化版富途日线指标，收紧 60 日高位与波动收缩阈值，新增 10 日有效结构、突破前 LC、10%买点风险过滤、延展过滤和首次 FAIL/EXT 标记。
 
 ## [3.20.0] - 2026-06-03
 
