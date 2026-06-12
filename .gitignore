@@ -16,6 +16,13 @@
 /litellm_config.yaml
 /litellm_config.*.yaml
 
+# Claude 协作临时产物
+/.claude/reviews/
+/research/
+
+# Options skill 临时产物
+/.claude/skills/options-review-logger/templates/options_updates_*.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -79,6 +86,11 @@ verify_*.py
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+
+# but ignore skill script caches and temporary outputs
+.claude/skills/**/scripts/__pycache__/
+.claude/skills/**/scripts/tests/__pycache__/
+.claude/skills/options-review-logger/templates/options_updates_*.json
 
 # ignore static files
 static/

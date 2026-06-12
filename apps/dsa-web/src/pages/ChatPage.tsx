@@ -35,6 +35,7 @@ const QUICK_QUESTIONS = [
   { label: '分析比亚迪趋势', skill: 'bull_trend' },
   { label: '箱体震荡技能看中芯国际', skill: 'box_oscillation' },
   { label: '估值模型看 NVDA', skill: 'valuation_model' },
+  { label: 'Serenity读 ADBE 研报', skill: 'serenity_research' },
   { label: '分析腾讯 hk00700', skill: 'bull_trend' },
   { label: '用情绪周期分析东方财富', skill: 'emotion_cycle' },
   { label: 'EMA200回踩看 SPY', skill: 'ema5_200_setup' },

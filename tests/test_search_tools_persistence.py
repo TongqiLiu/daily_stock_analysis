@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src.agent.tools.search_tools import (
+    _handle_search_research_reports,
     _handle_search_comprehensive_intel,
     _handle_search_stock_news,
 )
@@ -115,6 +116,66 @@ class SearchToolsPersistenceTest(unittest.TestCase):
 
         self.assertFalse(result["success"])
         db.save_news_intel.assert_not_called()
+
+    def test_search_research_reports_formats_public_results(self) -> None:
+        payload = {
+            "code": 0,
+            "data": [
+                {
+                    "news_id": "report:1",
+                    "title": "高盛维持对<em>Adobe</em>的卖出评级，并将目标价下调至$190",
+                    "publish_time": "1781283666",
+                    "url": "https://news.futunn.com/post/1",
+                }
+            ],
+        }
+
+        with patch("src.agent.tools.search_tools._fetch_futu_research", return_value=payload) as fetch:
+            result = _handle_search_research_reports("ADBE", "Adobe", max_results=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["provider"], "Futu")
+        self.assertEqual(result["results_count"], 1)
+        self.assertEqual(
+            result["results"][0]["title"],
+            "高盛维持对Adobe的卖出评级，并将目标价下调至$190",
+        )
+        self.assertIn("2026-06", result["results"][0]["publish_time"])
+        fetch.assert_called_once_with("ADBE", size=5, lang="zh-CN")
+
+    def test_search_research_reports_retries_stock_name_when_ticker_empty(self) -> None:
+        empty_payload = {"code": 0, "data": []}
+        name_payload = {
+            "code": 0,
+            "data": [
+                {
+                    "news_id": "report:2",
+                    "title": "Adobe目标价更新",
+                    "publish_time": "",
+                    "url": "https://news.futunn.com/post/2",
+                }
+            ],
+        }
+
+        with patch(
+            "src.agent.tools.search_tools._fetch_futu_research",
+            side_effect=[empty_payload, name_payload],
+        ) as fetch:
+            result = _handle_search_research_reports("ADBE", "Adobe")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["query"], "Adobe")
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(result["attempts"][0], {"keyword": "ADBE", "success": True, "results_count": 0})
+
+    def test_search_research_reports_returns_fail_open_error(self) -> None:
+        with patch("src.agent.tools.search_tools._fetch_futu_research", side_effect=TimeoutError("timeout")):
+            result = _handle_search_research_reports("ADBE", "", max_results=3)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["provider"], "Futu")
+        self.assertEqual(result["results"], [])
+        self.assertIn("timeout", result["error"])
 
 
 if __name__ == "__main__":

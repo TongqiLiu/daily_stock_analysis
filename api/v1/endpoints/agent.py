@@ -25,6 +25,7 @@ TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "get_stock_info":             "获取股票基本面",
     "search_stock_news":          "搜索股票新闻",
     "search_comprehensive_intel": "搜索综合情报",
+    "search_research_reports":    "搜索研报评级",
     "analyze_trend":              "分析技术趋势",
     "calculate_ma":               "计算均线系统",
     "get_volume_analysis":        "分析量能变化",

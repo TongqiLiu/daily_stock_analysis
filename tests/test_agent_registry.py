@@ -439,6 +439,31 @@ class TestBuiltinSkills(unittest.TestCase):
         self.assertIn("vcp_breakout_trader", user_visible_ids)
         self.assertNotIn("ema_200_highlow", user_visible_ids)
 
+    def test_serenity_research_is_user_visible_and_tool_backed(self):
+        """Serenity research should appear as one chat selector option with registered tools."""
+        from src.agent.factory import get_tool_registry
+        from src.agent.skills.base import SkillManager
+
+        manager = SkillManager()
+        manager.load_builtin_strategies()
+
+        skill = manager.get("serenity_research")
+        self.assertIsNotNone(skill)
+        self.assertEqual(skill.display_name, "Serenity投研")
+        self.assertEqual(skill.category, "framework")
+        self.assertTrue(skill.user_invocable)
+        self.assertEqual(skill.default_priority, 24)
+        self.assertIn("search_research_reports", skill.required_tools)
+
+        registered_tools = set(get_tool_registry().list_names())
+        missing_tools = set(skill.required_tools) - registered_tools
+        self.assertEqual(missing_tools, set())
+
+        user_visible_ids = {
+            item.name for item in manager.list_skills() if item.user_invocable
+        }
+        self.assertIn("serenity_research", user_visible_ids)
+
 
 # ============================================================
 # Built-in tools import test
