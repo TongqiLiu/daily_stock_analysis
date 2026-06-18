@@ -1,10 +1,12 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pie, PieChart, ResponsiveContainer, Tooltip, Legend, Cell } from 'recharts';
+import { decisionSignalsApi } from '../api/decisionSignals';
 import { portfolioApi } from '../api/portfolio';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { ApiErrorAlert, Card, Badge, ConfirmDialog, EmptyState, InlineAlert } from '../components/common';
+import { PortfolioSignalSummary } from '../components/decision-signals/DecisionSignalDisplay';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
 import { PORTFOLIO_TEXT } from '../locales/featureText';
@@ -28,6 +30,10 @@ import {
   hasPositionPrice,
 } from '../utils/portfolioFormat';
 import type {
+  DecisionSignalItem,
+  DecisionSignalMarket,
+} from '../types/decisionSignals';
+import type {
   PortfolioAccountItem,
   PortfolioCashDirection,
   PortfolioCashLedgerListItem,
@@ -43,9 +49,12 @@ import type {
   PortfolioSnapshotResponse,
   PortfolioTradeListItem,
 } from '../types/portfolio';
+import { areStockCodesEquivalent, normalizeStockCode } from '../utils/stockCode';
+import { parseDecisionSignalDate } from '../utils/decisionSignalTime';
 
 const PIE_COLORS = ['#00d4ff', '#00ff88', '#ffaa00', '#ff7a45', '#7f8cff', '#ff4466'];
 const DEFAULT_PAGE_SIZE = 20;
+const PORTFOLIO_SIGNAL_LOOKUP_CONCURRENCY = 6;
 const FALLBACK_BROKERS: PortfolioImportBrokerItem[] = [
   { broker: 'huatai', aliases: [], displayName: '华泰' },
   { broker: 'citic', aliases: ['zhongxin'], displayName: '中信' },
@@ -60,10 +69,25 @@ type FlatPosition = PortfolioPositionItem & {
   accountName: string;
 };
 
+type PortfolioSignalLookup = {
+  stockCode: string;
+  market?: DecisionSignalMarket;
+};
+
+type PortfolioSignalLookupResult = {
+  items: DecisionSignalItem[];
+  error: string | null;
+};
+
 type PendingDelete =
   | { eventType: 'trade'; id: number; message: string }
   | { eventType: 'cash'; id: number; message: string }
   | { eventType: 'corporate'; id: number; message: string };
+
+type PendingAccountDelete = {
+  accountId: number;
+  accountName: string;
+};
 
 type FxRefreshContext = {
   viewKey: string;
@@ -76,8 +100,64 @@ const PORTFOLIO_SELECT_CLASS = `${PORTFOLIO_INPUT_CLASS} appearance-none pr-10`;
 const PORTFOLIO_FILE_PICKER_CLASS =
   'input-surface input-focus-glow flex h-11 w-full cursor-pointer items-center justify-center rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
 
+function getSignalTime(item: DecisionSignalItem): number {
+  return parseDecisionSignalDate(item.createdAt)?.getTime()
+    ?? parseDecisionSignalDate(item.updatedAt)?.getTime()
+    ?? 0;
+}
+
+function isNewerSignal(left: DecisionSignalItem | undefined, right: DecisionSignalItem): boolean {
+  if (!left) return true;
+  return getSignalTime(right) > getSignalTime(left);
+}
+
+const DECISION_SIGNAL_MARKETS = new Set<DecisionSignalMarket>(['cn', 'hk', 'us']);
+
+function toDecisionSignalMarket(value: string | null | undefined): DecisionSignalMarket | undefined {
+  const normalized = String(value || '').toLowerCase();
+  return DECISION_SIGNAL_MARKETS.has(normalized as DecisionSignalMarket)
+    ? normalized as DecisionSignalMarket
+    : undefined;
+}
+
+function toPositionSignalLookupKey(stockCode: string, market?: DecisionSignalMarket): string {
+  return `${market || ''}:${normalizeStockCode(stockCode).toUpperCase()}`;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }));
+
+  return results;
+}
+
+async function loadPortfolioSignalLookup(lookup: PortfolioSignalLookup): Promise<PortfolioSignalLookupResult> {
+  try {
+    const response = await decisionSignalsApi.getLatest(lookup.stockCode, {
+      market: lookup.market,
+      limit: 1,
+    });
+    return { items: response.items, error: null };
+  } catch (err) {
+    return { items: [], error: getParsedApiError(err).message };
+  }
+}
+
 const PortfolioPage: React.FC = () => {
-  const { language } = useUiLanguage();
+  const { language, t } = useUiLanguage();
   const text = PORTFOLIO_TEXT[language];
 
   // Set page title
@@ -106,6 +186,11 @@ const PortfolioPage: React.FC = () => {
   const [error, setError] = useState<ParsedApiError | null>(null);
   const [riskWarning, setRiskWarning] = useState<string | null>(null);
   const [writeWarning, setWriteWarning] = useState<string | null>(null);
+  const [portfolioSignals, setPortfolioSignals] = useState<DecisionSignalItem[]>([]);
+  const [portfolioSignalsLoading, setPortfolioSignalsLoading] = useState(false);
+  const [portfolioSignalsWarning, setPortfolioSignalsWarning] = useState<string | null>(null);
+  const [portfolioSignalsRefreshKey, setPortfolioSignalsRefreshKey] = useState(0);
+  const portfolioSignalsRequestRef = useRef(0);
   const [positionAnalysisLoadingKey, setPositionAnalysisLoadingKey] = useState<string | null>(null);
   const [positionAnalysisMessage, setPositionAnalysisMessage] = useState<string | null>(null);
 
@@ -134,6 +219,8 @@ const PortfolioPage: React.FC = () => {
   const [corporateEvents, setCorporateEvents] = useState<PortfolioCorporateActionListItem[]>([]);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [pendingAccountDelete, setPendingAccountDelete] = useState<PendingAccountDelete | null>(null);
+  const [accountDeleteLoading, setAccountDeleteLoading] = useState(false);
 
   const [tradeForm, setTradeForm] = useState({
     symbol: '',
@@ -169,6 +256,7 @@ const PortfolioPage: React.FC = () => {
   const writableAccount = selectedAccount === 'all' ? undefined : accounts.find((item) => item.id === selectedAccount);
   const writableAccountId = writableAccount?.id;
   const writeBlocked = !writableAccountId;
+  const canDeleteSelectedAccount = Boolean(writableAccountId) && !isLoading && !fxRefreshing && !accountDeleteLoading;
   const totalEventPages = Math.max(1, Math.ceil(eventTotal / DEFAULT_PAGE_SIZE));
   const currentEventCount = eventType === 'trade'
     ? tradeEvents.length
@@ -367,6 +455,97 @@ const PortfolioPage: React.FC = () => {
     return rows;
   }, [snapshot]);
 
+  const snapshotMatchesAccountScope = useMemo(() => {
+    if (!snapshot) return false;
+    const snapshotAccountIds = new Set((snapshot.accounts || []).map((account) => account.accountId));
+    if (queryAccountId !== undefined) {
+      return snapshotAccountIds.size === 1 && snapshotAccountIds.has(queryAccountId);
+    }
+    return accounts.length === 0 || Number(snapshot.accountCount || 0) === accounts.length;
+  }, [accounts.length, queryAccountId, snapshot]);
+
+  const positionSignalLookups = useMemo(() => {
+    const lookups = new Map<string, PortfolioSignalLookup>();
+    for (const row of positionRows) {
+      const stockCode = String(row.symbol || '').trim();
+      if (!stockCode) continue;
+      const market = toDecisionSignalMarket(row.market);
+      const key = toPositionSignalLookupKey(stockCode, market);
+      if (!lookups.has(key)) {
+        lookups.set(key, { stockCode, market });
+      }
+    }
+    return Array.from(lookups.values());
+  }, [positionRows]);
+
+  useEffect(() => {
+    const requestId = portfolioSignalsRequestRef.current + 1;
+    portfolioSignalsRequestRef.current = requestId;
+
+    if (positionSignalLookups.length === 0 || !snapshotMatchesAccountScope) {
+      setPortfolioSignals([]);
+      setPortfolioSignalsWarning(null);
+      setPortfolioSignalsLoading(false);
+      return;
+    }
+
+    const isActiveRequest = () => portfolioSignalsRequestRef.current === requestId;
+
+    const loadPortfolioSignals = async () => {
+      setPortfolioSignalsLoading(true);
+      setPortfolioSignalsWarning(null);
+      const results = await mapWithConcurrency(
+        positionSignalLookups,
+        PORTFOLIO_SIGNAL_LOOKUP_CONCURRENCY,
+        loadPortfolioSignalLookup,
+      );
+      if (!isActiveRequest()) return;
+      const collected = results.flatMap((result) => result.items);
+      const failures = results.flatMap((result) => (result.error ? [result.error] : []));
+      setPortfolioSignals(collected);
+      setPortfolioSignalsWarning(
+        failures.length > 0
+          ? (
+              collected.length > 0
+                ? formatUiText(t('decisionSignals.portfolioPartialWarning'), { message: failures[0] })
+                : failures[0]
+            )
+          : null,
+      );
+      if (isActiveRequest()) {
+        setPortfolioSignalsLoading(false);
+      }
+    };
+
+    void loadPortfolioSignals();
+
+    return () => {
+      portfolioSignalsRequestRef.current += 1;
+    };
+  }, [portfolioSignalsRefreshKey, positionSignalLookups, snapshotMatchesAccountScope, t]);
+
+  const signalByPositionKey = useMemo(() => {
+    const mapped = new Map<string, DecisionSignalItem>();
+    for (const row of positionRows) {
+      const rowMarket = String(row.market || '').toLowerCase();
+      for (const signal of portfolioSignals) {
+        const signalMarket = String(signal.market || '').toLowerCase();
+        if (rowMarket && signalMarket && rowMarket !== signalMarket) {
+          continue;
+        }
+        if (!areStockCodesEquivalent(row.symbol, signal.stockCode)) {
+          continue;
+        }
+        const key = `${row.accountId}-${row.symbol}-${row.market}`;
+        const existing = mapped.get(key);
+        if (isNewerSignal(existing, signal)) {
+          mapped.set(key, signal);
+        }
+      }
+    }
+    return mapped;
+  }, [portfolioSignals, positionRows]);
+
   const handleAnalyzePosition = async (row: FlatPosition) => {
     const key = `${row.accountId}-${row.symbol}-${row.market}`;
     setPositionAnalysisLoadingKey(key);
@@ -530,6 +709,37 @@ const PortfolioPage: React.FC = () => {
     setPendingDelete(item);
   };
 
+  const openAccountDeleteDialog = () => {
+    if (!writableAccount) {
+      setWriteWarning('请先选择具体账户，再删除持仓账户。');
+      return;
+    }
+    setPendingAccountDelete({
+      accountId: writableAccount.id,
+      accountName: writableAccount.name,
+    });
+  };
+
+  const handleConfirmAccountDelete = async () => {
+    if (!pendingAccountDelete || accountDeleteLoading) return;
+
+    try {
+      setAccountDeleteLoading(true);
+      setWriteWarning(null);
+      await portfolioApi.deleteAccount(pendingAccountDelete.accountId);
+      const nextAccount = accounts.find((item) => item.id !== pendingAccountDelete.accountId);
+      setSelectedAccount(nextAccount?.id ?? 'all');
+      setPendingAccountDelete(null);
+      setShowCreateAccount(!nextAccount);
+      await loadAccounts();
+      setEventPage(1);
+    } catch (err) {
+      setError(getParsedApiError(err));
+    } finally {
+      setAccountDeleteLoading(false);
+    }
+  };
+
   const handleConfirmDelete = async () => {
     if (!pendingDelete || deleteLoading) return;
     if (!writableAccountId) {
@@ -601,6 +811,7 @@ const PortfolioPage: React.FC = () => {
 
   const handleRefresh = async () => {
     await Promise.all([loadAccounts(), loadSnapshotAndRisk(), loadEvents(), loadBrokers()]);
+    setPortfolioSignalsRefreshKey((current) => current + 1);
   };
 
   const reloadSnapshotAndRiskForScope = useCallback(async (
@@ -739,7 +950,7 @@ const PortfolioPage: React.FC = () => {
                   <option value="avg">{text.avg}</option>
                 </select>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   className="btn-secondary text-sm flex-1"
@@ -758,6 +969,14 @@ const PortfolioPage: React.FC = () => {
                   className="btn-secondary text-sm flex-1"
                 >
                   {isLoading ? text.refreshing : text.refreshData}
+                </button>
+                <button
+                  type="button"
+                  onClick={openAccountDeleteDialog}
+                  disabled={!canDeleteSelectedAccount}
+                  className="btn-secondary text-sm flex-1 border-red-400/40 text-red-100 hover:bg-red-500/15 disabled:border-white/10 disabled:text-secondary"
+                >
+                  {accountDeleteLoading ? text.deletingAccount : text.deleteAccount}
                 </button>
               </div>
             </div>
@@ -908,6 +1127,14 @@ const PortfolioPage: React.FC = () => {
             <h2 className="text-sm font-semibold text-foreground">{text.positionsTitle}</h2>
             <span className="text-xs text-secondary">{formatUiText(text.countItems, { count: positionRows.length })}</span>
           </div>
+          {portfolioSignalsWarning ? (
+            <InlineAlert
+              variant="warning"
+              title={t('decisionSignals.portfolioWarningTitle')}
+              message={portfolioSignalsWarning}
+              className="mb-3 rounded-xl px-3 py-2 text-xs shadow-none"
+            />
+          ) : null}
           {positionRows.length === 0 ? (
             <EmptyState
               title={text.noPositionsTitle}
@@ -916,7 +1143,7 @@ const PortfolioPage: React.FC = () => {
             />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="min-w-[860px] w-full text-sm">
                 <thead className="text-xs text-secondary border-b border-white/10">
                   <tr>
                     <th className="text-left py-2 pr-2">{text.account}</th>
@@ -925,15 +1152,17 @@ const PortfolioPage: React.FC = () => {
                     <th className="text-right py-2 pr-2">{text.avgCost}</th>
                     <th className="text-right py-2 pr-2">{text.lastPrice}</th>
                     <th className="text-right py-2 pr-2">{text.marketValue}</th>
-                    <th className="text-right py-2">{text.unrealizedPnl}</th>
-                    <th className="text-right py-2">{text.returnPct}</th>
-                    <th className="text-right py-2">{text.action}</th>
+                    <th className="text-right py-2 pr-3">{text.unrealizedPnl}</th>
+                    <th className="text-right py-2 pr-3">{text.returnPct}</th>
+                    <th className="min-w-[9rem] text-right py-2 pr-3">{t('decisionSignals.portfolioColumn')}</th>
+                    <th className="w-20 text-right py-2">{text.action}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {positionRows.map((row) => {
                     const rowKey = `${row.accountId}-${row.symbol}-${row.market}`;
                     const analyzing = positionAnalysisLoadingKey === rowKey;
+                    const signal = signalByPositionKey.get(rowKey);
                     return (
                     <tr key={rowKey} className="border-b border-white/5">
                       <td className="py-2 pr-2 text-secondary">{row.accountName}</td>
@@ -948,7 +1177,7 @@ const PortfolioPage: React.FC = () => {
                       </td>
                       <td className="py-2 pr-2 text-right">{formatPositionMoney(row.marketValueBase, row)}</td>
                       <td
-                        className={`py-2 text-right ${
+                        className={`py-2 pr-3 text-right ${
                           hasPositionPrice(row)
                             ? row.unrealizedPnlBase >= 0
                               ? 'text-success'
@@ -959,7 +1188,7 @@ const PortfolioPage: React.FC = () => {
                         {formatPositionMoney(row.unrealizedPnlBase, row)}
                       </td>
                       <td
-                        className={`py-2 text-right ${
+                        className={`py-2 pr-3 text-right ${
                           hasPositionPrice(row) && row.unrealizedPnlPct !== null && row.unrealizedPnlPct !== undefined
                             ? row.unrealizedPnlPct >= 0
                               ? 'text-success'
@@ -968,6 +1197,9 @@ const PortfolioPage: React.FC = () => {
                         }`}
                       >
                         {formatSignedPct(row.unrealizedPnlPct)}
+                      </td>
+                      <td className="py-2 pr-3 text-right align-top">
+                        <PortfolioSignalSummary item={signal} loading={portfolioSignalsLoading} />
                       </td>
                       <td className="py-2 text-right">
                         <button
@@ -1339,6 +1571,26 @@ const PortfolioPage: React.FC = () => {
         onCancel={() => {
           if (!deleteLoading) {
             setPendingDelete(null);
+          }
+        }}
+      />
+      <ConfirmDialog
+        isOpen={Boolean(pendingAccountDelete)}
+        title={text.deleteAccountTitle}
+        message={
+          pendingAccountDelete
+            ? formatUiText(text.deleteAccountMessage, {
+              name: pendingAccountDelete.accountName,
+              id: pendingAccountDelete.accountId,
+            })
+            : ''
+        }
+        confirmText={accountDeleteLoading ? text.deletingAccount : text.deleteAccountConfirm}
+        isDanger
+        onConfirm={() => void handleConfirmAccountDelete()}
+        onCancel={() => {
+          if (!accountDeleteLoading) {
+            setPendingAccountDelete(null);
           }
         }}
       />

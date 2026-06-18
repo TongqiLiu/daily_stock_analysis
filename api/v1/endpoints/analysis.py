@@ -53,6 +53,7 @@ from api.v1.schemas.history import (
     ReportStrategy,
     ReportDetails,
 )
+from api.v1.schemas.run_flow import RunFlowSnapshot
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import Config
 from src.core.market_review_lock import (
@@ -79,6 +80,7 @@ from src.services.task_queue import (
     TaskStatus as TaskStatusEnum,
 )
 from src.services.run_diagnostics import build_run_diagnostic_summary
+from src.services.run_flow import build_task_run_flow_snapshot
 from src.utils.data_processing import (
     normalize_model_used,
     parse_json_field,
@@ -144,10 +146,16 @@ def _run_market_review_background(
             "send_notification": send_notification,
             "override_region": override_region,
             "return_structured": True,
-            "config": runtime_config,
+            "trigger_source": "api",
         }
         if query_id:
             review_kwargs["query_id"] = query_id
+        logger.info(
+            "[MarketReview] component=market_review action=background_start "
+            "trigger_source=api task_id=%s region=%s",
+            query_id or "-",
+            override_region or getattr(runtime_config, "market_review_region", "cn") or "cn",
+        )
         report = run_market_review(**review_kwargs)
         if not report:
             raise RuntimeError("大盘复盘未返回可持久化报告")
@@ -495,6 +503,13 @@ def trigger_market_review(
 
     try:
         task_id = uuid.uuid4().hex
+        logger.info(
+            "[MarketReview] component=market_review action=submit trigger_source=api "
+            "task_id=%s region=%s send_notification=%s",
+            task_id,
+            getattr(runtime_config, "market_review_region", "cn") or "cn",
+            request.send_notification,
+        )
         task = get_task_queue().submit_background_task(
             lambda: _run_market_review_background(
                 request.send_notification,
@@ -537,7 +552,7 @@ def trigger_market_review(
 def get_task_list(
     status: Optional[str] = Query(
         None,
-        description="筛选状态：pending, processing, completed, failed（支持逗号分隔多个）"
+        description="筛选状态：pending, processing, completed, failed, cancel_requested, cancelled（支持逗号分隔多个）"
     ),
     limit: int = Query(20, description="返回数量限制", ge=1, le=100),
 ) -> TaskListResponse:
@@ -678,6 +693,109 @@ def _format_sse_event(event_type: str, data: Dict[str, Any]) -> str:
         SSE 格式字符串
     """
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _load_history_run_flow_by_query_id(
+    query_id: str,
+    *,
+    code: Optional[str] = None,
+    report_type: Optional[str] = None,
+    fail_open: bool = False,
+) -> Optional[RunFlowSnapshot]:
+    try:
+        from src.storage import DatabaseManager
+        from src.services.history_service import HistoryService
+
+        service = HistoryService(DatabaseManager.get_instance())
+        return service.resolve_and_get_run_flow(
+            query_id,
+            code=code,
+            report_type=report_type,
+        )
+    except Exception as e:
+        if fail_open:
+            logger.debug(
+                "load history run-flow failed, falling back to task skeleton: query_id=%s err=%s",
+                query_id,
+                e,
+            )
+            return None
+        raise
+
+
+@router.get(
+    "/tasks/{task_id}/flow",
+    response_model=RunFlowSnapshot,
+    responses={
+        200: {"description": "任务运行流快照"},
+        404: {"description": "任务不存在", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取分析任务运行流",
+    description="根据 task_id 查询任务数据流/信息流快照；活跃任务缺少诊断时返回骨架流。",
+)
+def get_task_run_flow(task_id: str) -> RunFlowSnapshot:
+    """
+    查询分析任务运行流。
+
+    Active tasks are served from the in-memory task queue. Completed tasks try
+    to hydrate from persisted history diagnostics using the same task_id/query_id.
+    """
+    task_queue = get_task_queue()
+    task = task_queue.get_task(task_id)
+
+    if task:
+        if task.status == TaskStatusEnum.COMPLETED:
+            task_report_type = _history_report_type_for_task_flow(
+                getattr(task, "report_type", None)
+            )
+            task_stock_code = _safe_task_flow_text(getattr(task, "stock_code", None), max_length=32)
+            if task_report_type == "market_review":
+                task_stock_code = "MARKET"
+            history_snapshot = _load_history_run_flow_by_query_id(
+                task_id,
+                code=task_stock_code,
+                report_type=task_report_type,
+                fail_open=True,
+            )
+            if history_snapshot is not None:
+                return history_snapshot
+        return build_task_run_flow_snapshot(task)
+
+    try:
+        history_snapshot = _load_history_run_flow_by_query_id(task_id)
+        if history_snapshot is not None:
+            return history_snapshot
+    except Exception as e:
+        logger.error(f"查询任务运行流失败: {e}", exc_info=True)
+        raise api_error(500, "internal_error", f"查询任务运行流失败: {str(e)}")
+
+    raise api_error(404, "not_found", f"任务 {task_id} 不存在或已过期")
+
+
+def _safe_task_flow_text(value: Any, *, max_length: int) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_length]
+
+
+def _history_report_type_for_task_flow(value: Any) -> Optional[str]:
+    text = _safe_task_flow_text(value, max_length=64)
+    if text is None:
+        return None
+    normalized = text.lower().strip().replace("-", "_")
+    aliases = {
+        "detailed": "full",
+        "simple": "simple",
+        "full": "full",
+        "brief": "brief",
+        "market": "market_review",
+        "market_review": "market_review",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _datetime_to_iso(value: Any) -> Optional[str]:

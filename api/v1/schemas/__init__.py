@@ -107,6 +107,21 @@ from api.v1.schemas.alerts import (
     AlertTriggerItem,
     AlertTriggerListResponse,
 )
+from api.v1.schemas.decision_signals import (
+    DecisionSignalCreateRequest,
+    DecisionSignalFeedbackItem,
+    DecisionSignalFeedbackRequest,
+    DecisionSignalItem,
+    DecisionSignalListResponse,
+    DecisionSignalMutationResponse,
+    DecisionSignalOutcomeItem,
+    DecisionSignalOutcomeListResponse,
+    DecisionSignalOutcomeRunRequest,
+    DecisionSignalOutcomeRunResponse,
+    DecisionSignalOutcomeStatsBucket,
+    DecisionSignalOutcomeStatsResponse,
+    DecisionSignalStatusUpdateRequest,
+)
 
 __all__ = [
     # common
@@ -201,4 +216,18 @@ __all__ = [
     "AlertRuleUpdateRequest",
     "AlertTriggerItem",
     "AlertTriggerListResponse",
+    # decision signals
+    "DecisionSignalCreateRequest",
+    "DecisionSignalFeedbackItem",
+    "DecisionSignalFeedbackRequest",
+    "DecisionSignalItem",
+    "DecisionSignalListResponse",
+    "DecisionSignalMutationResponse",
+    "DecisionSignalOutcomeItem",
+    "DecisionSignalOutcomeListResponse",
+    "DecisionSignalOutcomeRunRequest",
+    "DecisionSignalOutcomeRunResponse",
+    "DecisionSignalOutcomeStatsBucket",
+    "DecisionSignalOutcomeStatsResponse",
+    "DecisionSignalStatusUpdateRequest",
 ]

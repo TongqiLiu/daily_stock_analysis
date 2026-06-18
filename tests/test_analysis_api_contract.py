@@ -194,6 +194,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         call_kwargs = run_market_review.call_args.kwargs
         self.assertEqual(call_kwargs["send_notification"], True)
         self.assertIsNone(call_kwargs["override_region"])
+        self.assertEqual(call_kwargs["trigger_source"], "api")
         runtime_config = call_kwargs.get("config")
         self.assertIsNotNone(runtime_config)
         self.assertEqual(getattr(runtime_config, "report_language", None), "en")
@@ -246,6 +247,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         call_kwargs = run_market_review.call_args.kwargs
         runtime_config = call_kwargs.get("config")
         self.assertEqual(getattr(runtime_config, "report_language", None), "en")
+        self.assertEqual(call_kwargs["trigger_source"], "api")
 
     def test_trigger_market_review_rejects_duplicate_submission(self) -> None:
         if trigger_market_review is None or analysis_endpoint_module is None:
@@ -376,6 +378,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             send_notification=False,
             override_region="cn,us",
             return_structured=True,
+            trigger_source="api",
         )
 
     def test_market_review_runtime_initializes_analyzer_for_litellm_provider(self) -> None:
@@ -430,6 +433,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             send_notification=False,
             override_region="cn",
             return_structured=True,
+            trigger_source="api",
         )
 
     def test_run_market_review_uses_request_scoped_config_language(self) -> None:
@@ -497,6 +501,38 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         self.assertEqual(status.market_review_report, "市场复盘报告示例文本")
         self.assertEqual(status.market_review_payload["kind"], "market_review")
         self.assertIsNone(status.result)
+
+    def test_get_analysis_status_accepts_cancel_states_from_queue(self) -> None:
+        if get_analysis_status is None or analysis_endpoint_module is None:
+            self.skipTest("analysis endpoint helpers unavailable in this environment")
+
+        for task_status in (
+            analysis_endpoint_module.TaskStatusEnum.CANCEL_REQUESTED,
+            analysis_endpoint_module.TaskStatusEnum.CANCELLED,
+        ):
+            with self.subTest(task_status=task_status.value):
+                queue = MagicMock()
+                queue.get_task.return_value = SimpleNamespace(
+                    task_id=f"task-{task_status.value}",
+                    trace_id=f"trace-{task_status.value}",
+                    stock_code="600519",
+                    stock_name="贵州茅台",
+                    status=task_status,
+                    progress=42,
+                    result=None,
+                    error=None,
+                    original_query=None,
+                    selection_source=None,
+                    analysis_phase="auto",
+                    skills=[],
+                )
+
+                with patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue):
+                    status = get_analysis_status(f"task-{task_status.value}")
+
+                self.assertEqual(status.status, task_status.value)
+                self.assertEqual(status.progress, 42)
+                self.assertIsNone(status.result)
 
     def test_get_analysis_status_normalizes_completed_queue_result_contract(self) -> None:
         if get_analysis_status is None or analysis_endpoint_module is None:

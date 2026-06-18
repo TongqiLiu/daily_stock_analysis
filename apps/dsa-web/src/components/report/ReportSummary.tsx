@@ -2,6 +2,7 @@ import React from 'react';
 import type { AnalysisResult, AnalysisReport } from '../../types/analysis';
 import { ReportOverview } from './ReportOverview';
 import { ReportStrategy } from './ReportStrategy';
+import { ReportDecisionSignals } from './ReportDecisionSignals';
 import { ReportNews } from './ReportNews';
 import { ReportDetails } from './ReportDetails';
 import { ReportDiagnostics } from './ReportDiagnostics';
@@ -19,6 +20,7 @@ interface ReportSummaryProps {
     isActioning: boolean;
     actionMessage: string | null;
   };
+  onOpenRunFlow?: (recordId: number) => void;
 }
 
 /**
@@ -29,6 +31,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   data,
   isHistory = false,
   watchlist,
+  onOpenRunFlow,
 }) => {
   // 兼容 AnalysisResult 和 AnalysisReport 两种数据格式
   const report: AnalysisReport = 'report' in data ? data.report : data;
@@ -50,6 +53,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         report={report}
         recordId={recordId}
         reportLanguage={reportLanguage}
+        onOpenRunFlow={onOpenRunFlow}
       />
     );
   }
@@ -68,6 +72,9 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
       {/* 策略点位区 */}
       <ReportStrategy strategy={strategy} language={reportLanguage} />
 
+      {/* 从当前历史报告提取的结构化信号 */}
+      <ReportDecisionSignals recordId={recordId} reportType={meta.reportType} />
+
       {/* 资讯区 */}
       <ReportNews recordId={recordId} limit={8} language={reportLanguage} />
 
@@ -82,6 +89,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         recordId={recordId}
         summary={diagnosticSummary}
         language={reportLanguage}
+        onOpenRunFlow={onOpenRunFlow}
       />
 
       {/* 透明度与追溯区 */}

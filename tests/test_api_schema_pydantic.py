@@ -1,9 +1,42 @@
 """Regression tests for API schema metadata under Pydantic v2."""
 
+import json
+from pathlib import Path
+
+from api.app import create_app
+from api.v1.router import router as api_v1_router
 from api.v1.schemas.analysis import AnalyzeRequest, MarketReviewRequest
 from api.v1.schemas.common import RootResponse
 from api.v1.schemas.history import HistoryItem
 from api.v1.schemas.stocks import StockQuote
+
+
+DECISION_SIGNAL_PATHS = (
+    "/api/v1/decision-signals",
+    "/api/v1/decision-signals/outcomes/run",
+    "/api/v1/decision-signals/outcomes",
+    "/api/v1/decision-signals/outcomes/stats",
+    "/api/v1/decision-signals/latest/{stock_code}",
+    "/api/v1/decision-signals/{signal_id}/outcomes",
+    "/api/v1/decision-signals/{signal_id}/feedback",
+    "/api/v1/decision-signals/{signal_id}",
+    "/api/v1/decision-signals/{signal_id}/status",
+)
+DECISION_SIGNAL_SCHEMAS = (
+    "DecisionSignalCreateRequest",
+    "DecisionSignalFeedbackItem",
+    "DecisionSignalFeedbackRequest",
+    "DecisionSignalItem",
+    "DecisionSignalListResponse",
+    "DecisionSignalMutationResponse",
+    "DecisionSignalOutcomeItem",
+    "DecisionSignalOutcomeListResponse",
+    "DecisionSignalOutcomeRunRequest",
+    "DecisionSignalOutcomeRunResponse",
+    "DecisionSignalOutcomeStatsBucket",
+    "DecisionSignalOutcomeStatsResponse",
+    "DecisionSignalStatusUpdateRequest",
+)
 
 
 def test_schema_examples_remain_in_openapi_schema() -> None:
@@ -66,3 +99,35 @@ def test_analyze_request_rejects_invalid_analysis_phase() -> None:
         assert "analysis_phase" in str(exc)
     else:
         raise AssertionError("invalid analysis_phase should be rejected")
+
+
+def test_decision_signal_static_api_spec_matches_runtime_paths() -> None:
+    static_spec_path = Path(__file__).resolve().parents[1] / "docs" / "architecture" / "api_spec.json"
+    static_spec = json.loads(static_spec_path.read_text(encoding="utf-8"))
+    runtime_spec = create_app().openapi()
+
+    assert static_spec["openapi"] == runtime_spec["openapi"]
+    assert static_spec["info"]["description"] == runtime_spec["info"]["description"]
+    assert "暂无认证要求" not in static_spec["info"]["description"]
+    assert "ADMIN_AUTH_ENABLED=true" in static_spec["info"]["description"]
+    for path in DECISION_SIGNAL_PATHS:
+        assert static_spec["paths"][path] == runtime_spec["paths"][path]
+        for operation in static_spec["paths"][path].values():
+            assert "401" in operation["responses"]
+            assert operation["security"] == [{"AdminSessionCookie": []}]
+    assert static_spec["components"]["securitySchemes"] == runtime_spec["components"]["securitySchemes"]
+    for schema_name in DECISION_SIGNAL_SCHEMAS:
+        assert static_spec["components"]["schemas"][schema_name] == runtime_spec["components"]["schemas"][schema_name]
+
+    status_schema = static_spec["components"]["schemas"]["DecisionSignalStatusUpdateRequest"]["properties"]["status"]
+    assert status_schema["enum"] == ["active", "expired", "invalidated", "closed", "archived"]
+
+
+def test_v1_prefix_is_applied_at_app_mount_level() -> None:
+    assert api_v1_router.prefix == ""
+
+    runtime_paths = create_app().openapi()["paths"]
+    assert "/api/v1/history" in runtime_paths
+    assert "/api/v1/decision-signals" in runtime_paths
+    assert "/api/v1/history/" not in runtime_paths
+    assert "/api/v1/decision-signals/" not in runtime_paths
