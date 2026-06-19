@@ -1,0 +1,4 @@
+interface:
+  display_name: "Options Portfolio Risk Manager"
+  short_description: "Manage existing options portfolio risk"
+  default_prompt: "Use $options-portfolio-risk-manager to review my existing stock, ETF, leveraged ETF, spread, covered-call, long-option, and short-option positions for assignment risk, underlying exposure, event risk, roll candidates, decay, and next actions."

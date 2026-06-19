@@ -1,0 +1,45 @@
+# Conservative default policy: avoid assignment unless the underlying is liquid,
+# fundamentally acceptable, and suitable for covered calls or long holding.
+
+risk_profile:
+  assignment_preference: avoid
+  preferred_regime: range_bound_or_constructive
+  assignment_quality_required: good
+
+thresholds:
+  # Used by portfolio_risk.py for conservative assignment-avoidance scoring.
+  max_weekly_dte: 14
+  conservative_short_put_delta: 0.18
+  warning_short_put_delta: 0.25
+  danger_short_put_delta: 0.35
+  min_open_interest: 100
+  max_bid_ask_spread_pct: 20
+  min_market_cap_for_assignment: 10000000000
+  high_hv_warning: 0.80
+  # Near-DTE short options that cross earnings or ex-dividend are upgraded.
+  event_risk_dte: 14
+  # Long options inside these windows are scored for time-decay pressure.
+  long_option_exit_dte: 14
+  long_option_urgent_dte: 7
+  # Used by option_roll_screener.py when --policy is supplied.
+  roll_dte_min: 21
+  roll_dte_max: 60
+  # Used by portfolio_risk.py for covered-call short-call risk checks.
+  covered_call_min_delta: 0.12
+  covered_call_max_delta: 0.25
+
+watchlist:
+  MSFT:
+    assignment_quality: high
+    # Maximum shares the user is comfortable owning after assignment.
+    max_shares: 200
+  AAPL:
+    assignment_quality: high
+    # portfolio_risk.py flags short puts when total potential assignment exceeds this.
+    max_shares: 200
+  NVDA:
+    assignment_quality: high_beta_quality
+    max_shares: 100
+  MSTR:
+    assignment_quality: speculative
+    max_shares: 100

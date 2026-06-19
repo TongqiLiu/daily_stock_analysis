@@ -1,0 +1,60 @@
+# Copy this file and replace the sample positions with your real holdings.
+# The built-in parser supports this simple YAML structure without PyYAML.
+
+positions:
+  - symbol: MSTR
+    type: short_put
+    expiry: 2026-06-26
+    strike: 103
+    contracts: 1
+    premium: 2.39
+
+  - symbol: MSTR
+    type: short_put
+    expiry: 2027-01-15
+    strike: 110
+    contracts: 1
+    premium: 25.80
+
+  - symbol: MSTR
+    type: short_put
+    expiry: 2027-06-17
+    strike: 90
+    contracts: 1
+    premium: 22.50
+
+  - symbol: MSTX
+    type: leveraged_etf
+    shares: 1000
+    avg_cost: 40.70
+    leverage: 2
+    underlying: MSTR
+
+# Additional supported position shapes:
+#
+#  - symbol: MSFT
+#    type: stock
+#    shares: 100
+#    avg_cost: 380
+#
+#  - symbol: MSFT
+#    type: covered_call
+#    expiry: 2026-07-17
+#    strike: 430
+#    contracts: 1
+#    premium: 4.20
+#
+#  - symbol: MSTR
+#    type: short_put_spread
+#    expiry: 2026-07-17
+#    short_strike: 90
+#    long_strike: 75
+#    contracts: 1
+#    net_credit: 2.10
+#
+#  - symbol: MSTR
+#    type: long_put
+#    expiry: 2026-07-17
+#    strike: 80
+#    contracts: 1
+#    premium: 3.50

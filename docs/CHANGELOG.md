@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] #1390 P5 新增 DecisionSignal 用户反馈、信号级日线后验评估、统计 API 与 Web 展示，使用 outcome/feedback sidecar 表并保留主信号表契约；默认后验重跑会恢复可补齐行情数据的 unable 结果，批量 backfill 不再被最新已评估信号占满 limit。
 - [修复] #1390 收紧建议动作 legacy fallback：英文 `not to ...` 与 `avoid selling/reducing/trimming ...` 等否定/回避表达不再误判为买卖动作，Web 旧记录不再把中文金融上下文、`buy or sell`、多 guard 歧义文本或 `buyback` / `buy-back` / `buy back` / `selloff` / `sell-off` / `sell off` 等英文复合词渲染成 action badge，并在有结构化 `action` 时让回测/历史趋势等入口按界面语言显示 action 标签。
 - [新功能] 问股新增独立 `serenity_research`（Serenity投研）选项，并新增 `search_research_reports` Agent 工具检索公开研报/评级/目标价更新，支持买方 memo、增长概率、TAM-Adj-PEG 与 GF-DMA 交叉验证。
+- [新功能] 问股新增并列可选策略 `nunu_wave`（显示名「nunu波浪」）：在保留原 `wave_theory` 的同时，增加“级别优先 + 结构自洽”的进阶波浪分析框架，覆盖引导/终结楔形判别、WXYXXZ 复杂调整、主备计数切换与失效位输出。
+- [改进] `nunu_wave` 补充斐波那契序列日/共振日规则，将第 3/5/8/13/21/34/55 个交易日作为辅助观察窗口，并要求与价格结构确认共同使用。
+- [改进] `nunu_wave` 补充跨级别楔形与浅二浪处理规则，强调大级别终结楔形需逐步验证、浅二浪不能直接作为三浪启动证据，并限制历史先例只能作结构类比。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 新增价值投资分析模块，基于邱国鹭《投资中最简单的事》方法论，提供行业分析、公司分析、估值分析、逆向投资和定价权评估框架
@@ -425,7 +428,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - improve: Refine LiteLLM parameter recovery, yfinance currency/dividend handling, RSI calculation, market-review presentation, stock-news relevance ranking, and report table rendering.
 - fix: Harden desktop packaging/update assets, completed analysis-status responses, AlphaVantage pct_chg routing, portfolio realtime snapshots, alert trigger dedupe, DatabaseManager cold start, and fallback pricing registration.
 - docs/tests: Add beginner setup and settings-help docs, document compatibility/rollback boundaries, and extend regression coverage for API, alert, packaging, and release paths.
-- [新功能] 问股新增并列可选策略 `nunu_wave`（显示名「nunu波浪」）：在保留原 `wave_theory` 的同时，增加“级别优先 + 结构自洽”的进阶波浪分析框架，覆盖引导/终结楔形判别、WXYXXZ 复杂调整、主备计数切换与失效位输出。
 
 ## [3.17.1] - 2026-05-16
 
