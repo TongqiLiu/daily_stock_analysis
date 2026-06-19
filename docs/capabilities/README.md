@@ -150,7 +150,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 22 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
 | 23 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
 | 24 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
-| 25 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、跨级别楔形、序列日/共振日、主备计数切换与失效位 |
+| 25 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：阶段四问、复杂调整、跨级别楔形、截尾五浪、序列日/共振日、主备计数切换与失效位优先 |
 | 26 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
 | 27 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
 | 28 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
