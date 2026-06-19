@@ -1,5 +1,5 @@
 # Nunu Wave Strategy / nunu波浪
-# Trigger: 问股策略栏选择「nunu波浪」，或用户明确提到“nunu波浪/引导楔形/终结楔形/WXYXXZ”。
+# Trigger: 问股策略栏选择「nunu波浪」，或用户明确提到“nunu波浪/引导楔形/终结楔形/斐波那契序列日/共振日/WXYXXZ”。
 
 name: nunu_wave
 display_name: nunu波浪
@@ -12,7 +12,7 @@ required_tools:
   - analyze_trend
   - calculate_ma
   - get_volume_analysis
-aliases: [nunu波浪, nunu, 波浪进阶, 楔形判别, 终结楔形, 大二浪, 浅二浪, WXYXXZ, 双锯齿]
+aliases: [nunu波浪, nunu, 波浪进阶, 楔形判别, 终结楔形, 大级别终结楔形, 大二浪, 浅二浪, 充分调整, 斐波那契序列日, 序列日, 变盘日, 共振日, WXYXXZ, 双锯齿]
 default_priority: 81
 user_invocable: true
 default_active: false

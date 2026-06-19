@@ -61,14 +61,23 @@ class PricingPowerAnalyzer:
    - 行业供给受限（没有那么多竞争者）
    - 刚需属性强（不买不行）
 
+3. 护城河三重检验：
+   - 底层规律：优势是否建立在人性、物理规律或经济规律上？
+   - 结构：是否由多个优势互相咬合，而不是只有一个卖点？
+   - 飞轮：优势是否能越转越快、自我强化？
+
+只有三关全过，才可以给出“强定价权”；如果只有单一优势或飞轮不成立，最多给“中等定价权”。
+
 请给出：
 1. 定价权水平
 2. 定价权来源
-3. 详细分析（150字左右）
+3. 护城河三重检验结论
+4. 详细分析（150字左右）
 
 输出格式：
 定价权: [强/中/弱/无]
 来源: [来源1,来源2,...]
+三重检验: [全过/部分通过/未通过/证据不足]
 分析: [文字]
 """
 
@@ -106,7 +115,7 @@ class PricingPowerAnalyzer:
         if analysis_start == -1:
             analysis_start = response.find("分析：")
         if analysis_start != -1:
-            analysis = response[analysis_start+3:].strip()
+            analysis = response[analysis_start + 3:].strip()
         else:
             analysis = response
 

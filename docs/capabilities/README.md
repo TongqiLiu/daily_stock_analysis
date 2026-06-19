@@ -131,7 +131,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 3 | `bull_trend` | 默认多头趋势 | 10 | trend | 后端 `default_skill_id`：MA5>MA10>MA20 + MACD 金叉，关注 7 条核心交易基线 |
 | 4 | `ma_golden_cross` | 均线金叉 | 20 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
 | 5 | `serenity_research` | Serenity投研 | 24 | framework | 读取公开研报/评级更新并套用 Serenity 买方 memo、增长概率、TAM-Adj-PEG、GF-DMA 和 news-to-financial-statement 交叉验证 |
-| 6 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河 + 安全边际 + ROE |
+| 6 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河三重检验 + 价值选股加分项 + 退出纪律 |
 | 7 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP |
 | 8 | `volume_breakout` | 放量突破 | 30 | trend | 突破 20 日新高 + 量比确认 |
 | 9 | `valuation_model` | 📐 估值模型 | 30 | framework | PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级 |
@@ -150,7 +150,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 22 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
 | 23 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
 | 24 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
-| 25 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、楔形、主备计数切换与失效位 |
+| 25 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：复杂调整、跨级别楔形、序列日/共振日、主备计数切换与失效位 |
 | 26 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
 | 27 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
 | 28 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
@@ -192,7 +192,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `analyze_ema200_setup` | EMA200 setup 结构判断：基础 reclaim candidate、HL/双底、SPY_ORB_EMA200_v2 5m ORB + EMA200 顺势信号、结构止损与 1R 空间 |
 | `analyze_vcp_h1_h2_buy` | VCP_H1_H2_BUY 日线判断：趋势模板、波动/量能收缩、枢轴突破、H1/H2 和 BUY 去重 |
 | `analyze_vcp_breakout_trader` | VCP_BREAKOUT_TRADER 日线判断：VCP/牛旗准备区、higher lows、突破前 Low-Cheat、放量突破、10%风险过滤、过度延展与结构失败 |
-| `run_value_analysis` | 系统化价值投资分析：行业、公司、估值、逆向投资和定价权综合评估 |
+| `run_value_analysis` | 系统化价值投资分析：行业、公司、估值、护城河三重检验、价值选股加分项、退出纪律、逆向投资和定价权综合评估 |
 
 ### 5.3 搜索类（`search_tools.py`，3 个）
 

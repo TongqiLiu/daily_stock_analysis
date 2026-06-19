@@ -186,6 +186,8 @@ async def _handle_run_value_analysis(
 
                 # 生成 Markdown 报告
                 report_markdown = generator.format_markdown(report)
+                company_result = results['company_analysis']
+                moat_triple_test = company_result.moat_triple_test
 
                 return {
                     "success": True,
@@ -207,10 +209,17 @@ async def _handle_run_value_analysis(
                         "key_findings": results['industry_analysis'].key_findings,
                     },
                     "company_analysis": {
-                        "total_score": results['company_analysis'].total_score,
-                        "rating": results['company_analysis'].rating.value,
-                        "moat_score": results['company_analysis'].moat_score,
-                        "key_findings": results['company_analysis'].key_findings,
+                        "total_score": company_result.total_score,
+                        "rating": company_result.rating.value,
+                        "moat_score": company_result.moat_score,
+                        "moat_triple_test": {
+                            "fundamental_law_status": moat_triple_test.fundamental_law_status,
+                            "structure_status": moat_triple_test.structure_status,
+                            "flywheel_status": moat_triple_test.flywheel_status,
+                            "pricing_power_status": moat_triple_test.pricing_power_status,
+                            "conclusion": moat_triple_test.conclusion,
+                        } if moat_triple_test else None,
+                        "key_findings": company_result.key_findings,
                     },
                     "valuation_analysis": {
                         "total_score": results['valuation_analysis'].total_score,
@@ -243,7 +252,7 @@ run_value_analysis_tool = ToolDefinition(
     name="run_value_analysis",
     description=(
         "执行系统化价值投资分析，基于邱国鹭《投资中最简单的事》三好原则（好行业×好公司×好价格）。"
-        "返回行业分析、公司分析、估值分析、逆向投资和定价权评估的综合报告。"
+            "返回行业分析、公司分析、估值分析、护城河三重检验、价值选股加分项、退出纪律、逆向投资和定价权评估的综合报告。"
         "相比基础的 get_valuation_percentile，本工具提供更全面的价值投资分析框架。"
     ),
     parameters=[

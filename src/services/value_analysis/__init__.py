@@ -11,7 +11,7 @@
 
 from .data_validator import DataValidator
 from .industry_analyzer import IndustryAnalyzer
-from .company_analyzer import CompanyAnalyzer
+from .company_analyzer import CompanyAnalyzer, MoatTripleTest
 from .valuation_analyzer import ValuationAnalyzer
 from .contrarian_checker import ContrarianChecker
 from .pricing_power_analyzer import PricingPowerAnalyzer
@@ -21,6 +21,7 @@ __all__ = [
     "DataValidator",
     "IndustryAnalyzer",
     "CompanyAnalyzer",
+    "MoatTripleTest",
     "ValuationAnalyzer",
     "ContrarianChecker",
     "PricingPowerAnalyzer",

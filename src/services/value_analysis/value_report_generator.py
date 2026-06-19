@@ -265,6 +265,8 @@ class ValueReportGenerator:
 
 **公司评级：{report.company_analysis.rating.value}**
 
+{self._format_moat_triple_test(report.company_analysis)}
+
 ### 关键发现
 {report.company_analysis.key_findings}
 
@@ -298,7 +300,11 @@ class ValueReportGenerator:
 
 **总分调整：{report.pricing_power_adjustment:+.0%}**
 
-## 🎯 六、投资结论
+{self._format_stock_selection_checklist(report)}
+
+{self._format_exit_discipline(report)}
+
+## 🎯 八、投资结论
 
 ### 综合评分
 
@@ -329,7 +335,7 @@ class ValueReportGenerator:
         md += f"""
 **最大风险：{report.max_risk}**
 
-## ⚠️ 七、风险提示
+## ⚠️ 九、风险提示
 
 > 本分析基于邱国鹭《投资中最简单的事》的价值投资方法论，仅作为投资思考框架使用，不构成具体投资建议。
 >
@@ -360,12 +366,149 @@ class ValueReportGenerator:
         if company.moat_score < 10:
             veto_reasons.append("公司护城河评分 < 10（完全没有竞争优势）")
 
+        if company.moat_triple_test and not company.moat_triple_test.all_passed:
+            veto_reasons.append("护城河三重检验未全过（定价权证据不足）")
+
         if company.management_score == 0:
             veto_reasons.append("管理层诚信评分 = 0（财务造假/重大违规）")
 
         # 更多一票否决项检查...
 
         return len(veto_reasons) > 0, veto_reasons
+
+    def _format_moat_triple_test(self, company: CompanyAnalysis) -> str:
+        """格式化护城河三重检验"""
+        triple = company.moat_triple_test
+        if not triple:
+            return ""
+
+        pricing_power_implication = (
+            "三关全过，可进一步验证强定价权"
+            if triple.all_passed
+            else "三关未全过，不能直接认定强定价权"
+        )
+
+        return f"""### 护城河三重检验
+
+| 检验项 | 结果 | 核心证据 |
+|------|:----:|------|
+| 底层规律 | {triple.fundamental_law_status} | {triple.fundamental_law_analysis} |
+| 结构不是一个点 | {triple.structure_status} | {triple.structure_analysis} |
+| 飞轮 | {triple.flywheel_status} | {triple.flywheel_analysis} |
+
+**三关结论：{triple.conclusion}**
+
+**定价权含义：{pricing_power_implication}**。{triple.pricing_power_analysis}
+"""
+
+    def _format_stock_selection_checklist(self, report: ValueInvestmentReport) -> str:
+        """格式化价值选股加分项"""
+        founder_status, founder_basis, founder_invalidation = self._assess_founder_led(report.company_analysis)
+        core_status, core_basis, core_invalidation = self._assess_core_position(report.industry_analysis)
+        flywheel_status, flywheel_basis, flywheel_invalidation = self._assess_quality_flywheel(report.company_analysis)
+        timing_status, timing_basis, timing_invalidation = self._assess_why_now(
+            report.valuation_analysis,
+            report.contrarian_analysis,
+        )
+
+        return f"""## 🧭 六、价值选股加分项
+
+> 用于提高候选股置信度和仓位上限；不能替代估值、安全边际和护城河判断。
+
+| 加分项 | 结果 | 关键依据 | 证伪信号 |
+|------|:----:|------|------|
+| Founder-led / 创始人式领导者 | {founder_status} | {founder_basis} | {founder_invalidation} |
+| 核心位置 | {core_status} | {core_basis} | {core_invalidation} |
+| 底层规律的飞轮 | {flywheel_status} | {flywheel_basis} | {flywheel_invalidation} |
+| 为什么是现在 | {timing_status} | {timing_basis} | {timing_invalidation} |
+
+### 五件事备忘
+- **核心论点**：{report.recommendation}
+- **关键假设**：行业优势、公司护城河、盈利质量和估值安全边际需要同时维持。
+- **证伪信号**：护城河被侵蚀、盈利质量下滑、催化剂落空或估值脱离基本面。
+- **为什么是这个载体**：优先选择处在趋势核心、议价能力更强、财务质量更好的公司；若证据不足，需要和同行或 ETF 对比。
+- **兑现时间窗口**：默认观察未来 1-2 年的业绩、现金流、订单、份额或定价权兑现。
+"""
+
+    def _format_exit_discipline(self, report: ValueInvestmentReport) -> str:
+        """格式化退出纪律"""
+        narrative_risk = self._assess_narrative_premium_risk(report)
+        if narrative_risk == "高":
+            action = "减仓 / 退出"
+        elif narrative_risk == "中":
+            action = "降低仓位上限 / 分批减仓"
+        else:
+            action = "继续观察"
+
+        return f"""## 🚪 七、退出纪律
+
+### 叙事溢价削减
+
+**风险等级：{narrative_risk}**
+
+如果公司基本面没有实质进展，只是靠情绪、主题、故事或估值倍数扩张上涨，应视为借来的涨幅，后续需要用业绩、现金流、订单、份额或定价权归还。
+
+### 证伪信号与动作
+
+| 证伪信号 | 应对动作 |
+|------|------|
+| 核心假设被证伪，需求、份额、毛利率、ROE 或现金流未改善 | {action} |
+| 未来 1-2 年催化剂落空或兑现明显延后 | 降低仓位上限 |
+| 股价上涨主要来自估值倍数扩张，缺少基本面支撑 | 减仓 |
+| 估值进入历史高分位，但护城河和盈利质量没有同步增强 | 减仓 / 退出 |
+
+**退出纪律一句话**：错了知道怎么走，不用事后临场找理由。
+"""
+
+    def _assess_founder_led(self, company: CompanyAnalysis) -> tuple[str, str, str]:
+        """评估 Founder-led / 类创始人管理层"""
+        management_text = company.management_analysis or ""
+        if any(keyword in management_text for keyword in ["创始", "owner", "长期", "股东回报", "回购"]):
+            return "通过", "管理层分析中出现长期主义、创始人式或股东回报证据", "关键人退出、乱并购、短期 KPI 导向"
+        if company.management_score >= 15:
+            return "不确定", "管理层评分较高，但缺少创始人式领导者的直接证据", "管理层执行力或利益一致性转弱"
+        return "不通过", "管理层评分不足，未体现 owner-operator 特征", "频繁换帅、资本配置失误、过度举债"
+
+    def _assess_core_position(self, industry: IndustryAnalysis) -> tuple[str, str, str]:
+        """评估是否处在大趋势核心位置"""
+        if industry.total_score >= 75 and industry.market_structure_score >= 18 and industry.entry_barrier_score >= 18:
+            return "通过", "行业评分、竞争格局和进入壁垒均较强", "行业需求转弱或公司从核心环节边缘化"
+        if industry.total_score >= 60:
+            return "不确定", "行业有优势，但是否处于趋势核心仍需和产业链位置交叉验证", "只是概念相关或议价能力弱"
+        return "不通过", "行业评分不足，暂不能证明站在大趋势核心", "需求下行、格局恶化、价格战"
+
+    def _assess_quality_flywheel(self, company: CompanyAnalysis) -> tuple[str, str, str]:
+        """评估底层规律的飞轮"""
+        triple = company.moat_triple_test
+        if triple and triple.all_passed:
+            return "通过", f"护城河三重检验{triple.conclusion}", "飞轮断裂或优势无法继续自我强化"
+        if triple:
+            return triple.conclusion, f"护城河三重检验{triple.conclusion}", "底层规律、结构或飞轮任一项被证伪"
+        return "不确定", "缺少护城河三重检验结构化证据", "优势只来自短期情绪、周期或单一卖点"
+
+    def _assess_why_now(
+        self,
+        valuation: ValuationAnalysis,
+        contrarian: ContrarianAnalysis,
+    ) -> tuple[str, str, str]:
+        """评估未来 1-2 年兑现窗口"""
+        if valuation.total_score >= 70 and contrarian.price_ok:
+            return "通过", "估值与价格条件较友好，具备建立观察窗口的基础", "估值修复后基本面未兑现"
+        if valuation.total_score >= 50:
+            return "不确定", "估值不算极端，但需要明确 1-2 年催化剂", "催化剂落空或兑现延后"
+        return "不通过", "估值安全边际不足，缺少现在出手的理由", "估值继续扩张但基本面没有同步改善"
+
+    def _assess_narrative_premium_risk(self, report: ValueInvestmentReport) -> str:
+        """评估叙事溢价削减风险"""
+        high_valuation = report.valuation_analysis.historical_percentile_score <= 7.5
+        weak_moat = report.company_analysis.moat_score < 20
+        weak_profitability = report.company_analysis.profitability_score < 10
+
+        if high_valuation and (weak_moat or weak_profitability):
+            return "高"
+        if high_valuation or weak_moat:
+            return "中"
+        return "低"
 
     def _get_conclusion(
         self,
