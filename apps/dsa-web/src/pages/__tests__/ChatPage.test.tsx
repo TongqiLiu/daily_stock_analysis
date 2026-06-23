@@ -426,6 +426,34 @@ describe('ChatPage', () => {
     expect(screen.getByRole('checkbox', { name: '趋势分析' })).not.toBeChecked();
   });
 
+  it('fills the chat input from a prompt template without sending immediately', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'bull_trend', name: '趋势分析', description: '默认趋势' },
+        { id: 'multi_strategy_consensus', name: '⚡ 多策略联合', description: '联合评分' },
+      ],
+      default_skill_id: 'bull_trend',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    const templateButton = await screen.findByRole('button', {
+      name: '套用提示词模板 通用股票分析',
+    });
+
+    fireEvent.click(templateButton);
+
+    const input = screen.getByPlaceholderText(/分析 600519/) as HTMLTextAreaElement;
+    expect(input.value).toContain('请分析 {股票代码} 的当前交易价值');
+    expect(input.value).toContain('激进、稳健、保守三套交易方案');
+    expect(screen.getByRole('checkbox', { name: '⚡ 多策略联合' })).toBeChecked();
+    expect(mockStartStream).not.toHaveBeenCalled();
+  });
+
   it('sends multiple selected skills in order', async () => {
     mockGetSkills.mockResolvedValue({
       skills: [

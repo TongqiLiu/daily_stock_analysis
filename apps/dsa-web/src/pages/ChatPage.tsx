@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -41,6 +41,158 @@ const QUICK_QUESTIONS = [
   { label: '用情绪周期分析东方财富', skill: 'emotion_cycle' },
   { label: 'EMA200回踩看 SPY', skill: 'ema5_200_setup' },
   { label: 'VCP H1/H2 看 NVDA', skill: 'vcp_h1_h2_buy' },
+];
+
+const PROMPT_TEMPLATES = [
+  {
+    id: 'general-stock-analysis',
+    title: '通用股票分析',
+    description: '趋势、结构、量能、交易方案',
+    prompt: `请分析 {stock} 的当前交易价值。不要只看涨跌，要从趋势、结构、量能、均线、支撑压力、风险收益比、基本面和催化剂综合判断。
+
+请输出：
+1. 当前状态：强势 / 震荡 / 回踩 / 突破 / 破位 / 高位风险。
+2. 是否适合买入、持有、加仓、减仓或止损。
+3. 周线、日线、4H分别怎么看。
+4. 关键支撑位、压力位、多头生命线、失效位。
+5. 是否存在杯柄、VCP、牛旗、箱体突破、双顶双底等结构。
+6. 成交量和指标是否支持当前走势。
+7. 给出激进、稳健、保守三套交易方案。
+8. 明确止损位、止盈位、加仓条件和失效条件。
+9. 最后用一句话给出最终判断。
+
+不要编造缺失数据。数据不足时请直接说明。`,
+    skills: ['multi_strategy_consensus'],
+  },
+  {
+    id: 'holding-review',
+    title: '已持仓决策',
+    description: '持有、加减仓、止损计划',
+    prompt: `我已经持有 {stock}，请帮我判断是否继续持有、加仓、减仓或止损。
+
+请基于当前价格、我的成本、仓位、图表结构和市场环境分析。
+
+输出结构：
+
+1. 持仓结论：
+- 继续持有 / 减仓 / 加仓 / 止损 / 做T降本 / 等突破
+- 当前最重要的判断依据
+
+2. 成本位置：
+- 我的成本相对当前价格是安全、被套、接近回本，还是高风险？
+- 回本需要突破哪些关键价位？
+- 是否值得继续占用资金？
+
+3. 趋势判断：
+- 周线是否还支持持有？
+- 日线是否转弱？
+- 4H是否有修复或破位？
+- 当前是洗盘、回踩，还是趋势坏了？
+
+4. 止损方案：
+- 硬止损位：
+- 结构止损位：
+- 移动止损位：
+- 跌破哪里必须承认判断错误？
+
+5. 加仓方案：
+- 什么情况下可以加仓？
+- 加仓价格区间：
+- 加仓后整体止损如何调整？
+- 不允许加仓的情况：
+
+6. 减仓方案：
+- 到哪个压力位可以减仓？
+- 如果冲高回落，如何处理？
+- 如果放量突破，是否继续拿？
+
+7. 最终计划：
+请给出一个具体执行方案，不要只讲观点，不要编造缺失数据。数据不足时请直接说明。`,
+    skills: ['multi_strategy_consensus'],
+  },
+  {
+    id: 'value-investing',
+    title: '价投分析',
+    description: '商业模式、护城河、估值风险',
+    prompt: `请从中长期投资角度分析 {stock}，不要只看短线K线。
+
+请重点分析：
+1. 公司到底靠什么赚钱？
+2. 收入增长来自真实需求，还是市场叙事？
+3. 毛利率、经营利润率、现金流、负债是否健康？
+4. 行业空间是否足够大？
+5. 公司在产业链中的位置强不强？
+6. 是否有技术壁垒、客户粘性、规模优势或成本优势？
+7. 当前估值是否透支增长？
+8. 未来12-24个月最重要的催化剂是什么？
+9. 最大风险是什么？
+10. 当前更适合建仓、观察、持有，还是卖出？
+
+请最后给出：
+- 投资逻辑：
+- 反方逻辑：
+- 估值风险：
+- 关键跟踪指标：
+- 合理买入区间：
+- 不值得继续持有的条件：`,
+    skills: ['value_investing'],
+  },
+  {
+    id: 'default-risk-control',
+    title: '默认风控分析',
+    description: '条件触发、失效位、执行计划',
+    prompt: `请作为股票交易风控分析师，对 {stock} 进行综合分析。
+
+核心原则：
+1. 先判断数据是否充分，不足之处直接说明。
+2. 不用单一指标下结论，必须综合趋势、结构、量能、均线、支撑压力、基本面、催化剂和风险收益比。
+3. 结论必须可执行：买、等、持有、减仓、止损，都要有价格条件。
+4. 不预测绝对涨跌，只给条件触发后的应对方案。
+5. 明确哪里说明判断错误。
+
+输出格式：
+
+一、当前结论
+- 状态：
+- 建议动作：
+- 置信度：
+- 最大风险：
+
+二、技术结构
+- 周线：
+- 日线：
+- 4H：
+- 关键支撑：
+- 关键压力：
+- 多头生命线：
+- 失效位：
+
+三、量价与指标
+- 均线：
+- 成交量：
+- MACD / RSI / KDJ：
+- 是否过热：
+- 是否背离：
+
+四、基本面与催化
+- 核心业务：
+- 上涨逻辑：
+- 催化剂：
+- 基本面风险：
+
+五、交易计划
+- 激进方案：
+- 稳健方案：
+- 保守方案：
+- 止损位：
+- 止盈位：
+- 加仓条件：
+- 减仓条件：
+
+六、最终判断
+用一句话说明：现在应该买入、等待、持有、减仓、止损，还是只观察。`,
+    skills: ['multi_strategy_consensus'],
+  },
 ];
 
 const MAX_SELECTED_SKILLS = 3;
@@ -185,6 +337,7 @@ const ChatPage: React.FC = () => {
   const [activeStockContext, setActiveStockContext] = useState<ActiveStockContext | null>(null);
   const watchlistMessageTimerRef = useRef<number | null>(null);
   const copyResetTimerRef = useRef<Partial<Record<string, number>>>({});
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
@@ -461,10 +614,19 @@ const ChatPage: React.FC = () => {
     ],
   );
 
-  const availableSkillIds = new Set(skills.map((skill) => skill.id));
-  const quickQuestions = QUICK_QUESTIONS.filter((question) => availableSkillIds.size === 0 || availableSkillIds.has(question.skill));
-  const selectedSkillIdSet = new Set(selectedSkillIds);
+  const availableSkillIds = useMemo(() => new Set(skills.map((skill) => skill.id)), [skills]);
+  const quickQuestions = useMemo(
+    () => QUICK_QUESTIONS.filter((question) => availableSkillIds.size === 0 || availableSkillIds.has(question.skill)),
+    [availableSkillIds],
+  );
+  const selectedSkillIdSet = useMemo(() => new Set(selectedSkillIds), [selectedSkillIds]);
   const skillLimitReached = selectedSkillIds.length >= MAX_SELECTED_SKILLS;
+  const promptTemplates = useMemo(
+    () => PROMPT_TEMPLATES.filter(
+      (template) => availableSkillIds.size === 0 || template.skills.some((skillId) => availableSkillIds.has(skillId)),
+    ),
+    [availableSkillIds],
+  );
 
   const getSkillNames = useCallback(
     (skillIds: string[]) => skillIds.map((id) => skills.find((s) => s.id === id)?.name || id),
@@ -493,6 +655,38 @@ const ChatPage: React.FC = () => {
       return [...prev, skillId];
     });
   }, []);
+
+  const resizeInputToContent = useCallback(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }, []);
+
+  const getPromptTemplateStockText = useCallback(() => {
+    const code = activeStockContext?.stock_code || activeStockCode;
+    if (!code) {
+      return '{股票代码}';
+    }
+    const name = activeStockContext?.stock_name;
+    return name ? `${name} ${code}` : code;
+  }, [activeStockCode, activeStockContext]);
+
+  const handleApplyPromptTemplate = useCallback((template: (typeof PROMPT_TEMPLATES)[number]) => {
+    const stockText = getPromptTemplateStockText();
+    const prompt = template.prompt.split('{stock}').join(stockText);
+    const templateSkillIds = normalizeSelectedSkillIds(
+      template.skills.filter((skillId) => availableSkillIds.has(skillId)),
+    );
+    if (templateSkillIds.length > 0) {
+      setSelectedSkillIds(templateSkillIds);
+    }
+    setInput(prompt);
+    window.requestAnimationFrame(() => {
+      resizeInputToContent();
+      inputRef.current?.focus();
+    });
+  }, [availableSkillIds, getPromptTemplateStockText, normalizeSelectedSkillIds, resizeInputToContent]);
 
   const handleStartNewChat = useCallback(() => {
     followUpContextRef.current = null;
@@ -1380,26 +1574,66 @@ const ChatPage: React.FC = () => {
                 </div>
               )}
 
-            {activeStockCode && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-text font-mono">{activeStockCode}</span>
-                <Button
-                  variant="secondary"
-                  size="xsm"
-                  isLoading={isWatchlistActioning}
-                  onClick={() => void handleToggleWatchlist(activeStockCode)}
-                  className="text-[11px]"
-                >
-                  {stockInWatchlist(activeStockCode) ? '从自选删除' : '加入自选'}
-                </Button>
-                {watchlistMessage && (
-                  <span className="text-[11px] text-secondary-text animate-in fade-in">{watchlistMessage}</span>
-                )}
-              </div>
-            )}
+              {promptTemplates.length > 0 ? (
+                <div className="rounded-xl border border-white/6 bg-surface/25 px-3 py-2" data-testid="chat-prompt-template-panel">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wider text-muted-text">
+                        提示词模板
+                      </span>
+                      <span className="text-[11px] text-muted-text">
+                        点击填入输入框，可继续编辑
+                      </span>
+                    </div>
+                    {activeStockCode ? (
+                      <span className="rounded-full border border-white/8 bg-card/45 px-2 py-0.5 font-mono text-[11px] text-secondary-text">
+                        当前标的 {activeStockCode}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-0.5 md:flex-wrap md:overflow-visible">
+                    {promptTemplates.map((template) => (
+                      <button
+                        key={template.id}
+                        type="button"
+                        className="home-surface-button group min-w-[10rem] flex-shrink-0 rounded-xl px-3 py-2 text-left transition-colors md:min-w-0"
+                        onClick={() => handleApplyPromptTemplate(template)}
+                        disabled={loading}
+                        aria-label={`套用提示词模板 ${template.title}`}
+                      >
+                        <span className="block text-sm font-medium text-foreground transition-colors group-hover:text-cyan">
+                          {template.title}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-muted-text">
+                          {template.description}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {activeStockCode && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-text font-mono">{activeStockCode}</span>
+                  <Button
+                    variant="secondary"
+                    size="xsm"
+                    isLoading={isWatchlistActioning}
+                    onClick={() => void handleToggleWatchlist(activeStockCode)}
+                    className="text-[11px]"
+                  >
+                    {stockInWatchlist(activeStockCode) ? '从自选删除' : '加入自选'}
+                  </Button>
+                  {watchlistMessage && (
+                    <span className="text-[11px] text-secondary-text animate-in fade-in">{watchlistMessage}</span>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-end gap-3">
                 <textarea
+                  ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
