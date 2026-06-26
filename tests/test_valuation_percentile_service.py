@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -210,7 +211,7 @@ class TestUSFlow(unittest.TestCase):
     def test_us_missing_field(self):
         yf_mock = self._patch_yf({})  # info 中无 trailingPE
         with patch.dict(sys.modules, {"yfinance": yf_mock}):
-            svc = ValuationPercentileService()
+            svc = ValuationPercentileService(realtime_quote_fetcher=lambda _: None)
             result = svc.get_valuation_data("XXXX", metric="pe")
         self.assertEqual(result["status"], "unavailable")
 
@@ -218,9 +219,66 @@ class TestUSFlow(unittest.TestCase):
         yf_mock = MagicMock()
         yf_mock.Ticker.side_effect = RuntimeError("offline")
         with patch.dict(sys.modules, {"yfinance": yf_mock}):
-            svc = ValuationPercentileService()
+            svc = ValuationPercentileService(realtime_quote_fetcher=lambda _: None)
             result = svc.get_valuation_data("AAPL", metric="pb")
         self.assertEqual(result["status"], "error")
+
+    def test_us_yfinance_error_falls_back_to_realtime_pe(self):
+        yf_mock = MagicMock()
+        yf_mock.Ticker.side_effect = RuntimeError("offline")
+        quote = SimpleNamespace(
+            pe_ratio=22.34,
+            pb_ratio=5.67,
+            source=SimpleNamespace(value="longbridge"),
+        )
+        with patch.dict(sys.modules, {"yfinance": yf_mock}):
+            svc = ValuationPercentileService(realtime_quote_fetcher=lambda _: quote)
+            result = svc.get_valuation_data("AAPL", metric="pe")
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["market"], "us")
+        self.assertEqual(result["current"], 22.34)
+        self.assertEqual(result["source"], "realtime_quote.longbridge")
+        self.assertEqual(result["fallback_from"], "yfinance.Ticker.info")
+        self.assertIn("upstream", result["note"])
+
+    def test_us_yfinance_error_with_quote_but_no_ratio_is_unavailable(self):
+        yf_mock = MagicMock()
+        yf_mock.Ticker.side_effect = RuntimeError("offline")
+        quote = SimpleNamespace(
+            pe_ratio=None,
+            pb_ratio=None,
+            source=SimpleNamespace(value="longbridge"),
+        )
+        with patch.dict(sys.modules, {"yfinance": yf_mock}):
+            svc = ValuationPercentileService(realtime_quote_fetcher=lambda _: quote)
+            result = svc.get_valuation_data("ASTS", metric="pe")
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIn("missing pe_ratio", result["note"])
+
+    def test_us_missing_yfinance_field_falls_back_to_realtime_pb(self):
+        yf_mock = self._patch_yf({})
+        quote = SimpleNamespace(
+            pe_ratio=22.34,
+            pb_ratio=5.67,
+            source=SimpleNamespace(value="longbridge"),
+        )
+        with patch.dict(sys.modules, {"yfinance": yf_mock}):
+            svc = ValuationPercentileService(realtime_quote_fetcher=lambda _: quote)
+            result = svc.get_valuation_data("AAPL", metric="pb")
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["current"], 5.67)
+        self.assertEqual(result["source"], "realtime_quote.longbridge")
+
+    def test_us_ps_does_not_call_realtime_fallback(self):
+        yf_mock = MagicMock()
+        yf_mock.Ticker.side_effect = RuntimeError("offline")
+        fetcher = MagicMock()
+        with patch.dict(sys.modules, {"yfinance": yf_mock}):
+            svc = ValuationPercentileService(realtime_quote_fetcher=fetcher)
+            result = svc.get_valuation_data("AAPL", metric="ps")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("does not support ps", result["note"])
+        fetcher.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

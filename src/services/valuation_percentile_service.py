@@ -7,7 +7,8 @@ Valuation Percentile Service
 
 数据源：
 - A 股：akshare.stock_zh_valuation_baidu（完整历史，~5 年日频）
-- 美股：yfinance.Ticker.info 拿当前 PE/PB/PS（status='partial'，无历史分位）
+- 美股：yfinance.Ticker.info 拿当前 PE/PB/PS；PE/PB 在 info 失败时尝试实时行情降级
+  （status='partial'，无历史分位）
 - 港股：当前不支持（status='unavailable'）
 
 可选服务，所有数据源失败时返回 status='unavailable' / 'error' 并给出说明，
@@ -17,7 +18,7 @@ Valuation Percentile Service
 import logging
 import time
 from datetime import date
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,9 @@ class ValuationPercentileService:
             print(result["rating"], result["current_percentile"])
     """
 
-    def __init__(self):
+    def __init__(self, realtime_quote_fetcher: Optional[Callable[[str], Any]] = None):
         self._cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._realtime_quote_fetcher = realtime_quote_fetcher
 
     # ------------------------------------------------------------------
     # 公共入口
@@ -256,44 +258,72 @@ class ValuationPercentileService:
         stock_code: str,
         metric: str,
     ) -> Dict[str, Any]:
+        field = _YFINANCE_METRIC_MAP[metric]
         try:
             import yfinance as yf  # noqa: WPS433
         except ImportError:
-            return {
-                "status": "error",
-                "stock_code": stock_code,
-                "metric": metric,
-                "note": "yfinance 未安装",
-            }
+            return self._fetch_us_realtime_quote_metric(
+                stock_code,
+                metric,
+                upstream_note="yfinance 未安装",
+                upstream_status="error",
+            )
 
-        field = _YFINANCE_METRIC_MAP[metric]
         try:
             info = yf.Ticker(stock_code).info or {}
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "valuation_percentile: 美股 info 失败 %s: %s", stock_code, exc
+            result = self._fetch_us_realtime_quote_metric(
+                stock_code,
+                metric,
+                upstream_note=f"yfinance info fetch failed: {exc}",
+                upstream_status="error",
             )
-            return {
-                "status": "error",
-                "stock_code": stock_code,
-                "market": "us",
-                "metric": metric,
-                "note": f"yfinance info fetch failed: {exc}",
-            }
+            if result.get("status") in {"partial", "unavailable"}:
+                logger.info(
+                    "valuation_percentile: 美股 info 失败 %s/%s，已按实时行情估值降级处理: %s",
+                    stock_code,
+                    metric,
+                    exc,
+                )
+            else:
+                logger.warning(
+                    "valuation_percentile: 美股 info 失败 %s/%s，实时行情降级也不可用: %s",
+                    stock_code,
+                    metric,
+                    exc,
+                )
+            return result
 
         current = info.get(field)
         if current is None:
-            return {
-                "status": "unavailable",
-                "stock_code": stock_code,
-                "market": "us",
-                "metric": metric,
-                "note": (
+            return self._fetch_us_realtime_quote_metric(
+                stock_code,
+                metric,
+                upstream_note=(
                     f"yfinance.info 缺字段 {field}（{stock_code}），"
                     "可能为 ETF / 指数 / 数据待补"
                 ),
-            }
+                upstream_status="unavailable",
+            )
 
+        return self._build_us_partial_result(
+            stock_code=stock_code,
+            metric=metric,
+            current=current,
+            source="yfinance.Ticker.info",
+            note="history percentile not available; only current value returned",
+        )
+
+    def _build_us_partial_result(
+        self,
+        *,
+        stock_code: str,
+        metric: str,
+        current: Any,
+        source: str,
+        note: str,
+        fallback_from: Optional[str] = None,
+    ) -> Dict[str, Any]:
         return {
             "status": "partial",
             "stock_code": stock_code,
@@ -308,6 +338,89 @@ class ValuationPercentileService:
                 "5 年 PE/PB 范围（LLM 内置知识或新闻搜索）作辅助判断，不做百分位定级。"
             ),
             "samples": 1,
-            "source": "yfinance.Ticker.info",
-            "note": "history percentile not available; only current value returned",
+            "source": source,
+            "note": note,
+            **({"fallback_from": fallback_from} if fallback_from else {}),
         }
+
+    def _fetch_us_realtime_quote_metric(
+        self,
+        stock_code: str,
+        metric: str,
+        *,
+        upstream_note: str,
+        upstream_status: str,
+    ) -> Dict[str, Any]:
+        """Use realtime quote PE/PB as a best-effort fallback for US valuation."""
+        realtime_field = {
+            "pe": "pe_ratio",
+            "pb": "pb_ratio",
+        }.get(metric)
+        if realtime_field is None:
+            return {
+                "status": upstream_status,
+                "stock_code": stock_code,
+                "market": "us",
+                "metric": metric,
+                "note": f"{upstream_note}; realtime quote fallback does not support {metric}",
+            }
+
+        try:
+            quote = self._get_realtime_quote(stock_code)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "status": upstream_status,
+                "stock_code": stock_code,
+                "market": "us",
+                "metric": metric,
+                "note": f"{upstream_note}; realtime quote fallback failed: {exc}",
+            }
+
+        current = getattr(quote, realtime_field, None) if quote is not None else None
+        try:
+            current_value = float(current)
+        except (TypeError, ValueError):
+            current_value = 0.0
+
+        if current_value <= 0:
+            status = "unavailable" if quote is not None else upstream_status
+            return {
+                "status": status,
+                "stock_code": stock_code,
+                "market": "us",
+                "metric": metric,
+                "note": (
+                    f"{upstream_note}; realtime quote fallback missing {realtime_field}"
+                ),
+            }
+
+        source = getattr(quote, "source", None)
+        if hasattr(source, "value"):
+            source_name = f"realtime_quote.{source.value}"
+        elif source:
+            source_name = f"realtime_quote.{source}"
+        else:
+            source_name = "realtime_quote"
+
+        return self._build_us_partial_result(
+            stock_code=stock_code,
+            metric=metric,
+            current=current_value,
+            source=source_name,
+            note=(
+                "history percentile not available; only current value returned "
+                f"from realtime quote fallback. upstream: {upstream_note}"
+            ),
+            fallback_from="yfinance.Ticker.info",
+        )
+
+    def _get_realtime_quote(self, stock_code: str) -> Any:
+        if self._realtime_quote_fetcher is not None:
+            return self._realtime_quote_fetcher(stock_code)
+
+        from data_provider.base import DataFetcherManager  # noqa: WPS433
+
+        return DataFetcherManager().get_realtime_quote(
+            stock_code,
+            log_final_failure=False,
+        )
