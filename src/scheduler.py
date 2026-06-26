@@ -19,9 +19,33 @@ import signal
 import threading
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_schedule_times(
+    schedule_times: Optional[Union[Sequence[str], str]],
+    *,
+    fallback_time: str = "18:00",
+) -> List[str]:
+    """Return sorted unique HH:MM schedule times with SCHEDULE_TIME fallback."""
+    if isinstance(schedule_times, str):
+        raw_items = [item.strip() for item in schedule_times.split(",")]
+    elif schedule_times is None:
+        raw_items = []
+    else:
+        raw_items = [str(item).strip() for item in schedule_times]
+
+    valid = {
+        item
+        for item in raw_items
+        if item and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", item)
+    }
+    if not valid:
+        fallback = (fallback_time or "18:00").strip() or "18:00"
+        valid.add(fallback if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", fallback) else "18:00")
+    return sorted(valid)
 
 
 class GracefulShutdown:
@@ -31,9 +55,11 @@ class GracefulShutdown:
     捕获 SIGTERM/SIGINT 信号，确保任务完成后再退出
     """
 
-    def __init__(self):
+    def __init__(self, register_signals: bool = True):
         self.shutdown_requested = False
         self._lock = threading.Lock()
+        if not register_signals:
+            return
 
         # 注册信号处理器
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -67,6 +93,9 @@ class Scheduler:
         self,
         schedule_time: str = "18:00",
         schedule_time_provider: Optional[Callable[[], str]] = None,
+        schedule_times: Optional[Sequence[str]] = None,
+        schedule_times_provider: Optional[Callable[[], Union[Sequence[str], str]]] = None,
+        register_signals: bool = True,
     ):
         """
         初始化调度器
@@ -82,11 +111,18 @@ class Scheduler:
             raise ImportError("请安装 schedule 库: pip install schedule")
 
         self.schedule_time = schedule_time
+        self.schedule_times = (
+            normalize_schedule_times(schedule_times, fallback_time=schedule_time)
+            if schedule_times is not None
+            else [(schedule_time or "").strip()]
+        )
         self._schedule_time_provider = schedule_time_provider
-        self.shutdown_handler = GracefulShutdown()
+        self._schedule_times_provider = schedule_times_provider
+        self.shutdown_handler = GracefulShutdown(register_signals=register_signals)
         self._task_callback: Optional[Callable] = None
         self._daily_job: Optional[Any] = None
-        self._extra_daily_jobs: List[Any] = []   # 额外的每日定时 job（如美股收盘后）
+        self._daily_jobs: List[Any] = []
+        self._extra_daily_jobs: List[Any] = []
         self._background_tasks: List[Dict[str, Any]] = []
         self._running = False
 
@@ -99,7 +135,7 @@ class Scheduler:
             run_immediately: 是否在设置后立即执行一次
         """
         self._task_callback = task
-        if not self._configure_daily_task(self.schedule_time):
+        if not self._configure_daily_tasks(self.schedule_times):
             raise ValueError(f"无效的定时执行时间: {self.schedule_time!r}")
 
         if run_immediately:
@@ -116,60 +152,89 @@ class Scheduler:
 
     def _cancel_daily_job(self) -> None:
         """Remove the currently registered daily job if one exists."""
-        if self._daily_job is None:
+        if self._daily_job is None and not self._daily_jobs:
             return
 
-        if hasattr(self.schedule, "cancel_job"):
-            self.schedule.cancel_job(self._daily_job)
-        else:  # pragma: no cover - compatibility fallback
-            jobs = getattr(self.schedule, "jobs", None)
-            if isinstance(jobs, list) and self._daily_job in jobs:
-                jobs.remove(self._daily_job)
+        for job in list(self._daily_jobs or [self._daily_job]):
+            if job is None:
+                continue
+            if hasattr(self.schedule, "cancel_job"):
+                self.schedule.cancel_job(job)
+            else:  # pragma: no cover - compatibility fallback
+                jobs = getattr(self.schedule, "jobs", None)
+                if isinstance(jobs, list) and job in jobs:
+                    jobs.remove(job)
 
         self._daily_job = None
+        self._daily_jobs = []
 
-    def _configure_daily_task(self, schedule_time: str) -> bool:
-        """(Re)register the daily job at the requested time."""
-        candidate = (schedule_time or "").strip()
-        if not self._is_valid_schedule_time(candidate):
+    def _configure_daily_tasks(self, schedule_times: Union[Sequence[str], str]) -> bool:
+        """(Re)register daily jobs at the requested times."""
+        raw_items = (
+            [item.strip() for item in schedule_times.split(",")]
+            if isinstance(schedule_times, str)
+            else [str(item).strip() for item in schedule_times]
+        )
+        invalid_items = [item for item in raw_items if item and not self._is_valid_schedule_time(item)]
+        if invalid_items:
             logger.warning(
-                "检测到无效的定时执行时间 %r，继续沿用当前时间 %s",
-                schedule_time,
-                self.schedule_time,
+                "Invalid schedule time values %r; keeping current times %s",
+                invalid_items,
+                ",".join(self.schedule_times),
             )
             return False
 
-        previous_time = self.schedule_time
+        candidates = normalize_schedule_times(raw_items, fallback_time=self.schedule_time)
+        previous_times = list(self.schedule_times)
         self._cancel_daily_job()
-        self._daily_job = self.schedule.every().day.at(candidate).do(self._safe_run_task)
-        self.schedule_time = candidate
+        self._daily_jobs = [
+            self.schedule.every().day.at(candidate).do(self._safe_run_task)
+            for candidate in candidates
+        ]
+        self._daily_job = self._daily_jobs[0] if self._daily_jobs else None
+        self.schedule_times = candidates
+        self.schedule_time = candidates[0] if candidates else "18:00"
 
-        if previous_time == candidate:
-            logger.info("已设置每日定时任务，执行时间: %s", self.schedule_time)
+        if previous_times == candidates:
+            logger.info("Daily scheduled jobs configured at: %s", ",".join(self.schedule_times))
         else:
             logger.info(
-                "检测到 SCHEDULE_TIME 变更，已将每日定时任务从 %s 更新为 %s",
-                previous_time,
-                self.schedule_time,
+                "Schedule times changed from %s to %s",
+                ",".join(previous_times),
+                ",".join(self.schedule_times),
             )
         return True
 
     def _refresh_daily_schedule_if_needed(self) -> None:
-        """Reload daily schedule time from the latest runtime config if needed."""
-        if self._task_callback is None or self._schedule_time_provider is None:
+        """Reload daily schedule times from the latest runtime config if needed."""
+        if self._task_callback is None:
             return
 
         try:
-            latest_schedule_time = (self._schedule_time_provider() or "").strip()
+            if self._schedule_times_provider is not None:
+                latest_schedule_times = self._schedule_times_provider()
+            elif self._schedule_time_provider is not None:
+                latest_schedule_times = [(self._schedule_time_provider() or "").strip()]
+            else:
+                return
         except Exception as exc:  # pragma: no cover - defensive branch
-            logger.warning("读取最新 SCHEDULE_TIME 失败，继续沿用 %s: %s", self.schedule_time, exc)
+            logger.warning(
+                "Failed to read latest schedule times; keeping %s: %s",
+                ",".join(self.schedule_times),
+                exc,
+            )
             return
 
-        if not latest_schedule_time or latest_schedule_time == self.schedule_time:
+        latest = normalize_schedule_times(latest_schedule_times, fallback_time=self.schedule_time)
+        if latest == self.schedule_times:
             return
 
-        if self._configure_daily_task(latest_schedule_time):
-            logger.info("更新后的下次执行时间: %s", self._get_next_run_time())
+        if self._configure_daily_tasks(latest):
+            logger.info("Schedule refreshed; next run: %s", self._get_next_run_time())
+
+    def refresh_daily_schedule_if_needed(self) -> None:
+        """Public wrapper for runtime scheduler reconciliation."""
+        self._refresh_daily_schedule_if_needed()
 
     def _safe_run_task(self):
         """安全执行任务（带异常捕获）"""
@@ -344,6 +409,7 @@ class Scheduler:
     def stop(self):
         """停止调度器"""
         self._running = False
+        self._cancel_daily_job()
 
 
 def run_with_schedule(
@@ -353,6 +419,8 @@ def run_with_schedule(
     background_tasks: Optional[List[Dict[str, Any]]] = None,
     schedule_time_provider: Optional[Callable[[], str]] = None,
     extra_daily_jobs: Optional[List[Dict[str, Any]]] = None,
+    schedule_times: Optional[Sequence[str]] = None,
+    schedule_times_provider: Optional[Callable[[], Union[Sequence[str], str]]] = None,
 ):
     """
     便捷函数：使用定时调度运行任务
@@ -366,14 +434,21 @@ def run_with_schedule(
             和 `run_immediately`。`interval_seconds` 单位为秒。
         schedule_time_provider: 可选的时间提供器；调度器每轮检查前会读取，
             当返回值变化时自动重建 daily job。
+        schedule_times: 可选的多个每日执行时间，格式均为 "HH:MM"。
+        schedule_times_provider: 可选的多个执行时间提供器，运行中变化时自动重建主 daily job。
         extra_daily_jobs: 额外的每日定时 job 列表，每项需包含
             `schedule_time`（HH:MM）和 `task`，可选 `name`。
             典型用途：美股收盘后自动触发分析。
     """
-    scheduler = Scheduler(
-        schedule_time=schedule_time,
-        schedule_time_provider=schedule_time_provider,
-    )
+    scheduler_kwargs: Dict[str, Any] = {
+        "schedule_time": schedule_time,
+        "schedule_time_provider": schedule_time_provider,
+    }
+    if schedule_times is not None:
+        scheduler_kwargs["schedule_times"] = schedule_times
+    if schedule_times_provider is not None:
+        scheduler_kwargs["schedule_times_provider"] = schedule_times_provider
+    scheduler = Scheduler(**scheduler_kwargs)
     for entry in background_tasks or []:
         scheduler.add_background_task(
             task=entry["task"],
