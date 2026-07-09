@@ -18,12 +18,31 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from src.agent.tools.registry import ToolParameter, ToolDefinition
+from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
 logger = logging.getLogger(__name__)
 
 FUTU_NEWS_SEARCH_URL = "https://ai-news-search.futunn.com/news_search"
 FUTU_USER_AGENT = "daily-stock-analysis-agent/1.0"
+
+_NEWS_READ_POLICY = ToolPolicy.declared(
+    read_only=True,
+    side_effects=["network_read", "db_write_cache"],
+    permissions=["news:read"],
+    scope_dimensions=["stock"],
+)
+_INTEL_READ_POLICY = ToolPolicy.declared(
+    read_only=True,
+    side_effects=["network_read", "db_write_cache"],
+    permissions=["intel:read"],
+    scope_dimensions=["stock"],
+)
+_RESEARCH_READ_POLICY = ToolPolicy.declared(
+    read_only=True,
+    side_effects=["network_read"],
+    permissions=["research:read"],
+    scope_dimensions=["stock"],
+)
 
 
 def _get_db():
@@ -188,6 +207,7 @@ search_stock_news_tool = ToolDefinition(
     ],
     handler=_handle_search_stock_news,
     category="search",
+    policy=_NEWS_READ_POLICY,
 )
 
 
@@ -262,6 +282,7 @@ search_comprehensive_intel_tool = ToolDefinition(
     ],
     handler=_handle_search_comprehensive_intel,
     category="search",
+    policy=_INTEL_READ_POLICY,
 )
 
 
@@ -381,6 +402,7 @@ search_research_reports_tool = ToolDefinition(
     ],
     handler=_handle_search_research_reports,
     category="search",
+    policy=_RESEARCH_READ_POLICY,
 )
 
 

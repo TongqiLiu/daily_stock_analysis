@@ -7,9 +7,16 @@
 import logging
 from typing import Dict, Any, Optional
 
-from src.agent.tools.registry import ToolDefinition, ToolParameter
+from src.agent.tools.registry import ToolDefinition, ToolParameter, ToolPolicy
 
 logger = logging.getLogger(__name__)
+
+_VALUE_ANALYSIS_READ_POLICY = ToolPolicy.declared(
+    read_only=True,
+    side_effects=["network_read", "db_read"],
+    permissions=["analysis:read"],
+    scope_dimensions=["stock"],
+)
 
 
 async def _handle_run_value_analysis(
@@ -275,6 +282,7 @@ run_value_analysis_tool = ToolDefinition(
     ],
     handler=_handle_run_value_analysis,
     category="analysis",
+    policy=_VALUE_ANALYSIS_READ_POLICY,
 )
 
 
