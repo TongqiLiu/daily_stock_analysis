@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stage Fair Value Model"
+  short_description: "生成阶段判断、熊基牛合理价格带和阶段倍数敏感性。"
+  default_prompt: "Use $stage-fair-value-model to produce a fresh stage plus fair-value report for this stock. 不要读取 data/valuation-snapshots 里的旧快照；必须联网获取当前价格、最新财报/指引、分析师目标价后重新建带时间戳的 snapshot。"

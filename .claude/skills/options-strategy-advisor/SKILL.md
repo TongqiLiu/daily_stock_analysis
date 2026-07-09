@@ -21,6 +21,15 @@ This skill provides comprehensive options strategy analysis and education using 
 - User Input: Implied volatility (IV), risk-free rate
 - Theoretical Models: Black-Scholes for pricing and Greeks
 
+## Cross-Skill Risk Checks (required before recommending trades)
+
+Before simulating or recommending **cash-secured puts / premium selling / wheel** entries, read and apply `options-income-scanner`:
+
+1. **「单边下跌趋势（收租硬性风控）」** — flag `downtrend`, do not sell puts on high IV alone in downtrends.
+2. **「关键事件节点（收租硬性风控）」** — check earnings / FOMC / CPI / NFP / ex-div in the hold window; routine 收租 → `event risk: blocked` means **Skip** unless user explicitly wants an event trade.
+
+- Prefer low–moderate IV quality names for routine 收租; high-beta names (e.g. MSTR) in downtrends → skip new short puts or hand off to `options-portfolio-risk-manager`.
+
 ## Prerequisites
 
 **Required:**

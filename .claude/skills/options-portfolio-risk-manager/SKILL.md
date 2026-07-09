@@ -20,7 +20,8 @@ This skill is unrelated to `src/services/portfolio_risk_service.py`, which is a 
 Unless the user gives different rules, use this conservative income policy:
 
 - Prefer not to be assigned.
-- Prefer underlyings in a range-bound or constructive trend, not a one-way downtrend.
+- Prefer underlyings in a range-bound or constructive trend, not a one-way downtrend. **Trend check is mandatory** — see `options-income-scanner` →「单边下跌趋势（收租硬性风控）」.
+- **Event calendar check is mandatory** before new short options — see `options-income-scanner` →「关键事件节点（收租硬性风控）」; roll or close positions that will cross earnings / FOMC / major macro unless user accepts event risk.
 - Prefer fundamentally sound, liquid companies where owning 100 shares at breakeven is acceptable.
 - Treat assignment as a wheel/covered-call or long-hold plan only when quality and trend support it.
 - Treat weekly options as high-gamma risk; reduce size and roll early when short-put delta rises.
