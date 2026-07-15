@@ -519,8 +519,8 @@ describe('ChatPage', () => {
     fireEvent.click(templateButton);
 
     const input = screen.getByPlaceholderText(/分析 600519/) as HTMLTextAreaElement;
-    expect(input.value).toContain('请分析 {股票代码} 的当前交易价值');
-    expect(input.value).toContain('激进、稳健、保守三套交易方案');
+    expect(input.value).toContain('请用多策略联合框架快速分析 {股票代码} 的当前交易价值');
+    expect(input.value).toContain('输出控制在 900 字以内');
     expect(screen.getByRole('checkbox', { name: '⚡ 多策略联合' })).toBeChecked();
     expect(mockStartStream).not.toHaveBeenCalled();
   });
