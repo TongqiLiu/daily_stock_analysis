@@ -256,6 +256,15 @@ Hermes 是保留渠道名，只支持本机 loopback `/v1` OpenAI-compatible gen
 - 如果当前环境没有任何有效 Agent 模型链路，问股页面会继续按失败语义返回，并直接展示后端真实配置诊断；补齐任一有效模型来源后即可恢复，无需额外执行配置迁移脚本。
 - 推荐的新配置方式仍然是显式设置 `LITELLM_MODEL` / `AGENT_LITELLM_MODEL` 或使用 `LLM_CHANNELS`；legacy provider keys 目前保留为兼容回退路径，方便旧 `.env`、本地 macOS 开发环境和历史部署平滑继续运行。
 
+问股 Agent 对明确的连接失败、TLS 断开和请求超时支持跨模型链指数退避重试。默认额外重试 2 轮，等待 2 秒、4 秒；可按网络稳定性调整：
+
+```env
+AGENT_LLM_TRANSIENT_RETRIES=2
+AGENT_LLM_RETRY_BASE_DELAY_S=2
+```
+
+每轮只重试上一轮发生传输异常的模型，并继续受 `AGENT_ORCHESTRATOR_TIMEOUT_S` 剩余预算约束。鉴权失败、余额不足、限流、参数错误和上下文超限不会进入这条传输重试链。若主模型和 fallback 共用同一个 OpenAI-compatible Base URL，它们仍属于同一网络故障域；要避免端点整体不可用，需再配置一个不同服务商/不同 Base URL 的 fallback。
+
 ### 问股可见对话上下文压缩
 
 默认情况下，问股仍按历史行为只注入最近 20 条可见对话。需要长会话省 token 时，可开启：

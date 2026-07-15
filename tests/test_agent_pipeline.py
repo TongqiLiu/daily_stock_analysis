@@ -2583,6 +2583,83 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(timeouts[1], ("anthropic/claude-3-5-sonnet-20241022", 3.0))
 
     @patch("src.agent.llm_adapter.Router")
+    def test_llm_adapter_retries_only_transport_failures_with_backoff(self, _mock_router):
+        """A brief shared gateway failure should retry the failed model chain."""
+        mock_cfg = MagicMock()
+        mock_cfg.agent_litellm_model = "gpt-4o-mini"
+        mock_cfg.litellm_model = None
+        mock_cfg.litellm_fallback_models = ["openai/gpt-4.1-mini"]
+        mock_cfg.llm_model_list = []
+        mock_cfg.llm_temperature = 0.7
+        mock_cfg.gemini_api_keys = []
+        mock_cfg.anthropic_api_keys = []
+        mock_cfg.openai_api_keys = []
+        mock_cfg.deepseek_api_keys = []
+        mock_cfg.openai_base_url = None
+        mock_cfg.agent_llm_transient_retries = 2
+        mock_cfg.agent_llm_retry_base_delay_s = 0.25
+
+        from src.agent.llm_adapter import LLMToolAdapter
+        adapter = LLMToolAdapter(config=mock_cfg)
+
+        class FakeAPIConnectionError(Exception):
+            pass
+
+        calls = []
+
+        def fake_call(_messages, _tools, model, **_kwargs):
+            calls.append(model)
+            if len(calls) <= 2:
+                raise FakeAPIConnectionError("Connection error")
+            return MagicMock(content="recovered")
+
+        adapter._call_litellm_model = MagicMock(side_effect=fake_call)
+
+        with patch("src.agent.llm_adapter.time.sleep") as mock_sleep:
+            result = adapter.call_completion(
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[],
+            )
+
+        self.assertEqual(result.content, "recovered")
+        self.assertEqual(
+            calls,
+            ["openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-4o-mini"],
+        )
+        mock_sleep.assert_called_once_with(0.25)
+
+    @patch("src.agent.llm_adapter.Router")
+    def test_llm_adapter_does_not_transport_retry_non_network_errors(self, _mock_router):
+        """Provider and request errors should keep the existing one-pass fallback semantics."""
+        mock_cfg = MagicMock()
+        mock_cfg.agent_litellm_model = "gpt-4o-mini"
+        mock_cfg.litellm_model = None
+        mock_cfg.litellm_fallback_models = ["openai/gpt-4.1-mini"]
+        mock_cfg.llm_model_list = []
+        mock_cfg.llm_temperature = 0.7
+        mock_cfg.gemini_api_keys = []
+        mock_cfg.anthropic_api_keys = []
+        mock_cfg.openai_api_keys = []
+        mock_cfg.deepseek_api_keys = []
+        mock_cfg.openai_base_url = None
+        mock_cfg.agent_llm_transient_retries = 4
+        mock_cfg.agent_llm_retry_base_delay_s = 0.25
+
+        from src.agent.llm_adapter import LLMToolAdapter
+        adapter = LLMToolAdapter(config=mock_cfg)
+        adapter._call_litellm_model = MagicMock(side_effect=RuntimeError("model disabled"))
+
+        with patch("src.agent.llm_adapter.time.sleep") as mock_sleep:
+            result = adapter.call_completion(
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[],
+            )
+
+        self.assertEqual(result.provider, "error")
+        self.assertEqual(adapter._call_litellm_model.call_count, 2)
+        mock_sleep.assert_not_called()
+
+    @patch("src.agent.llm_adapter.Router")
     def test_llm_adapter_rate_limit_backoff_is_bounded_by_remaining_timeout(self, _mock_router):
         """Rate-limit backoff should sleep, but never longer than the remaining timeout budget."""
         mock_cfg = MagicMock()

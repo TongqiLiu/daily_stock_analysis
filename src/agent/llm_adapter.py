@@ -67,6 +67,37 @@ def _resolve_litellm_exception(name: str) -> type[BaseException]:
     return _FallbackLiteLLMError
 
 
+_TRANSIENT_TRANSPORT_ERROR_MARKERS = (
+    "connection error",
+    "connection aborted",
+    "connection refused",
+    "connection reset",
+    "connect timeout",
+    "network is unreachable",
+    "nodename nor servname",
+    "peer closed connection",
+    "remote protocol error",
+    "request timed out",
+    "server disconnected",
+    "temporary failure in name resolution",
+    "tls handshake",
+)
+
+
+def _is_transient_transport_error(exc: BaseException) -> bool:
+    """Return whether a failed completion is safe to retry as a transport blip."""
+    transport_types = tuple(
+        dict.fromkeys(
+            _resolve_litellm_exception(name)
+            for name in ("APIConnectionError", "APITimeoutError", "Timeout")
+        )
+    )
+    if isinstance(exc, transport_types):
+        return True
+    error_text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in error_text for marker in _TRANSIENT_TRANSPORT_ERROR_MARKERS)
+
+
 # ============================================================
 # Unified response types
 # ============================================================
@@ -612,61 +643,112 @@ class LLMToolAdapter:
             logger.error(error_msg)
             return LLMResponse(content=error_msg, provider="error")
         started_at = time.time()
-        providers = [self._get_model_provider(model) for model in models_to_try]
-
         last_error = None
         hit_rate_limit = False
-        for idx, model in enumerate(models_to_try):
-            remaining_timeout = timeout
+        pending_models = list(models_to_try)
+        retry_limit = self._get_transient_retry_count()
+        retry_round = 0
+
+        while pending_models:
+            providers = [self._get_model_provider(model) for model in pending_models]
+            transient_failures: List[str] = []
+            for idx, model in enumerate(pending_models):
+                remaining_timeout = timeout
+                if timeout is not None and timeout > 0:
+                    remaining_timeout = max(0.0, float(timeout) - (time.time() - started_at))
+                    if remaining_timeout <= 0:
+                        last_error = TimeoutError(
+                            f"LLM completion timed out before trying fallback model {model}"
+                        )
+                        break
+                try:
+                    return self._call_litellm_model(
+                        messages,
+                        tools or [],
+                        model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout=remaining_timeout,
+                    )
+                except Exception as e:
+                    if isinstance(e, _resolve_litellm_exception("RateLimitError")):
+                        logger.warning("Agent LLM rate-limited on %s: %s", model, e)
+                        last_error = e
+                        hit_rate_limit = True
+
+                        # Avoid blind backoff across different providers; cross-provider
+                        # fallback usually means different accounts/rate-limit buckets.
+                        should_backoff = (
+                            idx + 1 < len(pending_models)
+                            and providers[idx] == providers[idx + 1]
+                        )
+                        if should_backoff:
+                            backoff_sleep = min(2.0, (time.time() - started_at) * 0.1 + 0.5)
+                            if timeout is not None and timeout > 0:
+                                remaining_timeout = max(0.0, float(timeout) - (time.time() - started_at))
+                                if remaining_timeout > 0:
+                                    time.sleep(min(backoff_sleep, remaining_timeout))
+                            else:
+                                time.sleep(backoff_sleep)
+                        continue
+                    if isinstance(e, _resolve_litellm_exception("ContextWindowExceededError")):
+                        logger.warning("Agent LLM context window exceeded on %s: %s", model, e)
+                        last_error = e
+                        continue
+                    logger.warning("Agent LLM call failed with %s: %s", model, e)
+                    last_error = e
+                    if _is_transient_transport_error(e):
+                        transient_failures.append(model)
+
+            if not transient_failures or retry_round >= retry_limit:
+                break
+
+            retry_delay = self._get_transient_retry_delay(retry_round)
             if timeout is not None and timeout > 0:
                 remaining_timeout = max(0.0, float(timeout) - (time.time() - started_at))
-                if remaining_timeout <= 0:
-                    last_error = TimeoutError(
-                        f"LLM completion timed out before trying fallback model {model}"
+                if remaining_timeout <= retry_delay:
+                    logger.warning(
+                        "Agent LLM transport retry skipped: remaining timeout %.2fs <= backoff %.2fs",
+                        remaining_timeout,
+                        retry_delay,
                     )
                     break
-            try:
-                return self._call_litellm_model(
-                    messages,
-                    tools or [],
-                    model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=remaining_timeout,
-                )
-            except Exception as e:
-                if isinstance(e, _resolve_litellm_exception("RateLimitError")):
-                    logger.warning("Agent LLM rate-limited on %s: %s", model, e)
-                    last_error = e
-                    hit_rate_limit = True
-
-                    # Avoid blind backoff across different providers; cross-provider
-                    # fallback usually means different accounts/rate-limit buckets.
-                    should_backoff = (
-                        idx + 1 < len(models_to_try)
-                        and providers[idx] == providers[idx + 1]
-                    )
-                    if should_backoff:
-                        backoff_sleep = min(2.0, (time.time() - started_at) * 0.1 + 0.5)
-                        if timeout is not None and timeout > 0:
-                            remaining_timeout = max(0.0, float(timeout) - (time.time() - started_at))
-                            if remaining_timeout > 0:
-                                time.sleep(min(backoff_sleep, remaining_timeout))
-                        else:
-                            time.sleep(backoff_sleep)
-                    continue
-                if isinstance(e, _resolve_litellm_exception("ContextWindowExceededError")):
-                    logger.warning("Agent LLM context window exceeded on %s: %s", model, e)
-                    last_error = e
-                    continue
-                logger.warning("Agent LLM call failed with %s: %s", model, e)
-                last_error = e
-                continue
+            retry_round += 1
+            logger.warning(
+                "Agent LLM transport failure; retrying %s in %.2fs (round %d/%d)",
+                transient_failures,
+                retry_delay,
+                retry_round,
+                retry_limit,
+            )
+            if retry_delay > 0:
+                time.sleep(retry_delay)
+            pending_models = transient_failures
 
         suffix = " (rate-limit encountered during fallback)" if hit_rate_limit else ""
         error_msg = f"All LLM models failed{suffix}. Last error: {last_error}"
         logger.error(error_msg)
         return LLMResponse(content=error_msg, provider="error")
+
+    def _get_transient_retry_count(self) -> int:
+        raw_value = getattr(self._config, "agent_llm_transient_retries", 2)
+        if not isinstance(raw_value, (int, float, str)):
+            return 2
+        try:
+            return min(5, max(0, int(raw_value)))
+        except (TypeError, ValueError):
+            return 2
+
+    def _get_transient_retry_delay(self, retry_round: int) -> float:
+        raw_value = getattr(self._config, "agent_llm_retry_base_delay_s", 2.0)
+        if not isinstance(raw_value, (int, float, str)):
+            base_delay = 2.0
+        else:
+            try:
+                base_delay = float(raw_value)
+            except (TypeError, ValueError):
+                base_delay = 2.0
+        return min(30.0, max(0.0, base_delay) * (2 ** retry_round))
 
     @staticmethod
     def _get_model_provider(model: str) -> str:

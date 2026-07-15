@@ -804,6 +804,8 @@ class Config:
     agent_arch: str = "single"     # Agent architecture: 'single' (legacy) or 'multi' (orchestrator)
     agent_orchestrator_mode: str = "standard"  # Orchestrator mode: quick/standard/full/specialist
     agent_orchestrator_timeout_s: int = 900  # Cooperative timeout budget for the whole multi-agent pipeline
+    agent_llm_transient_retries: int = 2  # Retry full model chain after transport-only failures
+    agent_llm_retry_base_delay_s: float = 2.0  # Exponential backoff base for transport retries
     agent_technical_agent_timeout_s: float = 0
     agent_intel_agent_timeout_s: float = 0
     agent_risk_agent_timeout_s: float = 0
@@ -1724,6 +1726,20 @@ class Config:
                 900,
                 field_name='AGENT_ORCHESTRATOR_TIMEOUT_S',
                 minimum=0,
+            ),
+            agent_llm_transient_retries=parse_env_int(
+                os.getenv('AGENT_LLM_TRANSIENT_RETRIES'),
+                2,
+                field_name='AGENT_LLM_TRANSIENT_RETRIES',
+                minimum=0,
+                maximum=5,
+            ),
+            agent_llm_retry_base_delay_s=parse_env_float(
+                os.getenv('AGENT_LLM_RETRY_BASE_DELAY_S'),
+                2.0,
+                field_name='AGENT_LLM_RETRY_BASE_DELAY_S',
+                minimum=0.0,
+                maximum=30.0,
             ),
             agent_technical_agent_timeout_s=parse_env_float(
                 os.getenv('AGENT_TECHNICAL_AGENT_TIMEOUT_S'), 0,
