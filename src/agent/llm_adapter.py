@@ -98,6 +98,29 @@ def _is_transient_transport_error(exc: BaseException) -> bool:
     return any(marker in error_text for marker in _TRANSIENT_TRANSPORT_ERROR_MARKERS)
 
 
+def _is_cancel_requested(cancel_event: Optional[Any]) -> bool:
+    if cancel_event is None:
+        return False
+    try:
+        return bool(cancel_event.is_set())
+    except Exception:
+        return False
+
+
+def _sleep_interruptibly(seconds: float, cancel_event: Optional[Any]) -> bool:
+    """Sleep for retry backoff, returning False when cancellation wins."""
+    if seconds <= 0:
+        return not _is_cancel_requested(cancel_event)
+    if cancel_event is None:
+        time.sleep(seconds)
+        return True
+    try:
+        return not bool(cancel_event.wait(seconds))
+    except Exception:
+        time.sleep(seconds)
+        return not _is_cancel_requested(cancel_event)
+
+
 # ============================================================
 # Unified response types
 # ============================================================
@@ -508,7 +531,9 @@ class LLMToolAdapter:
             self._router = Router(
                 model_list=model_list,
                 routing_strategy="simple-shuffle",
-                num_retries=2,
+                # The adapter below owns model fallback and transport retry.
+                # Router retries here would multiply the same failed request.
+                num_retries=0,
             )
             unique_models = list(dict.fromkeys(
                 e['litellm_params']['model'] for e in model_list
@@ -546,7 +571,7 @@ class LLMToolAdapter:
             self._router = Router(
                 model_list=legacy_model_list,
                 routing_strategy="simple-shuffle",
-                num_retries=2,
+                num_retries=0,
             )
             logger.info(
                 f"Agent LLM: Legacy Router initialized with {len(keys)} keys "
@@ -581,6 +606,7 @@ class LLMToolAdapter:
         tools: List[dict],
         provider: Optional[str] = None,
         timeout: Optional[float] = None,
+        cancel_event: Optional[Any] = None,
     ) -> LLMResponse:
         """Send messages + tool declarations to LLM, return normalized response.
 
@@ -593,7 +619,13 @@ class LLMToolAdapter:
         Returns:
             LLMResponse with either content (final answer) or tool_calls.
         """
-        return self.call_completion(messages, tools=tools, provider=provider, timeout=timeout)
+        return self.call_completion(
+            messages,
+            tools=tools,
+            provider=provider,
+            timeout=timeout,
+            cancel_event=cancel_event,
+        )
 
     def call_text(
         self,
@@ -603,6 +635,7 @@ class LLMToolAdapter:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
+        cancel_event: Optional[Any] = None,
     ) -> LLMResponse:
         """Send a text-only completion through the shared routing stack."""
         return self.call_completion(
@@ -612,6 +645,7 @@ class LLMToolAdapter:
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
+            cancel_event=cancel_event,
         )
 
     def call_completion(
@@ -623,8 +657,12 @@ class LLMToolAdapter:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
+        cancel_event: Optional[Any] = None,
     ) -> LLMResponse:
         """Shared completion path for both tool and text-only calls."""
+        if _is_cancel_requested(cancel_event):
+            return LLMResponse(content="Agent execution cancelled", provider="error")
+
         config = self._config
         if self._backend_error is not None:
             error_msg = (
@@ -653,6 +691,8 @@ class LLMToolAdapter:
             providers = [self._get_model_provider(model) for model in pending_models]
             transient_failures: List[str] = []
             for idx, model in enumerate(pending_models):
+                if _is_cancel_requested(cancel_event):
+                    return LLMResponse(content="Agent execution cancelled", provider="error")
                 remaining_timeout = timeout
                 if timeout is not None and timeout > 0:
                     remaining_timeout = max(0.0, float(timeout) - (time.time() - started_at))
@@ -687,9 +727,20 @@ class LLMToolAdapter:
                             if timeout is not None and timeout > 0:
                                 remaining_timeout = max(0.0, float(timeout) - (time.time() - started_at))
                                 if remaining_timeout > 0:
-                                    time.sleep(min(backoff_sleep, remaining_timeout))
+                                    if not _sleep_interruptibly(
+                                        min(backoff_sleep, remaining_timeout),
+                                        cancel_event,
+                                    ):
+                                        return LLMResponse(
+                                            content="Agent execution cancelled",
+                                            provider="error",
+                                        )
                             else:
-                                time.sleep(backoff_sleep)
+                                if not _sleep_interruptibly(backoff_sleep, cancel_event):
+                                    return LLMResponse(
+                                        content="Agent execution cancelled",
+                                        provider="error",
+                                    )
                         continue
                     if isinstance(e, _resolve_litellm_exception("ContextWindowExceededError")):
                         logger.warning("Agent LLM context window exceeded on %s: %s", model, e)
@@ -722,7 +773,8 @@ class LLMToolAdapter:
                 retry_limit,
             )
             if retry_delay > 0:
-                time.sleep(retry_delay)
+                if not _sleep_interruptibly(retry_delay, cancel_event):
+                    return LLMResponse(content="Agent execution cancelled", provider="error")
             pending_models = transient_failures
 
         suffix = " (rate-limit encountered during fallback)" if hit_rate_limit else ""
@@ -777,6 +829,9 @@ class LLMToolAdapter:
         call_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": openai_messages,
+            # Keep retry ownership in this adapter so Router/SDK retry loops do
+            # not multiply configured cross-model retry rounds.
+            "max_retries": 0,
         }
         if max_tokens is not None:
             call_kwargs["max_tokens"] = max_tokens

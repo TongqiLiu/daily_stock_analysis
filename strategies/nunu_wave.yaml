@@ -1,5 +1,5 @@
 # Nunu Wave Strategy / nunu波浪
-# Trigger: 问股策略栏选择「nunu波浪」，或用户明确提到“nunu波浪/引导楔形/终结楔形/斐波那契序列日/共振日/截尾五浪/大型平台/失效位/快速四问/WXYXXZ”。
+# Trigger: 用户明确提到“nunu波浪/引导楔形/终结楔形/斐波那契序列日/共振日/截尾五浪/大型平台/失效位/快速四问/WXYXXZ”。
 
 name: nunu_wave
 display_name: nunu波浪
@@ -14,7 +14,7 @@ required_tools:
   - get_volume_analysis
 aliases: [nunu波浪, nunu, 波浪进阶, 楔形判别, 终结楔形, 大级别终结楔形, 第五浪, 五浪末端, 截尾五浪, 失败五浪, 下跌推动浪, 跳空高开, 小级别2浪, 大二浪, 浅二浪, 充分调整, 大型平台, 超大型平台, 大型楔形, 失效位, 确认位, 可证伪, 前高突破, 关键低点, 放量扩张, 缩量硬拉, 快速四问, 斐波那契序列日, 序列日, 变盘日, 共振日, WXYXXZ, 双锯齿]
 default_priority: 81
-user_invocable: true
+user_invocable: false
 default_active: false
 default_router: false
 market_regimes: [volatile, trending_down, trending_up]

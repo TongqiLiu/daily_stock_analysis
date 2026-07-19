@@ -13,7 +13,7 @@
 ## 2. 当前能力基线（简版）
 
 - 覆盖市场：A 股 / 港股 / 美股
-- 策略层：28 个 Skills 定义 / 27 个用户可见（含五维分析、Serenity 投研、多策略联合、价值投资、情绪、趋势）
+- 策略层：28 个 Skills 定义 / 26 个用户可见（含五维分析、Serenity 投研、多策略联合、价值投资、情绪、趋势）
 - 工具层：23 个 Agent Tools（数据/分析/搜索/市场/回测）
 - 估值能力：`get_valuation_percentile` 已上线（A 股完整，美股 partial，港股 unavailable）
 - 市场分析：大盘复盘 + 行业排行 + 美股流动性 + conviction 面板

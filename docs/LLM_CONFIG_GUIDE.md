@@ -263,7 +263,9 @@ AGENT_LLM_TRANSIENT_RETRIES=2
 AGENT_LLM_RETRY_BASE_DELAY_S=2
 ```
 
-每轮只重试上一轮发生传输异常的模型，并继续受 `AGENT_ORCHESTRATOR_TIMEOUT_S` 剩余预算约束。鉴权失败、余额不足、限流、参数错误和上下文超限不会进入这条传输重试链。若主模型和 fallback 共用同一个 OpenAI-compatible Base URL，它们仍属于同一网络故障域；要避免端点整体不可用，需再配置一个不同服务商/不同 Base URL 的 fallback。
+每轮只重试上一轮发生传输异常的模型，并继续受 `AGENT_ORCHESTRATOR_TIMEOUT_S` 剩余预算约束。鉴权失败、余额不足、限流、参数错误和上下文超限不会进入这条传输重试链。Agent 适配层是这条链路的唯一重试所有者，LiteLLM Router 和底层 SDK 的自动重试会关闭，避免同一次故障被多层重复放大。若主模型和 fallback 共用同一个 OpenAI-compatible Base URL，它们仍属于同一网络故障域，建议将额外轮数设为 `1`；要避免端点整体不可用，需再配置一个不同服务商/不同 Base URL 的 fallback。
+
+`POST /api/v1/agent/chat/stream` 在模型长时间生成但没有业务进度事件时会发送 SSE heartbeat 注释，不再用独立的 300 秒静默计时器提前返回“分析超时”；实际停止边界统一由 Agent 总预算和子 Agent 预算决定。浏览器关闭、页面切换或连接中断后，服务端会向编排器、子 Agent 和后续模型 fallback 传播协作取消信号，当前阻塞请求到达自身网络返回点后不再继续后台重试，也不会写入一条伪造的助手失败回复。
 
 ### 问股可见对话上下文压缩
 

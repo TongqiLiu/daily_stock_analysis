@@ -236,10 +236,14 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
 **第三阶段 · 情报搜索**（等前两阶段完成后执行）
 - `search_stock_news` 搜索最新资讯、减持、业绩预告等风险信号
 
-**第四阶段 · 生成报告**（所有数据就绪后，输出完整决策仪表盘 JSON）
+**第四阶段 · 技能专项数据**（等通用数据返回后执行）
+- 若下方存在“激活技能执行计划”，逐项完成其中尚未取得的专项工具和证据；不得因为通用流程已完成就提前生成报告
+
+**第五阶段 · 生成报告**（通用数据和全部技能专项数据就绪后，输出完整决策仪表盘 JSON）
 
 > ⚠️ 每阶段的工具调用必须完整返回结果后，才能进入下一阶段。禁止将不同阶段的工具合并到同一次调用中。
 {default_skill_policy_section}
+{skill_execution_plan_section}
 
 ## 规则
 
@@ -249,6 +253,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
 4. **输出格式** — 最终响应必须是有效的决策仪表盘 JSON。
 5. **风险优先** — 必须排查风险（股东减持、业绩预警、监管问题）。
 6. **工具失败处理** — 记录失败原因，使用已有数据继续分析，不重复调用失败工具。
+7. **多技能完整性** — 激活多个技能时，决策仪表盘的人类可读字段必须逐一覆盖执行计划中的每个技能，不得只保留综合结论或第一个技能。
 
 {skills_section}
 
@@ -418,7 +423,7 @@ CHAT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数�
 
 ## 分析工作流程（必须严格按阶段执行，禁止跳步或合并阶段）
 
-当用户询问某支股票时，必须按以下四个阶段顺序调用工具，每阶段等工具结果全部返回后再进入下一阶段：
+当用户询问某支股票时，必须按以下五个阶段顺序调用工具，每阶段等工具结果全部返回后再进入下一阶段：
 
 **第一阶段 · 行情与K线**（必须先执行）
 - 调用 `get_realtime_quote` 获取实时行情和当前价格
@@ -431,11 +436,15 @@ CHAT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数�
 **第三阶段 · 情报搜索**（等前两阶段完成后再执行）
 - 调用 `search_stock_news` 搜索最新新闻公告、减持、业绩预告等风险信号
 
-**第四阶段 · 综合分析**（所有工具数据就绪后生成回答）
+**第四阶段 · 技能专项数据**（等通用数据返回后执行）
+- 若下方存在“激活技能执行计划”，逐项完成其中尚未取得的专项工具和证据；不得因为通用流程已完成就提前回答
+
+**第五阶段 · 综合分析**（通用数据和全部技能专项数据就绪后生成回答）
 - 基于上述真实数据，结合激活技能进行综合研判，输出投资建议
 
 > ⚠️ 禁止将不同阶段的工具合并到同一次调用中（例如禁止在第一次调用中同时请求行情、技术指标和新闻）。
 {default_skill_policy_section}
+{skill_execution_plan_section}
 
 ## 规则
 
@@ -444,6 +453,8 @@ CHAT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数�
 3. **自由对话** — 根据用户的问题，自由组织语言回答，不需要输出 JSON。
 4. **风险优先** — 必须排查风险（股东减持、业绩预警、监管问题）。
 5. **工具失败处理** — 记录失败原因，使用已有数据继续分析，不重复调用失败工具。
+6. **多技能完整性** — 激活多个技能时，最终回答必须按执行计划顺序为每个技能建立同名二级章节，再给出“综合结论”；不得用综合结论替代任何专项章节。
+7. **当前请求优先** — 本轮最新用户消息决定分析范围；历史轮次中未在本轮重申的篇幅、工具或“不要分析某项”等限制仅作上下文，不得覆盖本轮激活技能。
 
 {skills_section}
 {language_section}
@@ -509,6 +520,7 @@ class AgentExecutor:
         use_legacy_default_prompt: bool = False,
         max_steps: int = 10,
         timeout_seconds: Optional[float] = None,
+        skill_execution_plan: str = "",
     ):
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
@@ -517,6 +529,7 @@ class AgentExecutor:
         self.use_legacy_default_prompt = use_legacy_default_prompt
         self.max_steps = max_steps
         self.timeout_seconds = timeout_seconds
+        self.skill_execution_plan = skill_execution_plan
 
     def run(self, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
         """Execute the agent loop for a given task.
@@ -535,6 +548,9 @@ class AgentExecutor:
         default_skill_policy_section = ""
         if self.default_skill_policy:
             default_skill_policy_section = f"\n{self.default_skill_policy}\n"
+        skill_execution_plan_section = ""
+        if self.skill_execution_plan:
+            skill_execution_plan_section = f"\n{self.skill_execution_plan}\n"
         report_language = normalize_report_language((context or {}).get("report_language", "zh"))
         stock_code = (context or {}).get("stock_code", "")
         market_role = get_market_role(stock_code, report_language)
@@ -548,6 +564,7 @@ class AgentExecutor:
             market_role=market_role,
             market_guidelines=market_guidelines,
             default_skill_policy_section=default_skill_policy_section,
+            skill_execution_plan_section=skill_execution_plan_section,
             skills_section=skills_section,
             language_section=_build_language_section(report_language),
         )
@@ -563,7 +580,14 @@ class AgentExecutor:
 
         return self._run_loop(messages, tool_decls, parse_dashboard=True)
 
-    def chat(self, message: str, session_id: str, progress_callback: Optional[Callable] = None, context: Optional[Dict[str, Any]] = None) -> AgentResult:
+    def chat(
+        self,
+        message: str,
+        session_id: str,
+        progress_callback: Optional[Callable] = None,
+        context: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[Any] = None,
+    ) -> AgentResult:
         """Execute the agent loop for a free-form chat message.
 
         Args:
@@ -571,6 +595,7 @@ class AgentExecutor:
             session_id: The conversation session ID.
             progress_callback: Optional callback for streaming progress events.
             context: Optional context dict from previous analysis for data reuse.
+            cancel_event: Optional cooperative cancellation signal from SSE.
 
         Returns:
             AgentResult with the text response.
@@ -587,6 +612,9 @@ class AgentExecutor:
         default_skill_policy_section = ""
         if self.default_skill_policy:
             default_skill_policy_section = f"\n{self.default_skill_policy}\n"
+        skill_execution_plan_section = ""
+        if self.skill_execution_plan:
+            skill_execution_plan_section = f"\n{self.skill_execution_plan}\n"
         report_language = normalize_report_language((context or {}).get("report_language", "zh"))
         stock_code = (context or {}).get("stock_code", "")
         market_role = get_market_role(stock_code, report_language)
@@ -600,6 +628,7 @@ class AgentExecutor:
             market_role=market_role,
             market_guidelines=market_guidelines,
             default_skill_policy_section=default_skill_policy_section,
+            skill_execution_plan_section=skill_execution_plan_section,
             skills_section=skills_section,
             language_section=_build_language_section(report_language, chat_mode=True),
         )
@@ -661,16 +690,24 @@ class AgentExecutor:
         # Persist the user turn immediately so the session appears in history during processing
         user_message_id = conversation_manager.add_message(session_id, "user", message)
 
+        run_kwargs: Dict[str, Any] = {
+            "progress_callback": progress_callback,
+            "stock_scope": scope_resolution.stock_scope,
+        }
+        if cancel_event is not None:
+            run_kwargs["cancel_event"] = cancel_event
         result = self._run_loop(
             messages,
             tool_decls,
             parse_dashboard=False,
-            progress_callback=progress_callback,
-            stock_scope=scope_resolution.stock_scope,
+            **run_kwargs,
         )
 
         # Persist assistant reply (or error note) for context continuity
-        if result.success:
+        cancelled = bool(cancel_event is not None and cancel_event.is_set())
+        if cancelled:
+            logger.info("Skipping assistant persistence for cancelled session %s", session_id)
+        elif result.success:
             assistant_message_id = conversation_manager.add_message(session_id, "assistant", result.content)
             self._persist_provider_trace(
                 session_id=session_id,
@@ -767,6 +804,7 @@ class AgentExecutor:
         parse_dashboard: bool,
         progress_callback: Optional[Callable] = None,
         stock_scope: Optional[StockScope] = None,
+        cancel_event: Optional[Any] = None,
     ) -> AgentResult:
         """Delegate to the shared runner and adapt the result.
 
@@ -782,6 +820,7 @@ class AgentExecutor:
             progress_callback=progress_callback,
             max_wall_clock_seconds=self.timeout_seconds,
             stock_scope=stock_scope,
+            cancel_event=cancel_event,
         )
 
         model_str = loop_result.model

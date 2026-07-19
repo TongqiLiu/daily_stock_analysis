@@ -28,6 +28,7 @@ const {
   mockRemoveFromWatchlist,
   mockDownloadSession,
   mockFormatSessionAsMarkdown,
+  mockClipboardWriteText,
 } = vi.hoisted(() => ({
   mockGetSkills: vi.fn(),
   mockDeleteChatSession: vi.fn(),
@@ -39,6 +40,7 @@ const {
   mockRemoveFromWatchlist: vi.fn(),
   mockDownloadSession: vi.fn(),
   mockFormatSessionAsMarkdown: vi.fn(),
+  mockClipboardWriteText: vi.fn(),
 }));
 
 const mockLoadSessions = vi.fn();
@@ -141,6 +143,13 @@ beforeAll(() => {
     writable: true,
     value: vi.fn(),
   });
+
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: mockClipboardWriteText,
+    },
+  });
 });
 
 beforeEach(() => {
@@ -192,6 +201,7 @@ beforeEach(() => {
   });
   mockDownloadSession.mockImplementation(() => {});
   mockFormatSessionAsMarkdown.mockReturnValue('# exported session');
+  mockClipboardWriteText.mockResolvedValue(undefined);
 });
 
 describe('ChatPage', () => {
@@ -338,6 +348,29 @@ describe('ChatPage', () => {
     expect(screen.queryByRole('button', { name: '导出会话' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发送到已配置的通知机器人/邮箱' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '历史对话' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '复制当前对话' })).toBeDisabled();
+  });
+
+  it('copies the current conversation from the input toolbar', async () => {
+    mockStoreState.messages = [
+      { id: 'user-1', role: 'user', content: '请分析 600519' },
+      { id: 'assistant-1', role: 'assistant', content: '趋势偏强', skillName: '趋势分析' },
+    ];
+    mockFormatSessionAsMarkdown.mockReturnValue('# copied conversation');
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '复制当前对话' }));
+
+    await waitFor(() => {
+      expect(mockFormatSessionAsMarkdown).toHaveBeenCalledWith(mockStoreState.messages);
+      expect(mockClipboardWriteText).toHaveBeenCalledWith('# copied conversation');
+    });
+    expect(screen.getByRole('button', { name: '当前对话已复制' })).toBeInTheDocument();
   });
 
   it('exports the current session from the header action', async () => {
@@ -495,6 +528,79 @@ describe('ChatPage', () => {
 
     expect(await screen.findByRole('checkbox', { name: '⚡ 多策略联合' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: '趋势分析' })).not.toBeChecked();
+  });
+
+  it('replaces the default consensus skill when specialist frameworks are selected', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'multi_strategy_consensus', name: '⚡ 多策略联合', description: '联合评分' },
+        { id: 'serenity_research', name: 'Serenity投研', description: '买方投研' },
+        { id: 'value_investing', name: '💎 价值投资', description: '长期价值' },
+      ],
+      default_skill_id: 'multi_strategy_consensus',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    const consensus = await screen.findByRole('checkbox', { name: '⚡ 多策略联合' });
+    const serenity = screen.getByRole('checkbox', { name: 'Serenity投研' });
+    const value = screen.getByRole('checkbox', { name: '💎 价值投资' });
+    expect(consensus).toBeChecked();
+
+    fireEvent.click(serenity);
+    expect(consensus).not.toBeChecked();
+    expect(serenity).toBeChecked();
+
+    fireEvent.click(value);
+    expect(serenity).toBeChecked();
+    expect(value).toBeChecked();
+
+    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+      target: { value: '分析 NFLX' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => {
+      expect(mockStartStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: '分析 NFLX',
+          skills: ['serenity_research', 'value_investing'],
+        }),
+        expect.objectContaining({
+          skillNames: ['Serenity投研', '💎 价值投资'],
+        }),
+      );
+    });
+  });
+
+  it('makes the consensus meta-skill replace an existing specialist selection', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'serenity_research', name: 'Serenity投研', description: '买方投研' },
+        { id: 'value_investing', name: '💎 价值投资', description: '长期价值' },
+        { id: 'multi_strategy_consensus', name: '⚡ 多策略联合', description: '联合评分' },
+      ],
+      default_skill_id: 'serenity_research',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    const consensus = await screen.findByRole('checkbox', { name: '⚡ 多策略联合' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Serenity投研' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '💎 价值投资' }));
+    fireEvent.click(consensus);
+
+    expect(consensus).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Serenity投研' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '💎 价值投资' })).not.toBeChecked();
   });
 
   it('fills the chat input from a prompt template without sending immediately', async () => {

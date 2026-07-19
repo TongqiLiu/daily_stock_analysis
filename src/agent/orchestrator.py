@@ -222,6 +222,35 @@ class AgentOrchestrator:
             model=", ".join(stats.models_used),
         )
 
+    def _build_cancelled_result(
+        self,
+        stats: AgentRunStats,
+        all_tool_calls: List[Dict[str, Any]],
+        models_used: List[str],
+        elapsed_s: float,
+    ) -> OrchestratorResult:
+        stats.total_duration_s = round(elapsed_s, 2)
+        stats.models_used = list(dict.fromkeys(models_used))
+        return OrchestratorResult(
+            success=False,
+            content="",
+            error="Agent execution cancelled",
+            stats=stats,
+            total_steps=stats.total_stages,
+            total_tokens=stats.total_tokens,
+            tool_calls_log=all_tool_calls,
+            provider=stats.models_used[0] if stats.models_used else "",
+            model=", ".join(stats.models_used),
+        )
+
+    @staticmethod
+    def _is_cancel_requested(cancel_event: Optional[Any]) -> bool:
+        if cancel_event is None:
+            return False
+        try:
+            return bool(cancel_event.is_set())
+        except Exception:
+            return False
 
     def _prepare_agent(self, agent: Any) -> Any:
         """Apply orchestrator-level runtime settings to a child agent.
@@ -247,8 +276,8 @@ class AgentOrchestrator:
                 agent.max_steps = min(agent.max_steps, self.max_steps)
         return agent
 
-    def _callable_accepts_timeout_kwarg(self, func: Any) -> Optional[bool]:
-        """Return whether a callable accepts ``timeout_seconds`` when inspectable."""
+    def _callable_accepts_kwarg(self, func: Any, kwarg: str) -> Optional[bool]:
+        """Return whether a callable accepts ``kwarg`` when inspectable."""
         if not callable(func):
             return None
         try:
@@ -256,7 +285,7 @@ class AgentOrchestrator:
         except (TypeError, ValueError):
             return None
 
-        if "timeout_seconds" in signature.parameters:
+        if kwarg in signature.parameters:
             return True
         return any(
             param.kind is inspect.Parameter.VAR_KEYWORD
@@ -266,13 +295,26 @@ class AgentOrchestrator:
     def _agent_run_accepts_timeout(self, run_callable: Any) -> bool:
         """Best-effort compatibility check for legacy test doubles / custom agents."""
         side_effect = getattr(run_callable, "side_effect", None)
-        accepts_timeout = self._callable_accepts_timeout_kwarg(side_effect)
+        accepts_timeout = self._callable_accepts_kwarg(side_effect, "timeout_seconds")
         if accepts_timeout is not None:
             return accepts_timeout
 
-        accepts_timeout = self._callable_accepts_timeout_kwarg(run_callable)
+        accepts_timeout = self._callable_accepts_kwarg(run_callable, "timeout_seconds")
         if accepts_timeout is not None:
             return accepts_timeout
+
+        return True
+
+    def _agent_run_accepts_cancel_event(self, run_callable: Any) -> bool:
+        """Best-effort compatibility check for cooperative cancellation."""
+        side_effect = getattr(run_callable, "side_effect", None)
+        accepts_cancel = self._callable_accepts_kwarg(side_effect, "cancel_event")
+        if accepts_cancel is not None:
+            return accepts_cancel
+
+        accepts_cancel = self._callable_accepts_kwarg(run_callable, "cancel_event")
+        if accepts_cancel is not None:
+            return accepts_cancel
 
         return True
 
@@ -282,6 +324,7 @@ class AgentOrchestrator:
         ctx: AgentContext,
         progress_callback: Optional[Callable] = None,
         timeout_seconds: Optional[float] = None,
+        cancel_event: Optional[Any] = None,
     ) -> StageResult:
         """Run a stage agent while preserving compatibility with older call signatures."""
         # Clamp by per-agent limit when configured.
@@ -304,6 +347,8 @@ class AgentOrchestrator:
             and self._agent_run_accepts_timeout(agent.run)
         ):
             run_kwargs["timeout_seconds"] = timeout_seconds
+        if cancel_event is not None and self._agent_run_accepts_cancel_event(agent.run):
+            run_kwargs["cancel_event"] = cancel_event
         return agent.run(ctx, **run_kwargs)
 
     # -----------------------------------------------------------------
@@ -339,6 +384,7 @@ class AgentOrchestrator:
         session_id: str,
         progress_callback: Optional[Callable] = None,
         context: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[Any] = None,
     ) -> "AgentResult":
         """Run the pipeline in chat mode (free-form answer, no dashboard parse).
 
@@ -365,14 +411,18 @@ class AgentOrchestrator:
         # Persist user turn
         conversation_manager.add_message(session_id, "user", message)
 
-        orch_result = self._execute_pipeline(
-            ctx,
-            parse_dashboard=False,
-            progress_callback=progress_callback,
-        )
+        pipeline_kwargs: Dict[str, Any] = {
+            "parse_dashboard": False,
+            "progress_callback": progress_callback,
+        }
+        if cancel_event is not None:
+            pipeline_kwargs["cancel_event"] = cancel_event
+        orch_result = self._execute_pipeline(ctx, **pipeline_kwargs)
 
         # Persist assistant response
-        if orch_result.success:
+        if self._is_cancel_requested(cancel_event):
+            logger.info("Skipping assistant persistence for cancelled session %s", session_id)
+        elif orch_result.success:
             conversation_manager.add_message(session_id, "assistant", orch_result.content)
         else:
             conversation_manager.add_message(
@@ -401,6 +451,7 @@ class AgentOrchestrator:
         ctx: AgentContext,
         parse_dashboard: bool = True,
         progress_callback: Optional[Callable] = None,
+        cancel_event: Optional[Any] = None,
     ) -> OrchestratorResult:
         """Run the agent pipeline according to ``self.mode``."""
         stats = AgentRunStats()
@@ -423,6 +474,14 @@ class AgentOrchestrator:
         while index < len(agents):
             agent = agents[index]
             elapsed_s = time.time() - t0
+            if self._is_cancel_requested(cancel_event):
+                logger.info("[Orchestrator] pipeline cancelled before stage '%s'", agent.agent_name)
+                return self._build_cancelled_result(
+                    stats,
+                    all_tool_calls,
+                    models_used,
+                    elapsed_s,
+                )
             remaining_budget = timeout_s - elapsed_s if timeout_s else None
             stage_min_budget_s = (
                 _MIN_STAGE_BUDGET_S
@@ -527,6 +586,7 @@ class AgentOrchestrator:
                 ctx,
                 progress_callback=progress_callback,
                 timeout_seconds=remaining_timeout_s,
+                cancel_event=cancel_event,
             )
             stats.record_stage(result)
             all_tool_calls.extend(
@@ -535,6 +595,14 @@ class AgentOrchestrator:
             models_used.extend(result.meta.get("models_used", []))
 
             elapsed_s = time.time() - t0
+            if self._is_cancel_requested(cancel_event):
+                logger.info("[Orchestrator] pipeline cancelled after stage '%s'", agent.agent_name)
+                return self._build_cancelled_result(
+                    stats,
+                    all_tool_calls,
+                    models_used,
+                    elapsed_s,
+                )
             if progress_callback:
                 progress_callback(stream_event(
                     "stage_done",

@@ -12,6 +12,7 @@ Covers:
 """
 
 import json
+import threading
 import time
 import unittest
 import sys
@@ -223,6 +224,24 @@ class TestAgentExecutor(unittest.TestCase):
         self.assertIn("unsupported_tool_calling", result.error or "")
         self.assertEqual(result.tool_calls_log, [])
         self.assertEqual(executed_calls, [])
+
+    def test_run_agent_loop_honors_pre_set_cancellation(self):
+        registry = _make_registry_with_echo()
+        adapter = _make_mock_adapter()
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        result = run_agent_loop(
+            messages=[{"role": "user", "content": "分析 ABBV"}],
+            tool_registry=registry,
+            llm_adapter=adapter,
+            max_steps=2,
+            cancel_event=cancel_event,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "Agent execution cancelled")
+        adapter.call_with_tools.assert_not_called()
 
     def test_chat_injects_compressed_history_before_report_context_and_current_user(self):
         registry = _make_registry_with_echo()
@@ -1029,6 +1048,46 @@ class TestAgentExecutor(unittest.TestCase):
         assert "大盘环境摘要" in context_messages[0]
         assert "大盘退潮" in context_messages[0]
         assert "market_review_payload" not in context_messages[0]
+
+    def test_chat_prompt_requires_each_selected_skill_and_its_specialist_tools(self):
+        registry = _make_registry_with_echo()
+        adapter = _make_mock_adapter()
+        adapter._config = MagicMock()
+        executor = AgentExecutor(
+            registry,
+            adapter,
+            skill_instructions="### 技能 1: Serenity投研\n### 技能 2: 💎 价值投资",
+            skill_execution_plan=(
+                "## 激活技能执行计划（优先于通用工作流与单技能局部格式限制）\n"
+                "1. **Serenity投研** (`serenity_research`)：`search_research_reports`\n"
+                "2. **💎 价值投资** (`value_investing`)：`get_valuation_percentile`"
+            ),
+            max_steps=2,
+        )
+        captured = {}
+
+        def fake_run_loop(messages, tool_decls, parse_dashboard, progress_callback=None, stock_scope=None):
+            captured["messages"] = messages
+            return AgentResult(success=True, content="assistant reply")
+
+        with patch.object(executor, "_run_loop", side_effect=fake_run_loop):
+            with patch(
+                "src.agent.executor.build_agent_chat_context_bundle",
+                return_value=SimpleNamespace(context_messages=[], diagnostics={}),
+            ):
+                with patch("src.agent.conversation.conversation_manager.get_or_create"):
+                    with patch("src.agent.conversation.conversation_manager.add_message"):
+                        executor.chat("分析 NFLX", "session-multi-skill")
+
+        system_prompt = captured["messages"][0]["content"]
+        self.assertIn("`search_research_reports`", system_prompt)
+        self.assertIn("`get_valuation_percentile`", system_prompt)
+        self.assertIn("为每个技能建立同名二级章节", system_prompt)
+        self.assertIn("本轮最新用户消息决定分析范围", system_prompt)
+        self.assertLess(
+            system_prompt.index("serenity_research"),
+            system_prompt.index("value_investing"),
+        )
 
     def test_prompt_omits_hardcoded_trend_baseline_when_default_policy_is_empty(self):
         """Explicit skill runs should not silently keep the legacy trend baseline."""

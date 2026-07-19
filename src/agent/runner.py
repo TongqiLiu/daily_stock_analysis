@@ -313,6 +313,38 @@ def _build_budget_guard_result(
     )
 
 
+def _is_cancel_requested(cancel_event: Optional[Any]) -> bool:
+    """Return whether a cooperative cancellation event has been set."""
+    if cancel_event is None:
+        return False
+    try:
+        return bool(cancel_event.is_set())
+    except Exception:
+        return False
+
+
+def _build_cancelled_result(
+    *,
+    step: int,
+    tool_calls_log: List[Dict[str, Any]],
+    total_tokens: int,
+    provider_used: str,
+    models_used: List[str],
+    messages: List[Dict[str, Any]],
+) -> RunLoopResult:
+    return RunLoopResult(
+        success=False,
+        content="",
+        tool_calls_log=tool_calls_log,
+        total_steps=step,
+        total_tokens=total_tokens,
+        provider=provider_used,
+        models_used=models_used,
+        error="Agent execution cancelled",
+        messages=messages,
+    )
+
+
 # ============================================================
 # Core loop
 # ============================================================
@@ -329,6 +361,7 @@ def run_agent_loop(
     tool_call_timeout_seconds: Optional[float] = None,
     stock_scope: Optional[StockScope] = None,
     emit_stage_events: bool = True,
+    cancel_event: Optional[Any] = None,
 ) -> RunLoopResult:
     """Execute the ReAct LLM ↔ tool loop.
 
@@ -346,6 +379,7 @@ def run_agent_loop(
         thinking_labels: Override map of tool_name → friendly label.
         max_wall_clock_seconds: Optional overall timeout budget for the loop.
         tool_call_timeout_seconds: Optional timeout for one parallel tool batch.
+        cancel_event: Optional ``threading.Event``-compatible cancellation signal.
         emit_stage_events: Whether to emit the synthetic ``agent_loop``
             stage lifecycle. Orchestrated business stages disable this so
             ``stage_start`` / ``stage_done`` only describe real stages.
@@ -393,6 +427,17 @@ def run_agent_loop(
         )
 
     for step in range(max_steps):
+        if _is_cancel_requested(cancel_event):
+            logger.info("Agent execution cancelled before step %d", step + 1)
+            return _finish(_build_cancelled_result(
+                step=step,
+                tool_calls_log=tool_calls_log,
+                total_tokens=total_tokens,
+                provider_used=provider_used,
+                models_used=models_used,
+                messages=messages,
+            ))
+
         remaining_timeout = _remaining_timeout_seconds(start_time, max_wall_clock_seconds)
         timeout_exhausted = remaining_timeout is not None and remaining_timeout <= 0
         budget_guard_triggered = (
@@ -447,10 +492,13 @@ def run_agent_loop(
             progress_callback(stream_event("thinking", step=step + 1, message=thinking_msg))
 
         # --- LLM call ---
+        llm_call_kwargs: Dict[str, Any] = {"timeout": remaining_timeout}
+        if cancel_event is not None:
+            llm_call_kwargs["cancel_event"] = cancel_event
         response = llm_adapter.call_with_tools(
             messages,
             tool_decls,
-            timeout=remaining_timeout,
+            **llm_call_kwargs,
         )
         provider_used = response.provider
         total_tokens += (response.usage or {}).get("total_tokens", 0)
@@ -460,6 +508,17 @@ def run_agent_loop(
         model_for_usage = m or response.provider
         if model_for_usage and model_for_usage != "error" and should_persist_usage_telemetry(response.usage):
             _persist_usage(response.usage, model_for_usage, call_type="agent")
+
+        if _is_cancel_requested(cancel_event):
+            logger.info("Agent execution cancelled after LLM call at step %d", step + 1)
+            return _finish(_build_cancelled_result(
+                step=step + 1,
+                tool_calls_log=tool_calls_log,
+                total_tokens=total_tokens,
+                provider_used=provider_used,
+                models_used=models_used,
+                messages=messages,
+            ))
 
         remaining_timeout = _remaining_timeout_seconds(start_time, max_wall_clock_seconds)
         if remaining_timeout is not None and remaining_timeout <= 0:
@@ -523,6 +582,17 @@ def run_agent_loop(
                 tool_wait_timeout_seconds=effective_tool_timeout,
                 stock_scope=stock_scope,
             )
+
+            if _is_cancel_requested(cancel_event):
+                logger.info("Agent execution cancelled after tool execution at step %d", step + 1)
+                return _finish(_build_cancelled_result(
+                    step=step + 1,
+                    tool_calls_log=tool_calls_log,
+                    total_tokens=total_tokens,
+                    provider_used=provider_used,
+                    models_used=models_used,
+                    messages=messages,
+                ))
 
             # Append tool results preserving original call order
             tc_order = {tc.id: i for i, tc in enumerate(response.tool_calls)}

@@ -3,15 +3,17 @@
 Tests for agent_chat_stream SSE cleanup exception handling.
 
 Verifies that:
+- quiet periods emit heartbeat comments instead of a synthetic timeout error.
+- client disconnects trigger cooperative cancellation.
 - asyncio.CancelledError during cleanup is silently ignored (no warning).
 - Other exceptions during cleanup emit a WARNING log entry.
 """
 
 import asyncio
-import sys
 import os
+import sys
+import threading
 import unittest
-from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -22,13 +24,10 @@ ensure_litellm_stub()
 
 
 class TestAgentSSECleanup(unittest.IsolatedAsyncioTestCase):
-    """Test the finally-block exception handling in event_generator."""
+    """Test heartbeat, cancellation, and cleanup behavior in the SSE helper."""
 
     async def _run_cleanup(self, fut_exception):
-        """
-        Simulate the finally block in event_generator:
-          - fut is a Future that raises *fut_exception* when awaited with wait_for.
-        """
+        """Consume a terminal event, then exercise executor cleanup."""
         loop = asyncio.get_event_loop()
         fut = loop.create_future()
         if isinstance(fut_exception, BaseException):
@@ -38,19 +37,69 @@ class TestAgentSSECleanup(unittest.IsolatedAsyncioTestCase):
 
         import api.v1.endpoints.agent as agent_mod
 
-        # Replicate the finally block logic directly
-        try:
-            await asyncio.wait_for(fut, timeout=5.0)
-        except asyncio.CancelledError:
-            pass
-        except asyncio.TimeoutError:
-            agent_mod.logger.debug(
-                "agent executor cleanup timed out after 5s for session %s", "test-session"
+        queue = asyncio.Queue()
+        await queue.put({"type": "done", "success": True})
+        cancel_event = threading.Event()
+        events = []
+        async for event in agent_mod._stream_agent_events(
+            queue,
+            fut,
+            cancel_event,
+            "test-session",
+            heartbeat_seconds=0.01,
+            cleanup_timeout_seconds=0.01,
+        ):
+            events.append(event)
+        self.assertEqual(len(events), 1)
+        self.assertFalse(cancel_event.is_set())
+
+    async def test_quiet_period_emits_heartbeat_not_timeout(self):
+        import api.v1.endpoints.agent as agent_mod
+
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        cancel_event = threading.Event()
+        generator = agent_mod._stream_agent_events(
+            asyncio.Queue(),
+            fut,
+            cancel_event,
+            "heartbeat-session",
+            heartbeat_seconds=0.01,
+            cleanup_timeout_seconds=0.01,
+        )
+
+        event = await generator.__anext__()
+        self.assertEqual(event, ": heartbeat\n\n")
+        self.assertNotIn("分析超时", event)
+        await generator.aclose()
+        self.assertTrue(cancel_event.is_set())
+        fut.set_result(None)
+
+    async def test_terminal_event_does_not_cancel_completed_executor(self):
+        import api.v1.endpoints.agent as agent_mod
+
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        fut.set_result(None)
+        queue = asyncio.Queue()
+        await queue.put({"type": "done", "success": True})
+        cancel_event = threading.Event()
+
+        events = [
+            event
+            async for event in agent_mod._stream_agent_events(
+                queue,
+                fut,
+                cancel_event,
+                "done-session",
+                heartbeat_seconds=0.01,
+                cleanup_timeout_seconds=0.01,
             )
-        except Exception as exc:
-            agent_mod.logger.warning(
-                "agent executor cleanup error (ignored): %s", exc, exc_info=True
-            )
+        ]
+
+        self.assertEqual(len(events), 1)
+        self.assertIn('"type": "done"', events[0])
+        self.assertFalse(cancel_event.is_set())
 
     async def test_cancelled_error_is_silent(self):
         """CancelledError must NOT produce a warning log."""

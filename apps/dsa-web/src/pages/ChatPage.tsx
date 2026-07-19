@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronDown, SlidersHorizontal } from 'lucide-react';
+import { Check, ChevronDown, Copy, SlidersHorizontal } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { agentApi } from '../api/agent';
 import { systemConfigApi } from '../api/systemConfig';
@@ -176,7 +176,9 @@ const PROMPT_TEMPLATES = [
 
 const MAX_SELECTED_SKILLS = 3;
 const PREFERRED_DEFAULT_SKILL_ID = 'multi_strategy_consensus';
+const EXCLUSIVE_META_SKILL_ID = 'multi_strategy_consensus';
 const CONTEXT_COMPRESSION_CONFIG_KEY = 'AGENT_CONTEXT_COMPRESSION_ENABLED';
+const CONVERSATION_COPY_KEY = '__conversation__';
 const STRONG_COMPARE_STOCK_MESSAGE_RE = /比较|对比|\bvs\b|和[^，。,.!?！？]{0,40}比/i;
 const WEAK_COMPARE_STOCK_MESSAGE_RE = /差异(?!化)|区别|不同|相比|对照|比一比/;
 const CHOICE_COMPARE_STOCK_MESSAGE_RE = /哪个|哪只|哪一个|谁更|更值得|更适合|怎么选|选哪|二选一/;
@@ -638,7 +640,10 @@ const ChatPage: React.FC = () => {
         normalized.push(cleaned);
       }
     }
-    return normalized.slice(0, MAX_SELECTED_SKILLS);
+    const compatibleSkills = normalized.length > 1
+      ? normalized.filter((skillId) => skillId !== EXCLUSIVE_META_SKILL_ID)
+      : normalized;
+    return compatibleSkills.slice(0, MAX_SELECTED_SKILLS);
   }, []);
 
   const toggleSkillSelection = useCallback((skillId: string) => {
@@ -646,10 +651,14 @@ const ChatPage: React.FC = () => {
       if (prev.includes(skillId)) {
         return prev.filter((id) => id !== skillId);
       }
-      if (prev.length >= MAX_SELECTED_SKILLS) {
+      if (skillId === EXCLUSIVE_META_SKILL_ID) {
+        return [EXCLUSIVE_META_SKILL_ID];
+      }
+      const compatibleSelection = prev.filter((id) => id !== EXCLUSIVE_META_SKILL_ID);
+      if (compatibleSelection.length >= MAX_SELECTED_SKILLS) {
         return prev;
       }
-      return [...prev, skillId];
+      return [...compatibleSelection, skillId];
     });
   }, []);
 
@@ -1563,7 +1572,7 @@ const ChatPage: React.FC = () => {
                     </label>
                     {skills.map((s) => {
                       const checked = selectedSkillIdSet.has(s.id);
-                      const disabled = !checked && skillLimitReached;
+                      const disabled = !checked && skillLimitReached && s.id !== EXCLUSIVE_META_SKILL_ID;
                       return (
                         <label
                           key={s.id}
@@ -1672,6 +1681,32 @@ const ChatPage: React.FC = () => {
                     t.style.height = `${Math.min(t.scrollHeight, 200)}px`;
                   }}
                 />
+                <Tooltip
+                  content={copiedMessages.has(CONVERSATION_COPY_KEY) ? '当前对话已复制' : '复制当前对话'}
+                >
+                  <span className="inline-flex flex-shrink-0">
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      onClick={() => void copyMessageToClipboard(
+                        CONVERSATION_COPY_KEY,
+                        formatSessionAsMarkdown(messages),
+                      )}
+                      disabled={messages.length === 0}
+                      className="px-3 sm:px-4"
+                      aria-label={copiedMessages.has(CONVERSATION_COPY_KEY) ? '当前对话已复制' : '复制当前对话'}
+                    >
+                      {copiedMessages.has(CONVERSATION_COPY_KEY) ? (
+                        <Check className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <Copy className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      <span className="hidden sm:inline">
+                        {copiedMessages.has(CONVERSATION_COPY_KEY) ? '已复制' : '复制'}
+                      </span>
+                    </Button>
+                  </span>
+                </Tooltip>
                 <Button
                   variant="primary"
                   onClick={() => handleSend()}

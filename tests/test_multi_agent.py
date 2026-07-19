@@ -14,6 +14,7 @@ Covers:
 import json
 import sys
 import os
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -875,6 +876,39 @@ class TestOrchestratorExecution(unittest.TestCase):
         result.meta["models_used"] = ["test/model"]
         return result
 
+    def test_execute_pipeline_propagates_cancellation_and_stops_next_stage(self):
+        orch = self._make_orchestrator()
+        ctx = AgentContext(query="Analyze ABBV", stock_code="ABBV")
+        cancel_event = threading.Event()
+
+        technical = MagicMock(agent_name="technical")
+
+        def cancel_during_stage(
+            _ctx,
+            progress_callback=None,
+            timeout_seconds=None,
+            cancel_event=None,
+        ):
+            self.assertIsNotNone(cancel_event)
+            cancel_event.set()
+            return self._stage_result("technical")
+
+        technical.run.side_effect = cancel_during_stage
+        decision = MagicMock(agent_name="decision")
+        decision.run.return_value = self._stage_result("decision")
+
+        with patch.object(orch, "_build_agent_chain", return_value=[technical, decision]):
+            result = orch._execute_pipeline(
+                ctx,
+                parse_dashboard=False,
+                cancel_event=cancel_event,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "Agent execution cancelled")
+        technical.run.assert_called_once()
+        decision.run.assert_not_called()
+
     @staticmethod
     def _decision_agent():
         from src.agent.agents.decision_agent import DecisionAgent
@@ -1599,6 +1633,34 @@ class TestOrchestratorExecution(unittest.TestCase):
                         orch.chat("hello", "session-1")
 
         self.assertEqual(captured["history"], history)
+
+    def test_chat_does_not_persist_assistant_failure_after_client_cancellation(self):
+        from src.agent.orchestrator import OrchestratorResult
+
+        orch = self._make_orchestrator()
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        with patch.object(
+            orch,
+            "_execute_pipeline",
+            return_value=OrchestratorResult(success=False, error="Agent execution cancelled"),
+        ):
+            with patch("src.agent.orchestrator.build_visible_chat_history", return_value=[]):
+                with patch("src.agent.conversation.conversation_manager.get_or_create"):
+                    with patch("src.agent.conversation.conversation_manager.add_message") as add_message:
+                        result = orch.chat(
+                            "Analyze ABBV",
+                            "cancelled-session",
+                            cancel_event=cancel_event,
+                        )
+
+        self.assertFalse(result.success)
+        add_message.assert_called_once_with(
+            "cancelled-session",
+            "user",
+            "Analyze ABBV",
+        )
 
     def test_chat_uses_compressed_history_builder(self):
         from src.agent.orchestrator import OrchestratorResult

@@ -296,6 +296,14 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
                     default_priority=40,
                     default_active=False,
                 ),
+                SimpleNamespace(
+                    name="nunu_wave",
+                    display_name="nunu波浪",
+                    description="进阶波浪分析",
+                    user_invocable=False,
+                    default_priority=81,
+                    default_active=False,
+                ),
             ]
         )
 

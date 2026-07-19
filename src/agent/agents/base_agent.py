@@ -95,6 +95,7 @@ class BaseAgent(ABC):
         ctx: AgentContext,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         timeout_seconds: Optional[float] = None,
+        cancel_event: Optional[Any] = None,
     ) -> StageResult:
         """Execute this agent and return a :class:`StageResult`.
 
@@ -114,16 +115,19 @@ class BaseAgent(ABC):
             # Restrict tools if the agent declares a subset
             registry = self._filtered_registry()
 
-            loop_result: RunLoopResult = run_agent_loop(
-                messages=messages,
-                tool_registry=registry,
-                llm_adapter=self.llm_adapter,
-                max_steps=self.max_steps,
-                progress_callback=progress_callback,
-                max_wall_clock_seconds=timeout_seconds,
-                stock_scope=ctx.meta.get("stock_scope"),
-                emit_stage_events=False,
-            )
+            loop_kwargs: Dict[str, Any] = {
+                "messages": messages,
+                "tool_registry": registry,
+                "llm_adapter": self.llm_adapter,
+                "max_steps": self.max_steps,
+                "progress_callback": progress_callback,
+                "max_wall_clock_seconds": timeout_seconds,
+                "stock_scope": ctx.meta.get("stock_scope"),
+                "emit_stage_events": False,
+            }
+            if cancel_event is not None:
+                loop_kwargs["cancel_event"] = cancel_event
+            loop_result: RunLoopResult = run_agent_loop(**loop_kwargs)
 
             result.tokens_used = loop_result.total_tokens
             result.tool_calls_count = len(loop_result.tool_calls_log)

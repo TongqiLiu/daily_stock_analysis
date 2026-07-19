@@ -6,6 +6,7 @@ Agent API endpoints.
 import asyncio
 import json
 import logging
+import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +43,68 @@ TOOL_DISPLAY_NAMES: Dict[str, str] = {
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_AGENT_SSE_HEARTBEAT_SECONDS = 15.0
+_AGENT_SSE_CLEANUP_TIMEOUT_SECONDS = 5.0
+
+
+async def _stream_agent_events(
+    queue: asyncio.Queue,
+    executor_future: asyncio.Future,
+    cancel_event: threading.Event,
+    session_id: str,
+    *,
+    heartbeat_seconds: float = _AGENT_SSE_HEARTBEAT_SECONDS,
+    cleanup_timeout_seconds: float = _AGENT_SSE_CLEANUP_TIMEOUT_SECONDS,
+):
+    """Yield Agent SSE events while keeping slow LLM requests alive.
+
+    The execution loop owns the actual pipeline budget.  This transport layer
+    therefore sends SSE comments during quiet periods instead of imposing an
+    unrelated five-minute idle timeout.  If the client disconnects before a
+    terminal event, ``cancel_event`` asks the blocking worker to stop at the
+    next cooperative cancellation point.
+    """
+    terminal_event_seen = False
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=max(0.01, float(heartbeat_seconds)),
+                )
+            except asyncio.TimeoutError:
+                # SSE comments are ignored by the frontend event parser while
+                # still keeping browsers and reverse proxies from treating a
+                # long model generation as an idle connection.
+                yield ": heartbeat\n\n"
+                continue
+
+            yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+            if event.get("type") in ("done", "error"):
+                terminal_event_seen = True
+                break
+    finally:
+        if not terminal_event_seen:
+            cancel_event.set()
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(executor_future),
+                timeout=max(0.01, float(cleanup_timeout_seconds)),
+            )
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            # A blocking HTTP call may need to reach its own request timeout
+            # before observing the cooperative cancellation signal.
+            logger.debug(
+                "agent executor cleanup timed out after %ss for session %s",
+                cleanup_timeout_seconds,
+                session_id,
+            )
+        except Exception as exc:
+            logger.warning("agent executor cleanup error (ignored): %s", exc, exc_info=True)
+
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -397,6 +460,7 @@ async def agent_chat_stream(request: ChatRequest):
     session_id = request.session_id or str(uuid.uuid4())
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
+    cancel_event = threading.Event()
 
     # Pass explicit skills into context for the orchestrator.
     # Direct assignment so caller-provided skills always take precedence.
@@ -406,11 +470,26 @@ async def agent_chat_stream(request: ChatRequest):
         stream_ctx["skills"] = skills
 
     def progress_callback(event: dict):
+        if cancel_event.is_set():
+            return
         # Enrich tool events with display names
+        event = dict(event)
         if event.get("type") in ("tool_start", "tool_done"):
             tool = event.get("tool", "")
             event["display_name"] = TOOL_DISPLAY_NAMES.get(tool, tool)
-        asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+        except RuntimeError:
+            # The server event loop may already be closing during shutdown.
+            cancel_event.set()
+
+    def enqueue_terminal_event(event: dict) -> None:
+        if cancel_event.is_set():
+            return
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+        except RuntimeError:
+            cancel_event.set()
 
     def run_sync():
         try:
@@ -420,48 +499,32 @@ async def agent_chat_stream(request: ChatRequest):
                 session_id=session_id,
                 progress_callback=progress_callback,
                 context=stream_ctx,
+                cancel_event=cancel_event,
             )
-            asyncio.run_coroutine_threadsafe(
-                queue.put({
+            enqueue_terminal_event(
+                {
                     "type": "done",
                     "success": result.success,
                     "content": result.content,
                     "error": result.error,
                     "total_steps": result.total_steps,
                     "session_id": session_id,
-                }),
-                loop,
+                },
             )
         except Exception as exc:
             logger.error(f"Agent stream error: {exc}")
-            asyncio.run_coroutine_threadsafe(
-                queue.put({"type": "error", "message": str(exc)}),
-                loop,
-            )
+            enqueue_terminal_event({"type": "error", "message": str(exc)})
 
     async def event_generator():
         # Start executor in a thread so we don't block the event loop
         fut = loop.run_in_executor(None, run_sync)
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=300.0)
-                except asyncio.TimeoutError:
-                    yield "data: " + json.dumps({"type": "error", "message": "分析超时"}, ensure_ascii=False) + "\n\n"
-                    break
-                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
-                if event.get("type") in ("done", "error"):
-                    break
-        finally:
-            try:
-                await asyncio.wait_for(fut, timeout=5.0)
-            except asyncio.CancelledError:
-                pass
-            except asyncio.TimeoutError:
-                # Cleanup taking longer than 5s is treated as an expected timeout; no warning.
-                logger.debug("agent executor cleanup timed out after 5s for session %s", session_id)
-            except Exception as exc:
-                logger.warning("agent executor cleanup error (ignored): %s", exc, exc_info=True)
+        async for event in _stream_agent_events(
+            queue,
+            fut,
+            cancel_event,
+            session_id,
+        ):
+            yield event
 
     return StreamingResponse(
         event_generator(),

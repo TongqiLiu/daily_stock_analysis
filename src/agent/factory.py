@@ -33,6 +33,8 @@ from src.config import AGENT_MAX_STEPS_DEFAULT
 
 logger = logging.getLogger(__name__)
 
+_EXCLUSIVE_META_SKILL_ID = "multi_strategy_consensus"
+
 # ---------------------------------------------------------------------------
 # Module-level caches
 # ---------------------------------------------------------------------------
@@ -55,6 +57,7 @@ class SkillPromptState:
     explicit_skill_selection: bool
     use_legacy_default_prompt: bool
     skill_instructions: str
+    skill_execution_plan: str
     default_skill_policy: str
     technical_skill_policy: str
 
@@ -111,6 +114,30 @@ def _normalize_skill_ids(
     return normalized, unknown
 
 
+def _normalize_exclusive_skill_ids(skill_ids: List[str]) -> List[str]:
+    """Keep the broad consensus meta-skill exclusive from specialist skills.
+
+    ``multi_strategy_consensus`` owns a strict 12-row report contract.  Combining
+    it with specialist frameworks (for example Serenity + value investing)
+    makes their required tools and output sections compete in one prompt.  When
+    an older client submits that invalid combination, the explicitly selected
+    specialist skills win over the broad Web default.
+    """
+    if _EXCLUSIVE_META_SKILL_ID not in skill_ids or len(skill_ids) == 1:
+        return skill_ids
+
+    normalized = [
+        skill_id for skill_id in skill_ids
+        if skill_id != _EXCLUSIVE_META_SKILL_ID
+    ]
+    logger.warning(
+        "[AgentFactory] Dropping exclusive meta-skill %s from combined selection; specialist skills=%s",
+        _EXCLUSIVE_META_SKILL_ID,
+        normalized,
+    )
+    return normalized
+
+
 def _resolve_selected_skill_ids(
     *,
     requested_skills: Optional[List[str]],
@@ -134,6 +161,7 @@ def _resolve_selected_skill_ids(
         raw_skill_ids,
         available_skill_ids=available_skill_ids,
     )
+    selected_skill_ids = _normalize_exclusive_skill_ids(selected_skill_ids)
     if unknown_skill_ids:
         logger.warning(
             "[AgentFactory] Ignoring unknown %s skill ids: %s",
@@ -150,6 +178,77 @@ def _resolve_selected_skill_ids(
             default_skills,
         )
     return list(default_skills), False
+
+
+def _build_skill_execution_plan(
+    *,
+    skill_catalog: List[object],
+    skills_to_activate: List[str],
+    use_legacy_default_prompt: bool,
+) -> str:
+    """Build a deterministic execution contract for active skill prompts."""
+    if use_legacy_default_prompt:
+        return ""
+
+    if "all" in skills_to_activate:
+        active_skills = list(skill_catalog)
+    else:
+        skills_by_id = {
+            str(getattr(skill, "name", "")).strip(): skill
+            for skill in skill_catalog
+        }
+        active_skills = [
+            skills_by_id[skill_id]
+            for skill_id in skills_to_activate
+            if skill_id in skills_by_id
+        ]
+
+    if not active_skills:
+        return ""
+
+    skill_lines: List[str] = []
+    all_required_tools: List[str] = []
+    for index, skill in enumerate(active_skills, start=1):
+        skill_id = str(getattr(skill, "name", "")).strip()
+        display_name = str(getattr(skill, "display_name", "")).strip() or skill_id
+        required_tools = [
+            str(tool_name).strip()
+            for tool_name in (getattr(skill, "required_tools", None) or [])
+            if str(tool_name).strip()
+        ]
+        for tool_name in required_tools:
+            if tool_name not in all_required_tools:
+                all_required_tools.append(tool_name)
+        tools_text = (
+            "、".join(f"`{tool_name}`" for tool_name in required_tools)
+            or "无额外专项工具"
+        )
+        skill_lines.append(
+            f"{index}. **{display_name}** (`{skill_id}`)：{tools_text}"
+        )
+
+    skill_list_text = "\n".join(skill_lines)
+    combined_tools = (
+        "、".join(f"`{tool_name}`" for tool_name in all_required_tools)
+        or "无"
+    )
+    multi_skill_section = ""
+    if len(active_skills) > 1:
+        multi_skill_section = """
+- 这些技能是本轮都要完成的分析任务，不是备选项；不得完成第一个技能后直接结束。
+- 最终输出必须能清楚识别每个技能的独立结果，并按上述顺序呈现；综合结论不能替代任一技能结果。
+- 单个技能中的“严格输出”“不要额外章节”等限制只约束该技能自己的部分，不得据此删除其他已激活技能的内容。
+"""
+
+    return f"""## 激活技能执行计划（优先于通用工作流与单技能局部格式限制）
+
+按用户选择顺序执行：
+{skill_list_text}
+
+本轮专项工具并集（去重后按声明顺序）：{combined_tools}
+
+- 通用行情/技术/新闻流程只是最低基线；在最终回答前，还必须完成上面各技能声明的专项工具。已有可信上下文或本轮成功结果可以复用。
+- 工具失败时记录具体失败与降级影响，继续完成对应技能的其余分析；不得静默跳过，也不得编造结果。{multi_skill_section}"""
 
 
 def _should_use_legacy_default_prompt(
@@ -277,6 +376,12 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
         skill_catalog=skill_catalog,
     )
 
+    skill_execution_plan = _build_skill_execution_plan(
+        skill_catalog=skill_catalog,
+        skills_to_activate=skills_to_activate,
+        use_legacy_default_prompt=use_legacy_default_prompt,
+    )
+
     skill_manager.activate(skills_to_activate)
     logger.info("[AgentFactory] Activated skills: %s", skills_to_activate)
 
@@ -286,6 +391,7 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
         explicit_skill_selection=explicit_skill_selection,
         use_legacy_default_prompt=use_legacy_default_prompt,
         skill_instructions=skill_manager.get_skill_instructions(),
+        skill_execution_plan=skill_execution_plan,
         default_skill_policy=get_default_trading_skill_policy(
             explicit_skill_selection=not use_legacy_default_prompt,
         ),
@@ -339,6 +445,7 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
             registry,
             llm_adapter,
             skill_manager,
+            skill_execution_plan=prompt_state.skill_execution_plan,
             technical_skill_policy=prompt_state.technical_skill_policy,
         )
 
@@ -351,6 +458,7 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
         tool_registry=registry,
         llm_adapter=llm_adapter,
         skill_instructions=prompt_state.skill_instructions,
+        skill_execution_plan=prompt_state.skill_execution_plan,
         default_skill_policy=prompt_state.default_skill_policy,
         use_legacy_default_prompt=prompt_state.use_legacy_default_prompt,
         max_steps=_coerce_config_int(
@@ -366,7 +474,15 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
     )
 
 
-def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technical_skill_policy: str = ""):
+def _build_orchestrator(
+    config,
+    registry,
+    llm_adapter,
+    skill_manager,
+    *,
+    skill_execution_plan: str = "",
+    technical_skill_policy: str = "",
+):
     """Build and return an :class:`AgentOrchestrator` (multi-agent mode).
 
     The orchestrator presents the same ``run()`` / ``chat()`` interface as
@@ -377,10 +493,14 @@ def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technic
     mode = getattr(config, "agent_orchestrator_mode", "standard")
     logger.info("[AgentFactory] Building AgentOrchestrator (mode=%s)", mode)
 
+    skill_instructions = skill_manager.get_skill_instructions()
+    if skill_execution_plan:
+        skill_instructions = f"{skill_execution_plan}\n\n{skill_instructions}"
+
     return AgentOrchestrator(
         tool_registry=registry,
         llm_adapter=llm_adapter,
-        skill_instructions=skill_manager.get_skill_instructions(),
+        skill_instructions=skill_instructions,
         technical_skill_policy=technical_skill_policy,
         max_steps=_coerce_config_int(
             getattr(config, "agent_max_steps", AGENT_MAX_STEPS_DEFAULT),

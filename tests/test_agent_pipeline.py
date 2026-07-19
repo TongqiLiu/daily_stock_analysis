@@ -11,6 +11,7 @@ Covers:
 
 import json
 import importlib
+import threading
 import types
 import unittest
 import sys
@@ -342,6 +343,7 @@ class TestAgentFactorySkillBaseline(unittest.TestCase):
         default_active: bool = False,
         default_priority: int = 100,
         source: str = "builtin",
+        required_tools: Optional[List[str]] = None,
     ):
         return SimpleNamespace(
             name=name,
@@ -353,6 +355,7 @@ class TestAgentFactorySkillBaseline(unittest.TestCase):
             default_priority=default_priority,
             user_invocable=True,
             source=source,
+            required_tools=required_tools or [],
         )
 
     def _run_factory_case(self, config, *, request_skills, skill_catalog, instructions):
@@ -399,6 +402,49 @@ class TestAgentFactorySkillBaseline(unittest.TestCase):
         self.assertEqual(kwargs["default_skill_policy"], "")
         self.assertFalse(kwargs["use_legacy_default_prompt"])
         skill_manager.activate.assert_called_once_with(["chan_theory"])
+
+    def test_consensus_meta_skill_is_removed_from_specialist_combination(self):
+        config = SimpleNamespace(
+            agent_arch="single",
+            agent_skills=[],
+            agent_max_steps=10,
+            agent_orchestrator_timeout_s=600,
+        )
+        kwargs, skill_manager = self._run_factory_case(
+            config,
+            request_skills=[
+                "multi_strategy_consensus",
+                "serenity_research",
+                "value_investing",
+            ],
+            skill_catalog=[
+                self._make_skill("multi_strategy_consensus"),
+                self._make_skill(
+                    "serenity_research",
+                    required_tools=["get_stock_info", "search_research_reports"],
+                ),
+                self._make_skill(
+                    "value_investing",
+                    required_tools=["get_stock_info", "get_valuation_percentile"],
+                ),
+            ],
+            instructions="specialist instructions",
+        )
+
+        skill_manager.activate.assert_called_once_with([
+            "serenity_research",
+            "value_investing",
+        ])
+        execution_plan = kwargs["skill_execution_plan"]
+        self.assertIn("serenity_research", execution_plan)
+        self.assertIn("value_investing", execution_plan)
+        self.assertNotIn("multi_strategy_consensus", execution_plan)
+        self.assertLess(
+            execution_plan.index("`get_stock_info`"),
+            execution_plan.index("`search_research_reports`"),
+        )
+        self.assertIn("`get_valuation_percentile`", execution_plan)
+        self.assertIn("不是备选项", execution_plan)
 
     def test_configured_skills_disable_default_skill_policy(self):
         config = SimpleNamespace(
@@ -2229,6 +2275,43 @@ class TestAgentConstructionChain(unittest.TestCase):
 
         self.assertEqual(result.content, "agent ok")
         self.assertEqual(mock_completion.call_args.kwargs["temperature"], 1.0)
+        self.assertEqual(mock_completion.call_args.kwargs["max_retries"], 0)
+
+    @patch("src.agent.llm_adapter.Router")
+    def test_llm_adapter_cancellation_stops_fallback_chain(self, _mock_router):
+        """A disconnected SSE client should not keep trying fallback models."""
+        mock_cfg = MagicMock()
+        mock_cfg.agent_litellm_model = "gpt-4o-mini"
+        mock_cfg.litellm_model = None
+        mock_cfg.litellm_fallback_models = ["openai/gpt-4.1-mini"]
+        mock_cfg.llm_model_list = []
+        mock_cfg.llm_temperature = 0.7
+        mock_cfg.gemini_api_keys = []
+        mock_cfg.anthropic_api_keys = []
+        mock_cfg.openai_api_keys = []
+        mock_cfg.deepseek_api_keys = []
+        mock_cfg.openai_base_url = None
+        mock_cfg.agent_llm_transient_retries = 4
+
+        from src.agent.llm_adapter import LLMToolAdapter
+
+        adapter = LLMToolAdapter(config=mock_cfg)
+        cancel_event = threading.Event()
+
+        def fail_then_cancel(*_args, **_kwargs):
+            cancel_event.set()
+            raise RuntimeError("Connection reset by peer")
+
+        adapter._call_litellm_model = MagicMock(side_effect=fail_then_cancel)
+        result = adapter.call_completion(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            cancel_event=cancel_event,
+        )
+
+        self.assertEqual(result.provider, "error")
+        self.assertEqual(result.content, "Agent execution cancelled")
+        adapter._call_litellm_model.assert_called_once()
 
     @patch("src.agent.llm_adapter.Router")
     def test_llm_adapter_normalizes_kimi_k26_temperature_for_yaml_alias(self, _mock_router):

@@ -120,9 +120,11 @@ CLI 全部参数见 `main.py:222-358`，重点：
 
 ---
 
-## 四、Skills（策略）清单 — 28 个定义 / 27 个用户可见
+## 四、Skills（策略）清单 — 28 个定义 / 26 个用户可见
 
-YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载 `user_invocable: true` 的技能。目前 `ema5_200_setup` 作为用户可见的 `EMA200回踩` 入口，底层使用 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势逻辑；`vcp_h1_h2_buy` 对应 VCP_H1_H2_BUY 日线指标；`vcp_breakout_trader` 对应 VCP_BREAKOUT_TRADER 日线突破交易员指标；`ema_200_highlow` 保留定义和底层工具能力，但暂不在问股 / 策略选择中展示。
+YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载 `user_invocable: true` 的技能。目前 `ema5_200_setup` 作为用户可见的 `EMA200回踩` 入口，底层使用 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势逻辑；`vcp_h1_h2_buy` 对应 VCP_H1_H2_BUY 日线指标；`vcp_breakout_trader` 对应 VCP_BREAKOUT_TRADER 日线突破交易员指标；`ema_200_highlow` 和 `nunu_wave` 保留定义和底层能力，但暂不在问股 / 策略选择中展示。
+
+选择规则：`multi_strategy_consensus` 是自带 12 项子策略和严格汇总格式的元 skill，因此与其他专项 skill 互斥。Web 默认勾选它时，改选 Serenity 投研、价值投资等专项框架会自动取消元 skill；反向选择元 skill 会清空已有专项组合。专项 skill 仍可最多组合 3 个，后端会按用户选择顺序生成执行计划、去重汇总必要工具，并要求每个 skill 分别产出结果后再综合。API/旧客户端若同时传入元 skill 与专项 skill，后端保留专项 skill 并丢弃元 skill，避免严格输出格式互相覆盖。
 
 | # | id | 显示名 | 默认优先级 | 类别 | 用途简介 |
 |---|---|---|---|---|---|
@@ -150,7 +152,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 22 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
 | 23 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
 | 24 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
-| 25 | `nunu_wave` | nunu波浪 | 81 | framework | 级别优先的进阶波浪框架：阶段四问、复杂调整、跨级别楔形、截尾五浪、序列日/共振日、主备计数切换与失效位优先 |
+| 25 | `nunu_wave` | nunu波浪 | 81 | framework | 暂隐藏；保留级别优先的进阶波浪框架：阶段四问、复杂调整、跨级别楔形、截尾五浪、序列日/共振日、主备计数切换与失效位优先 |
 | 26 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
 | 27 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
 | 28 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |

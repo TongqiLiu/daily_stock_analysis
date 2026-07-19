@@ -335,6 +335,11 @@ class SkillManager:
 
     def __init__(self):
         self._skills: Dict[str, Skill] = {}
+        # ``activate()`` receives skill ids in user-selected order.  Keep that
+        # order separately from registration order so combined prompts and
+        # required-tool plans do not silently prioritize alphabetically loaded
+        # YAML files over the user's selection.
+        self._active_skill_order: List[str] = []
 
     def register(self, skill: Skill) -> None:
         """Register a skill (programmatic or YAML-loaded)."""
@@ -408,8 +413,24 @@ class SkillManager:
         return list(self._skills.values())
 
     def list_active_skills(self) -> List[Skill]:
-        """List only active (enabled) skills."""
-        return [s for s in self._skills.values() if s.enabled]
+        """List active skills, preserving the most recent activation order."""
+        active: List[Skill] = []
+        seen: set[str] = set()
+
+        for name in self._active_skill_order:
+            skill = self._skills.get(name)
+            if skill is not None and skill.enabled and name not in seen:
+                active.append(skill)
+                seen.add(name)
+
+        # Skills may be enabled programmatically without calling ``activate``.
+        # Preserve the historical registration-order behavior for those items.
+        for skill in self._skills.values():
+            if skill.enabled and skill.name not in seen:
+                active.append(skill)
+                seen.add(skill.name)
+
+        return active
 
     def activate(self, skill_names: List[str]) -> None:
         """Activate specific skills by name. Deactivate all others.
@@ -421,13 +442,17 @@ class SkillManager:
         if skill_names == ["all"] or "all" in skill_names:
             for s in self._skills.values():
                 s.enabled = True
+            self._active_skill_order = list(self._skills)
             logger.info(f"Activated all {len(self._skills)} skills")
             return
 
         for s in self._skills.values():
             s.enabled = s.name in skill_names
 
-        activated = [s.name for s in self._skills.values() if s.enabled]
+        self._active_skill_order = list(dict.fromkeys(
+            name for name in skill_names if name in self._skills
+        ))
+        activated = [s.name for s in self.list_active_skills()]
         logger.info(f"Activated skills: {activated}")
 
     def get_skill_instructions(self) -> str:
@@ -474,8 +499,10 @@ class SkillManager:
         return "\n".join(parts)
 
     def get_required_tools(self) -> List[str]:
-        """Get all tool names required by active skills."""
-        tools: set = set()
+        """Get required tool names in active-skill and declaration order."""
+        tools: List[str] = []
         for s in self.list_active_skills():
-            tools.update(s.required_tools)
-        return list(tools)
+            for tool_name in s.required_tools:
+                if tool_name not in tools:
+                    tools.append(tool_name)
+        return tools

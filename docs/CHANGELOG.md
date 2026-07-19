@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 问股输入框旁新增“复制对话”按钮，可一键复制当前会话 Markdown，并在空会话时禁用、复制成功后显示反馈。
+- [修复] 问股流式分析移除与 Agent 总预算冲突的 5 分钟静默超时，改为 SSE 心跳保活；客户端断开后取消信号会贯穿编排器、子 Agent 与 LLM fallback，且 LiteLLM Router / SDK 不再叠加内部重试，避免页面先报超时而后台继续运行。
+- [修复] 修复问股组合 Serenity 投研、价值投资等专项策略时被默认“多策略联合”覆盖的问题：元策略改为前后端互斥，专项组合按选择顺序执行必要工具并逐项输出，且本轮选择优先于旧轮次范围限制。
+- [改进] 问股策略选择器不再展示 `nunu_wave`（「nunu波浪」），底层策略定义与内部调用能力继续保留。
 - [修复] 问股 Agent 对连接重置、TLS 断开和请求超时增加受总预算约束的跨模型指数退避重试，避免同一中转端点短时抖动直接导致全部模型失败。
 - [改进] GitHub Actions 每日分析工作流补齐 TickFlow 数据源环境变量映射，并收敛 README 数据源稳定性说明到完整指南。
 - [修复] WebUI 启动时显式 `--host` / `--port` 不再被 `.env` 中的 `WEBUI_HOST` / `WEBUI_PORT` 覆盖，未传 CLI 参数时统一使用解析后的运行时配置。

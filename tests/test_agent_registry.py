@@ -345,6 +345,23 @@ class TestSkillManager(unittest.TestCase):
         self.assertNotIn("x", active_names)
         self.assertNotIn("z", active_names)
 
+    def test_activate_preserves_requested_skill_order(self):
+        self.manager.register(_make_skill("first", enabled=False))
+        self.manager.register(_make_skill("second", enabled=False))
+        self.manager.register(_make_skill("third", enabled=False))
+
+        self.manager.activate(["third", "first"])
+
+        self.assertEqual(
+            [skill.name for skill in self.manager.list_active_skills()],
+            ["third", "first"],
+        )
+        instructions = self.manager.get_skill_instructions()
+        self.assertLess(
+            instructions.index("Test Skill (third)"),
+            instructions.index("Test Skill (first)"),
+        )
+
     def test_activate_all(self):
         self.manager.register(_make_skill("a", enabled=False))
         self.manager.register(_make_skill("b", enabled=False))
@@ -368,8 +385,23 @@ class TestSkillManager(unittest.TestCase):
         s2.required_tools = ["tool_b", "tool_c"]
         self.manager.register(s1)
         self.manager.register(s2)
-        required = set(self.manager.get_required_tools())
-        self.assertEqual(required, {"tool_a", "tool_b", "tool_c"})
+        required = self.manager.get_required_tools()
+        self.assertEqual(required, ["tool_a", "tool_b", "tool_c"])
+
+    def test_get_required_tools_follows_requested_skill_order(self):
+        first = _make_skill("first", enabled=False)
+        first.required_tools = ["shared", "first_only"]
+        second = _make_skill("second", enabled=False)
+        second.required_tools = ["second_only", "shared"]
+        self.manager.register(first)
+        self.manager.register(second)
+
+        self.manager.activate(["second", "first"])
+
+        self.assertEqual(
+            self.manager.get_required_tools(),
+            ["second_only", "shared", "first_only"],
+        )
 
     def test_get_required_tools_respects_enabled(self):
         s1 = _make_skill("s1", enabled=True)
@@ -484,6 +516,22 @@ class TestBuiltinSkills(unittest.TestCase):
         self.assertIn("vcp_h1_h2_buy", user_visible_ids)
         self.assertIn("vcp_breakout_trader", user_visible_ids)
         self.assertNotIn("ema_200_highlow", user_visible_ids)
+
+    def test_nunu_wave_is_hidden_from_user_selectors(self):
+        """Keep the Nunu Wave definition available without showing it in Ask Stock."""
+        from src.agent.skills.base import SkillManager
+
+        manager = SkillManager()
+        manager.load_builtin_strategies()
+
+        nunu_wave = manager.get("nunu_wave")
+        self.assertIsNotNone(nunu_wave)
+        self.assertFalse(nunu_wave.user_invocable)
+
+        user_visible_ids = {
+            skill.name for skill in manager.list_skills() if skill.user_invocable
+        }
+        self.assertNotIn("nunu_wave", user_visible_ids)
 
     def test_serenity_research_is_user_visible_and_tool_backed(self):
         """Serenity research should appear as one chat selector option with registered tools."""
