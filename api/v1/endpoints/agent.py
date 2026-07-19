@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from api.v1.schemas.system_config import AgentBackendStatusResponse
 from src.config import get_config
 from src.services.agent_model_service import list_agent_model_deployments
 
@@ -46,6 +47,8 @@ router = APIRouter()
 
 _AGENT_SSE_HEARTBEAT_SECONDS = 15.0
 _AGENT_SSE_CLEANUP_TIMEOUT_SECONDS = 5.0
+_ACTIVE_CODEX_STREAMS: Dict[str, threading.Event] = {}
+_ACTIVE_CODEX_STREAMS_LOCK = threading.Lock()
 
 
 async def _stream_agent_events(
@@ -105,12 +108,12 @@ async def _stream_agent_events(
         except Exception as exc:
             logger.warning("agent executor cleanup error (ignored): %s", exc, exc_info=True)
 
-
 class ChatRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     message: str
     session_id: Optional[str] = None
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     skills: Optional[List[str]] = Field(
         default=None,
         validation_alias=AliasChoices("skills", "strategies"),
@@ -127,6 +130,7 @@ class ChatResponse(BaseModel):
     content: str
     session_id: str
     error: Optional[str] = None
+
 
 class SkillInfo(BaseModel):
     id: str
@@ -162,8 +166,34 @@ class AgentModelsResponse(BaseModel):
 async def get_agent_models():
     """Get configured Agent model deployments for frontend selection."""
     config = get_config()
+    from src.agent.agent_backend import AgentBackendConfigError, resolve_agent_backend_id
+
+    try:
+        selected_backend = resolve_agent_backend_id(config)
+    except AgentBackendConfigError:
+        return AgentModelsResponse(models=[])
+    if selected_backend == "codex_app_server":
+        return AgentModelsResponse(models=[])
     return AgentModelsResponse(
         models=[AgentModelDeployment(**item) for item in list_agent_model_deployments(config)]
+    )
+
+
+@router.get("/status", response_model=AgentBackendStatusResponse)
+async def get_agent_status():
+    """Return the current effective Chat backend status for the Chat page."""
+    payload = await asyncio.to_thread(_get_agent_chat_status, get_config())
+    return _agent_status_response(payload)
+
+
+def _agent_status_response(payload: Dict[str, Any]) -> AgentBackendStatusResponse:
+    return AgentBackendStatusResponse(
+        backend=payload["backend"],
+        available=payload["available"],
+        experimental=payload["experimental"],
+        version=payload.get("version"),
+        error_code=payload.get("error_code"),
+        message=payload.get("message"),
     )
 
 
@@ -214,13 +244,23 @@ async def get_strategies():
 @router.post("/chat", response_model=ChatResponse)
 async def agent_chat(request: ChatRequest):
     """
-    Chat with the AI Agent.
+    Chat with the AI Agent without progress events.
+
+    Codex Agent callers must use ``/chat/stream``, which provides progress
+    events and request cancellation. The default LiteLLM Agent keeps this
+    endpoint's existing behavior.
     """
     config = get_config()
+    backend_id = _select_agent_chat_backend(config)
+    if backend_id == "codex_app_server":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "capability_unsupported",
+                "message": "Codex Agent requires the Chat interface with progress and stop support",
+            },
+        )
     
-    if not config.is_agent_available():
-        raise HTTPException(status_code=400, detail="Agent mode is not enabled")
-        
     session_id = request.session_id or str(uuid.uuid4())
     
     try:
@@ -246,7 +286,7 @@ async def agent_chat(request: ChatRequest):
             success=result.success,
             content=result.content,
             session_id=session_id,
-            error=result.error
+            error=result.error,
         )
             
     except Exception as e:
@@ -337,9 +377,32 @@ async def send_chat_to_notification(request: SendChatRequest):
 
 
 def _build_executor(config, skills: Optional[List[str]] = None):
-    """Build and return a configured AgentExecutor (sync helper)."""
-    from src.agent.factory import build_agent_executor
-    return build_agent_executor(config, skills=skills)
+    """Build and return the backend-neutral Chat executor (sync helper)."""
+    from src.agent.factory import build_agent_chat_executor
+
+    return build_agent_chat_executor(config, skills=skills)
+
+
+def _get_agent_chat_status(config) -> Dict[str, Any]:
+    from src.services.agent_backend_status_service import AgentBackendStatusService
+
+    return AgentBackendStatusService(config=config).get_status()
+
+
+def _select_agent_chat_backend(config) -> str:
+    """Select the runtime backend without repeating the compatibility probe."""
+    from src.services.agent_backend_status_service import evaluate_agent_backend_config
+
+    evaluation = evaluate_agent_backend_config(config)
+    if not evaluation["available"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": evaluation["error_code"],
+                "message": evaluation["message"],
+            },
+        )
+    return evaluation["backend"]
 
 
 async def _run_research_in_background(
@@ -454,13 +517,24 @@ async def agent_chat_stream(request: ChatRequest):
       - error: error occurred, contains 'message'
     """
     config = get_config()
-    if not config.is_agent_available():
-        raise HTTPException(status_code=400, detail="Agent mode is not enabled")
+    backend_id = _select_agent_chat_backend(config)
 
     session_id = request.session_id or str(uuid.uuid4())
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     cancel_event = threading.Event()
+    request_id = request.request_id or str(uuid.uuid4())
+    if backend_id == "codex_app_server":
+        with _ACTIVE_CODEX_STREAMS_LOCK:
+            if request_id in _ACTIVE_CODEX_STREAMS:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "request_conflict",
+                        "message": "This Agent request is already running",
+                    },
+                )
+            _ACTIVE_CODEX_STREAMS[request_id] = cancel_event
 
     # Pass explicit skills into context for the orchestrator.
     # Direct assignment so caller-provided skills always take precedence.
@@ -484,47 +558,126 @@ async def agent_chat_stream(request: ChatRequest):
             cancel_event.set()
 
     def enqueue_terminal_event(event: dict) -> None:
-        if cancel_event.is_set():
-            return
         try:
             loop.call_soon_threadsafe(queue.put_nowait, event)
         except RuntimeError:
             cancel_event.set()
 
-    def run_sync():
+    def run_sync(executor, turn):
         try:
-            executor = _build_executor(config, skills or None)
-            result = executor.chat(
-                message=request.message,
-                session_id=session_id,
+            result = executor.execute_turn(
+                turn,
                 progress_callback=progress_callback,
-                context=stream_ctx,
                 cancel_event=cancel_event,
             )
-            enqueue_terminal_event(
-                {
-                    "type": "done",
-                    "success": result.success,
-                    "content": result.content,
-                    "error": result.error,
-                    "total_steps": result.total_steps,
-                    "session_id": session_id,
-                },
-            )
+            event = {
+                "type": "done",
+                "success": result.success,
+                "content": result.content,
+                "error": result.error,
+                "total_steps": result.total_steps,
+                "session_id": session_id,
+            }
+            event.update({
+                "backend": getattr(result, "backend", "") or backend_id,
+                "error_code": getattr(result, "error_code", None),
+                "request_id": request_id,
+            })
+            enqueue_terminal_event(event)
         except Exception as exc:
-            logger.error(f"Agent stream error: {exc}")
-            enqueue_terminal_event({"type": "error", "message": str(exc)})
+            logger.error("Agent stream error: %s", exc)
+            event = {
+                "type": "error",
+                "message": "Agent Chat failed" if backend_id == "codex_app_server" else str(exc),
+                "error_code": getattr(exc, "code", "unknown_backend_error"),
+                "backend": backend_id,
+                "request_id": request_id,
+            }
+            enqueue_terminal_event(event)
 
     async def event_generator():
-        # Start executor in a thread so we don't block the event loop
-        fut = loop.run_in_executor(None, run_sync)
-        async for event in _stream_agent_events(
-            queue,
-            fut,
-            cancel_event,
-            session_id,
-        ):
-            yield event
+        fut = None
+        terminal_event_seen = False
+        try:
+            try:
+                executor = await asyncio.to_thread(_build_executor, config, skills or None)
+                turn = await asyncio.to_thread(
+                    executor.prepare_turn,
+                    message=request.message,
+                    session_id=session_id,
+                    context=stream_ctx,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("Agent request preparation failed: %s", exc, exc_info=True)
+                event = {
+                    "type": "error",
+                    "message": "Agent request was not accepted",
+                    "error_code": "request_not_accepted",
+                    "backend": backend_id,
+                    "request_id": request_id,
+                }
+                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+                return
+
+            accepted_event = {
+                "type": "accepted",
+                "backend": backend_id,
+                "request_id": request_id,
+                "session_id": session_id,
+            }
+            yield "data: " + json.dumps(accepted_event, ensure_ascii=False) + "\n\n"
+
+            # Backend execution starts only after the accepted event has been
+            # yielded, so Web state and server persistence share one commit point.
+            fut = loop.run_in_executor(None, run_sync, executor, turn)
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=_AGENT_SSE_HEARTBEAT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    # Keep slow backend work alive without racing the execution
+                    # budget owned by the selected Agent backend.
+                    yield ": heartbeat\n\n"
+                    continue
+                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+                if event.get("type") in ("done", "error"):
+                    terminal_event_seen = True
+                    break
+        finally:
+            if not terminal_event_seen and fut is not None and not fut.done():
+                cancel_event.set()
+            try:
+                if backend_id == "codex_app_server" and fut is not None:
+                    while not fut.done():
+                        try:
+                            await asyncio.shield(fut)
+                        except asyncio.CancelledError:
+                            # Client disconnect cancellation must not abandon the
+                            # owned Codex/tool worker before it actually exits.
+                            cancel_event.set()
+                    if not fut.cancelled():
+                        fut.result()
+                elif fut is not None:
+                    await asyncio.wait_for(
+                        asyncio.shield(fut),
+                        timeout=_AGENT_SSE_CLEANUP_TIMEOUT_SECONDS,
+                    )
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                # Cleanup taking longer than 5s is treated as an expected timeout; no warning.
+                logger.debug("agent executor cleanup timed out after 5s for session %s", session_id)
+            except Exception as exc:
+                logger.warning("agent executor cleanup error (ignored): %s", exc, exc_info=True)
+            finally:
+                if backend_id == "codex_app_server":
+                    with _ACTIVE_CODEX_STREAMS_LOCK:
+                        if _ACTIVE_CODEX_STREAMS.get(request_id) is cancel_event:
+                            _ACTIVE_CODEX_STREAMS.pop(request_id, None)
 
     return StreamingResponse(
         event_generator(),
@@ -535,3 +688,20 @@ async def agent_chat_stream(request: ChatRequest):
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/chat/stream/{request_id}/cancel")
+async def cancel_agent_chat_stream(request_id: str):
+    """Signal cancellation while the original Codex SSE remains open."""
+    with _ACTIVE_CODEX_STREAMS_LOCK:
+        cancel_event = _ACTIVE_CODEX_STREAMS.get(request_id)
+    if cancel_event is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "request_not_active",
+                "message": "This Agent request is no longer running",
+            },
+        )
+    cancel_event.set()
+    return {"accepted": True, "request_id": request_id}
