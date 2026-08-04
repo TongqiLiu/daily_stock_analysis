@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 问股支持多会话并发流式分析：切换会话或开启新对话不再中断后台进行中的分析，侧边栏对运行中会话显示「分析中」标记。
+- [修复] 问股运行状态检查中、检查失败或后端确认不可用时仍允许编辑并保留输入草稿，仅暂停发送；同时避免中文输入法确认候选时误触发送。
 - [改进] 问股输入框旁新增“复制对话”按钮，可一键复制当前会话 Markdown，并在空会话时禁用、复制成功后显示反馈。
 - [修复] 问股流式分析移除与 Agent 总预算冲突的 5 分钟静默超时，改为 SSE 心跳保活；客户端断开后取消信号会贯穿编排器、子 Agent 与 LLM fallback，且 LiteLLM Router / SDK 不再叠加内部重试，避免页面先报超时而后台继续运行。
 - [修复] 修复问股组合 Serenity 投研、价值投资等专项策略时被默认“多策略联合”覆盖的问题：元策略改为前后端互斥，专项组合按选择顺序执行必要工具并逐项输出，且本轮选择优先于旧轮次范围限制。

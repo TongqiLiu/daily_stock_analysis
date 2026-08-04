@@ -72,6 +72,18 @@ type StreamFailureEvent = {
   error_code?: string;
 };
 
+/** Per-session in-flight stream runtime. Keyed by session_id. */
+export interface SessionStreamRuntime {
+  abortController: AbortController;
+  requestId: string;
+  progressSteps: ProgressStep[];
+  chatError: ParsedApiError | null;
+  serverCancellation: boolean;
+  stopping: boolean;
+  terminalStatus: StreamTerminalStatus;
+  stopError: boolean;
+}
+
 function streamFailureFallback(event: StreamFailureEvent, defaultMessage: string): string {
   return event.backend === 'codex_app_server'
     ? 'Codex Agent 暂时无法完成本次问股，请查看 Agent 设置中的运行状态。'
@@ -109,6 +121,56 @@ function getStreamFailureError(
   );
 }
 
+function emptyViewStreamFields() {
+  return {
+    loading: false,
+    progressSteps: [] as ProgressStep[],
+    chatError: null as ParsedApiError | null,
+    abortController: null as AbortController | null,
+    activeRequestId: null as string | null,
+    serverCancellation: false,
+    stopping: false,
+    terminalStatus: null as StreamTerminalStatus,
+    stopError: false,
+  };
+}
+
+type SessionViewExtras = {
+  chatError: ParsedApiError | null;
+  terminalStatus: StreamTerminalStatus;
+};
+
+function viewFieldsForSession(
+  streamsBySession: Record<string, SessionStreamRuntime>,
+  messagesBySession: Record<string, Message[]>,
+  sessionExtras: Record<string, SessionViewExtras>,
+  sessionId: string,
+) {
+  const stream = streamsBySession[sessionId];
+  const messages = messagesBySession[sessionId] ?? [];
+  const extras = sessionExtras[sessionId];
+  if (!stream) {
+    return {
+      messages,
+      ...emptyViewStreamFields(),
+      chatError: extras?.chatError ?? null,
+      terminalStatus: extras?.terminalStatus ?? null,
+    };
+  }
+  return {
+    messages,
+    loading: true,
+    progressSteps: stream.progressSteps,
+    chatError: stream.chatError,
+    abortController: stream.abortController,
+    activeRequestId: stream.requestId,
+    serverCancellation: stream.serverCancellation,
+    stopping: stream.stopping,
+    terminalStatus: stream.terminalStatus,
+    stopError: stream.stopError,
+  };
+}
+
 interface AgentChatState {
   messages: Message[];
   loading: boolean;
@@ -126,6 +188,12 @@ interface AgentChatState {
   stopping: boolean;
   terminalStatus: StreamTerminalStatus;
   stopError: boolean;
+  /** In-flight streams keyed by session_id (supports concurrent sessions). */
+  streamsBySession: Record<string, SessionStreamRuntime>;
+  /** Message cache keyed by session_id (keeps background streams' turns). */
+  messagesBySession: Record<string, Message[]>;
+  /** Finished-session error/terminal banners retained until the session is viewed again. */
+  sessionExtras: Record<string, SessionViewExtras>;
 }
 
 interface AgentChatActions {
@@ -136,7 +204,9 @@ interface AgentChatActions {
   switchSession: (targetSessionId: string) => Promise<void>;
   startNewChat: () => void;
   stopStream: () => Promise<void>;
+  stopSessionStream: (targetSessionId: string) => Promise<void>;
   startStream: (payload: ChatStreamRequest, meta?: StreamMeta) => Promise<void>;
+  isSessionRunning: (targetSessionId: string) => boolean;
 }
 
 const getInitialSessionId = (): string =>
@@ -145,15 +215,72 @@ const getInitialSessionId = (): string =>
     : generateUUID();
 
 export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set, get) => {
-  const deliverServerCancellation = async (requestId: string): Promise<void> => {
+  const deliverServerCancellation = async (
+    requestId: string,
+    sessionId: string,
+  ): Promise<void> => {
     try {
       await agentApi.cancelChatStream(requestId);
     } catch {
-      const current = get();
-      if (current.activeRequestId === requestId && current.loading) {
-        set({ stopping: false, stopError: true });
+      const stream = get().streamsBySession[sessionId];
+      if (stream?.requestId === requestId) {
+        set((s) => {
+          const current = s.streamsBySession[sessionId];
+          if (!current || current.requestId !== requestId) {
+            return s;
+          }
+          const nextStreams = {
+            ...s.streamsBySession,
+            [sessionId]: { ...current, stopping: false, stopError: true },
+          };
+          return {
+            streamsBySession: nextStreams,
+            ...(s.sessionId === sessionId
+              ? { stopping: false, stopError: true }
+              : {}),
+          };
+        });
       }
     }
+  };
+
+  const cacheCurrentMessages = () => {
+    const { sessionId, messages, messagesBySession } = get();
+    if (messages.length === 0 && !messagesBySession[sessionId]) {
+      return;
+    }
+    set({
+      messagesBySession: {
+        ...messagesBySession,
+        [sessionId]: messages,
+      },
+    });
+  };
+
+  const stopSessionStreamInternal = async (targetSessionId: string): Promise<void> => {
+    const stream = get().streamsBySession[targetSessionId];
+    if (!stream || stream.stopping) return;
+
+    if (!stream.serverCancellation) {
+      stream.abortController.abort();
+      return;
+    }
+
+    set((s) => {
+      const current = s.streamsBySession[targetSessionId];
+      if (!current) return s;
+      const nextStreams = {
+        ...s.streamsBySession,
+        [targetSessionId]: { ...current, stopping: true, stopError: false },
+      };
+      return {
+        streamsBySession: nextStreams,
+        ...(s.sessionId === targetSessionId
+          ? { stopping: true, stopError: false }
+          : {}),
+      };
+    });
+    await deliverServerCancellation(stream.requestId, targetSessionId);
   };
 
   return {
@@ -173,10 +300,15 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
   stopping: false,
   terminalStatus: null,
   stopError: false,
+  streamsBySession: {},
+  messagesBySession: {},
+  sessionExtras: {},
 
   setCurrentRoute: (path) => set({ currentRoute: path }),
 
   clearCompletionBadge: () => set({ completionBadge: false }),
+
+  isSessionRunning: (targetSessionId) => Boolean(get().streamsBySession[targetSessionId]),
 
   loadSessions: async () => {
     set({ sessionsLoading: true });
@@ -205,13 +337,18 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         if (sessionExists) {
           const msgs = await agentApi.getChatSessionMessages(savedId);
           if (msgs.length > 0) {
-            set({
-              messages: msgs.map((m) => ({
-                id: m.id,
-                role: m.role,
-                content: m.content,
-              })),
-            });
+            const mapped = msgs.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content,
+            }));
+            set((s) => ({
+              messages: mapped,
+              messagesBySession: {
+                ...s.messagesBySession,
+                [savedId]: mapped,
+              },
+            }));
           }
         } else {
           const newId = generateUUID();
@@ -229,97 +366,203 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
   },
 
   switchSession: async (targetSessionId) => {
-    const { sessionId, messages, abortController } = get();
+    const { sessionId, messages } = get();
     if (targetSessionId === sessionId && messages.length > 0) return;
 
-    abortController?.abort();
+    cacheCurrentMessages();
+
+    const {
+      streamsBySession,
+      messagesBySession,
+      sessionExtras,
+    } = get();
+    const cachedMessages = messagesBySession[targetSessionId];
+    const hasActiveStream = Boolean(streamsBySession[targetSessionId]);
+
+    // Do not abort the previous session's stream — it keeps running in the background.
     set({
-      messages: [],
       sessionId: targetSessionId,
-      loading: false,
-      progressSteps: [],
-      chatError: null,
-      abortController: null,
-      activeRequestId: null,
-      serverCancellation: false,
-      stopping: false,
-      terminalStatus: null,
-      stopError: false,
+      ...viewFieldsForSession(
+        streamsBySession,
+        messagesBySession,
+        sessionExtras,
+        targetSessionId,
+      ),
     });
     localStorage.setItem(STORAGE_KEY_SESSION, targetSessionId);
+
+    // Active stream already owns the live message cache; skip stale API overwrite.
+    if (hasActiveStream) {
+      return;
+    }
 
     try {
       const msgs = await agentApi.getChatSessionMessages(targetSessionId);
       if (get().sessionId !== targetSessionId) {
         return;
       }
-      set({
-        messages: msgs.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-        })),
-      });
+      // If a stream started while we were fetching, keep the live cache.
+      if (get().streamsBySession[targetSessionId]) {
+        return;
+      }
+      const mapped = msgs.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+      }));
+      // Prefer fresher in-memory cache when it has more turns than the API snapshot
+      // (e.g. a just-finished background stream that hasn't been re-fetched yet).
+      const localCached = get().messagesBySession[targetSessionId];
+      const useLocal = Boolean(
+        localCached
+        && localCached.length > mapped.length,
+      );
+      const nextMessages = useLocal ? localCached! : mapped;
+      set((s) => ({
+        messages: nextMessages,
+        messagesBySession: {
+          ...s.messagesBySession,
+          [targetSessionId]: nextMessages,
+        },
+      }));
     } catch {
-      // Ignore
+      // Keep whatever we already have in cache/view.
+      if (cachedMessages && get().sessionId === targetSessionId) {
+        set({ messages: cachedMessages });
+      }
     }
   },
 
   startNewChat: () => {
-    // Abort any in-flight stream so the old request does not keep running
-    get().abortController?.abort();
+    // Keep any in-flight streams running in the background.
+    cacheCurrentMessages();
     const newId = generateUUID();
     set({
       sessionId: newId,
       messages: [],
-      loading: false,
-      progressSteps: [],
-      chatError: null,
-      abortController: null,
-      activeRequestId: null,
-      serverCancellation: false,
-      stopping: false,
-      terminalStatus: null,
-      stopError: false,
+      messagesBySession: {
+        ...get().messagesBySession,
+        [newId]: [],
+      },
+      ...emptyViewStreamFields(),
     });
     localStorage.setItem(STORAGE_KEY_SESSION, newId);
   },
 
   stopStream: async () => {
-    const state = get();
-    if (!state.loading || state.stopping) return;
-    if (!state.serverCancellation || !state.activeRequestId) {
-      state.abortController?.abort();
-      return;
-    }
+    await stopSessionStreamInternal(get().sessionId);
+  },
 
-    set({ stopping: true, stopError: false });
-    await deliverServerCancellation(state.activeRequestId);
+  stopSessionStream: async (targetSessionId) => {
+    await stopSessionStreamInternal(targetSessionId);
   },
 
   startStream: async (payload, meta) => {
-    if (get().loading) return;
-    const { abortController: prevAc, sessionId: storeSessionId } = get();
-    prevAc?.abort();
+    const storeSessionId = get().sessionId;
+    const streamSessionId = payload.session_id || storeSessionId;
+
+    // Only block if THIS session already has an in-flight stream.
+    if (get().streamsBySession[streamSessionId]) return;
 
     const ac = new AbortController();
     const requestId = payload.request_id || generateUUID();
-    set({
+    const initialMessages = get().sessionId === streamSessionId
+      ? get().messages
+      : (get().messagesBySession[streamSessionId] ?? []);
+
+    const runtime: SessionStreamRuntime = {
       abortController: ac,
-      activeRequestId: requestId,
+      requestId,
+      progressSteps: [],
+      chatError: null,
       serverCancellation: false,
       stopping: false,
       terminalStatus: null,
       stopError: false,
+    };
+
+    set((s) => {
+      const nextStreams = {
+        ...s.streamsBySession,
+        [streamSessionId]: runtime,
+      };
+      const nextMessagesBySession = {
+        ...s.messagesBySession,
+        [streamSessionId]: initialMessages,
+      };
+      const nextExtras = { ...s.sessionExtras };
+      delete nextExtras[streamSessionId];
+      return {
+        streamsBySession: nextStreams,
+        messagesBySession: nextMessagesBySession,
+        sessionExtras: nextExtras,
+        ...(s.sessionId === streamSessionId
+          ? {
+              loading: true,
+              progressSteps: [],
+              chatError: null,
+              abortController: ac,
+              activeRequestId: requestId,
+              serverCancellation: false,
+              stopping: false,
+              terminalStatus: null,
+              stopError: false,
+            }
+          : {}),
+      };
     });
 
-    const streamSessionId = payload.session_id || storeSessionId;
     const ownsStream = () => {
-      const state = get();
-      return state.abortController === ac
-        && state.activeRequestId === requestId
-        && state.sessionId === streamSessionId;
+      const stream = get().streamsBySession[streamSessionId];
+      return stream?.abortController === ac && stream.requestId === requestId;
     };
+    const isViewingStreamSession = () => get().sessionId === streamSessionId;
+
+    const patchOwnedStream = (
+      patch: Partial<SessionStreamRuntime>,
+      viewExtra?: Record<string, unknown>,
+    ) => {
+      set((s) => {
+        const current = s.streamsBySession[streamSessionId];
+        if (!current || current.abortController !== ac || current.requestId !== requestId) {
+          return s;
+        }
+        const nextStreams = {
+          ...s.streamsBySession,
+          [streamSessionId]: { ...current, ...patch },
+        };
+        return {
+          streamsBySession: nextStreams,
+          ...(s.sessionId === streamSessionId
+            ? {
+                progressSteps: nextStreams[streamSessionId].progressSteps,
+                chatError: nextStreams[streamSessionId].chatError,
+                serverCancellation: nextStreams[streamSessionId].serverCancellation,
+                stopping: nextStreams[streamSessionId].stopping,
+                terminalStatus: nextStreams[streamSessionId].terminalStatus,
+                stopError: nextStreams[streamSessionId].stopError,
+                ...viewExtra,
+              }
+            : {}),
+        };
+      });
+    };
+
+    const updateSessionMessages = (updater: (prev: Message[]) => Message[]) => {
+      set((s) => {
+        const prev = s.messagesBySession[streamSessionId] ?? [];
+        const nextMessages = updater(prev);
+        const nextMessagesBySession = {
+          ...s.messagesBySession,
+          [streamSessionId]: nextMessages,
+        };
+        return {
+          messagesBySession: nextMessagesBySession,
+          ...(s.sessionId === streamSessionId ? { messages: nextMessages } : {}),
+        };
+      });
+    };
+
     const skillNames = meta?.skillNames?.length
       ? meta.skillNames
       : [meta?.skillName ?? '通用'];
@@ -334,12 +577,6 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       skillNames,
       skillName,
     };
-
-    set({
-      loading: true,
-      progressSteps: [],
-      chatError: null,
-    });
 
     try {
       const response = await agentApi.chatStream(
@@ -377,9 +614,14 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           }
           acceptedEvent = event as StreamAcceptedEvent;
           finalBackend = acceptedEvent.backend;
+          patchOwnedStream({
+            serverCancellation: acceptedEvent.backend === 'codex_app_server',
+          });
+          updateSessionMessages((prev) => [
+            ...prev,
+            { ...userMessage, backend: acceptedEvent!.backend },
+          ]);
           set((s) => ({
-            messages: [...s.messages, { ...userMessage, backend: acceptedEvent!.backend }],
-            serverCancellation: acceptedEvent!.backend === 'codex_app_server',
             sessions: s.sessions.some((x) => x.session_id === streamSessionId)
               ? s.sessions
               : [
@@ -400,15 +642,15 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           throw protocolError(`Agent stream emitted ${event.type || 'an unknown event'} before accepted.`);
         }
         if (event.type === 'done') {
-          set({ stopError: false });
+          patchOwnedStream({ stopError: false });
           receivedDoneEvent = true;
           const doneEvent = event as unknown as StreamFailureEvent;
           if (doneEvent.error_code === 'cancelled') {
-            set({ terminalStatus: 'cancelled' });
+            patchOwnedStream({ terminalStatus: 'cancelled' });
             return;
           }
           if (doneEvent.error_code === 'timeout') {
-            set({ terminalStatus: 'timeout' });
+            patchOwnedStream({ terminalStatus: 'timeout' });
             return;
           }
           if (doneEvent.success === false) {
@@ -422,7 +664,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         }
 
         if (event.type === 'error') {
-          set({ stopError: false });
+          patchOwnedStream({ stopError: false });
           const failureEvent = event as unknown as StreamFailureEvent;
           throw getStreamFailureError(
             failureEvent,
@@ -431,7 +673,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         }
 
         currentProgressSteps.push(event);
-        set((s) => ({ progressSteps: [...s.progressSteps, event] }));
+        patchOwnedStream({ progressSteps: [...currentProgressSteps] });
       };
 
       while (true) {
@@ -479,46 +721,69 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       const shouldAppend = ownsStream() && !ac.signal.aborted && finalContent !== null;
 
       if (shouldAppend) {
-        set((s) => ({
-          messages: [
-            ...s.messages,
-            {
-              id: (Date.now() + 1).toString(),
-              role: 'assistant',
-              content: finalContent || '（无内容）',
-              skills: payload.skills,
-              skill: payload.skills?.[0],
-              skillNames,
-              skillName,
-              thinkingSteps: [...currentProgressSteps],
-              backend: finalBackend,
-            },
-          ],
-        }));
+        updateSessionMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: finalContent || '（无内容）',
+            skills: payload.skills,
+            skill: payload.skills?.[0],
+            skillNames,
+            skillName,
+            thinkingSteps: [...currentProgressSteps],
+            backend: finalBackend,
+          },
+        ]);
       }
 
-      if (ownsStream() && !ac.signal.aborted && currentRoute !== '/chat') {
+      if (ownsStream() && !ac.signal.aborted && (currentRoute !== '/chat' || !isViewingStreamSession())) {
         set({ completionBadge: true });
       }
     } catch (error: unknown) {
       if (isAbortError(error) || !ownsStream() || ac.signal.aborted) {
-        // Aborted or superseded requests must not affect the active chat.
+        // Aborted requests must not affect other sessions' chat state.
       } else {
-        set({ chatError: getParsedApiError(error) });
+        const parsed = getParsedApiError(error);
+        patchOwnedStream({ chatError: parsed });
         const { currentRoute } = get();
-        if (currentRoute !== '/chat') {
+        if (currentRoute !== '/chat' || !isViewingStreamSession()) {
           set({ completionBadge: true });
         }
       }
     } finally {
       if (ownsStream()) {
-        set({
-          loading: false,
-          progressSteps: [],
-          abortController: null,
-          activeRequestId: null,
-          serverCancellation: false,
-          stopping: false,
+        const finishedTerminal = get().streamsBySession[streamSessionId]?.terminalStatus ?? null;
+        const finishedError = get().streamsBySession[streamSessionId]?.chatError ?? null;
+        set((s) => {
+          const nextStreams = { ...s.streamsBySession };
+          delete nextStreams[streamSessionId];
+          const nextExtras = { ...s.sessionExtras };
+          if (finishedTerminal || finishedError) {
+            nextExtras[streamSessionId] = {
+              chatError: finishedError,
+              terminalStatus: finishedTerminal,
+            };
+          } else {
+            delete nextExtras[streamSessionId];
+          }
+          return {
+            streamsBySession: nextStreams,
+            sessionExtras: nextExtras,
+            ...(s.sessionId === streamSessionId
+              ? {
+                  loading: false,
+                  progressSteps: [],
+                  abortController: null,
+                  activeRequestId: null,
+                  serverCancellation: false,
+                  stopping: false,
+                  terminalStatus: finishedTerminal,
+                  chatError: finishedError,
+                  stopError: false,
+                }
+              : {}),
+          };
         });
         await get().loadSessions();
       }

@@ -60,8 +60,10 @@ const mockLoadInitialSession = vi.fn();
 const mockSwitchSession = vi.fn();
 const mockStartStream = vi.fn();
 const mockStopStream = vi.fn();
+const mockStopSessionStream = vi.fn();
 const mockClearCompletionBadge = vi.fn();
 const mockStartNewChat = vi.fn();
+const mockIsSessionRunning = vi.fn(() => false);
 
 const mockStoreState = {
   messages: [] as Message[],
@@ -86,8 +88,10 @@ const mockStoreState = {
   loadInitialSession: mockLoadInitialSession,
   switchSession: mockSwitchSession,
   stopStream: mockStopStream,
+  stopSessionStream: mockStopSessionStream,
   startStream: mockStartStream,
   clearCompletionBadge: mockClearCompletionBadge,
+  isSessionRunning: mockIsSessionRunning,
 };
 
 vi.mock('../../api/agent', () => ({
@@ -193,6 +197,7 @@ beforeEach(() => {
   mockStoreState.stopError = false;
   mockStoreState.sessionsLoading = false;
   mockStoreState.sessionId = 'session-1';
+  mockIsSessionRunning.mockImplementation(() => false);
   mockStoreState.sessions = [
     {
       session_id: 'session-1',
@@ -383,7 +388,7 @@ describe('ChatPage', () => {
     expect(screen.queryByText('正在确认问股运行环境')).not.toBeInTheDocument();
   });
 
-  it('preserves the draft and disables sending while the compatibility check is pending', async () => {
+  it('keeps the draft editable but disables sending while the compatibility check is pending', async () => {
     const status = createDeferred<{
       backend: string;
       available: boolean;
@@ -401,8 +406,10 @@ describe('ChatPage', () => {
 
     expect(await screen.findByText('正在确认问股运行环境')).toBeInTheDocument();
     const input = screen.getByPlaceholderText(/分析 600519/);
-    expect(input).toBeDisabled();
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: '分析比亚迪' } });
     expect(screen.getByRole('button', { name: '分析比亚迪趋势' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
     expect(screen.getByText(/不会调用模型或读取股票数据/)).toBeInTheDocument();
     status.resolve({
       backend: 'codex_app_server',
@@ -412,7 +419,8 @@ describe('ChatPage', () => {
       message: null,
     });
 
-    await waitFor(() => expect(input).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+    expect(input).toHaveValue('分析比亚迪');
     expect(screen.getByRole('button', { name: '分析比亚迪趋势' })).toBeEnabled();
     expect(mockGetStatus).toHaveBeenCalledTimes(1);
   });
@@ -435,13 +443,16 @@ describe('ChatPage', () => {
     render(<RouterProvider router={router} />);
 
     const input = await screen.findByPlaceholderText(/分析 600519/);
-    expect(input).toBeDisabled();
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: '分析 AAPL' } });
+    expect(input).toHaveValue('分析 AAPL');
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: '前往 Agent 设置' }));
     expect(await screen.findByText('Agent settings destination')).toBeInTheDocument();
     expect(router.state.location.search).toBe('?category=agent');
   });
 
-  it('keeps sending disabled when backend status cannot be established', async () => {
+  it('keeps the draft editable while sending is disabled when backend status cannot be established', async () => {
     mockGetStatus.mockRejectedValueOnce(new Error('temporary status failure'));
     render(
       <MemoryRouter initialEntries={['/chat']}>
@@ -450,11 +461,16 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByText('暂时无法读取问股运行状态')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/分析 600519/)).toBeDisabled();
+    const input = screen.getByPlaceholderText(/分析 600519/);
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: '分析 NFLX' } });
+    expect(input).toHaveValue('分析 NFLX');
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
     expect(mockGetStatus).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: '重新检查' }));
-    await waitFor(() => expect(screen.getByPlaceholderText(/分析 600519/)).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+    expect(input).toHaveValue('分析 NFLX');
     expect(mockGetStatus).toHaveBeenCalledTimes(2);
   });
 

@@ -493,8 +493,10 @@ const ChatPage: React.FC = () => {
     loadInitialSession,
     switchSession,
     stopStream,
+    stopSessionStream,
     startStream,
     clearCompletionBadge,
+    isSessionRunning,
   } = useAgentChatStore();
 
   useEffect(() => {
@@ -807,10 +809,12 @@ const ChatPage: React.FC = () => {
 
   const confirmDelete = useCallback(() => {
     if (!deleteConfirmId) return;
-    agentApi.deleteChatSession(deleteConfirmId)
+    const deletingId = deleteConfirmId;
+    void stopSessionStream(deletingId);
+    agentApi.deleteChatSession(deletingId)
       .then(() => {
         loadSessions();
-        if (deleteConfirmId === sessionId) {
+        if (deletingId === sessionId) {
           handleStartNewChat();
         }
       })
@@ -818,7 +822,7 @@ const ChatPage: React.FC = () => {
         console.error('Failed to delete chat session:', error);
       });
     setDeleteConfirmId(null);
-  }, [deleteConfirmId, sessionId, loadSessions, handleStartNewChat]);
+  }, [deleteConfirmId, sessionId, loadSessions, handleStartNewChat, stopSessionStream]);
 
   // Handle follow-up from report page: ?stock=600519&name=贵州茅台&recordId=xxx
   useEffect(() => {
@@ -929,9 +933,15 @@ const ChatPage: React.FC = () => {
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (
+      e.key === 'Enter'
+      && !e.shiftKey
+      && !e.nativeEvent.isComposing
+      && !loading
+      && agentAvailable
+    ) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   };
 
@@ -1171,6 +1181,14 @@ const ChatPage: React.FC = () => {
                       <span className="meta">
                         {s.message_count} 条对话
                       </span>
+                      {isSessionRunning(s.session_id) && (
+                        <>
+                          <span className="separator" />
+                          <span className="meta text-cyan animate-pulse" data-testid={`session-running-${s.session_id}`}>
+                            分析中
+                          </span>
+                        </>
+                      )}
                       {s.last_active && (
                         <>
                           <span className="separator" />
@@ -1868,7 +1886,6 @@ const ChatPage: React.FC = () => {
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="例如：分析 600519 / 茅台现在适合买入吗？ (Enter 发送, Shift+Enter 换行)"
-                  disabled={loading || !agentAvailable}
                   rows={1}
                   className="input-surface input-focus-glow flex-1 min-h-[44px] max-h-[200px] rounded-xl border bg-transparent px-4 py-2.5 text-sm transition-all focus:outline-none resize-none disabled:cursor-not-allowed disabled:opacity-60"
                   style={{ height: 'auto' }}
