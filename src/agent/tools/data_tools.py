@@ -10,11 +10,12 @@ Tools:
 """
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.agent.tools.execution import check_tool_execution
+from src.agent.freshness import is_fresh_market_data_required
 from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
 logger = logging.getLogger(__name__)
@@ -266,10 +267,14 @@ def _handle_get_realtime_quote(stock_code: str) -> dict:
         return {
             "error": f"No realtime quote available for {stock_code}",
             "retriable": False,
-            "note": "All data sources unavailable (network or circuit-breaker). Skip this tool and proceed with historical data only.",
+            "freshness_required": is_fresh_market_data_required(),
+            "note": (
+                "All realtime data sources unavailable (network or circuit-breaker). "
+                "For a current-analysis turn, do not use historical data to replace this quote."
+            ),
         }
 
-    return {
+    response = {
         "code": quote.code,
         "name": quote.name,
         "price": quote.price,
@@ -291,12 +296,29 @@ def _handle_get_realtime_quote(stock_code: str) -> dict:
         "change_60d": quote.change_60d,
         "source": quote.source.value if hasattr(quote.source, 'value') else str(quote.source),
     }
+    for field in (
+        "fetched_at",
+        "provider_timestamp",
+        "is_stale",
+        "stale_seconds",
+        "fallback_from",
+        "data_quality",
+        "missing_fields",
+    ):
+        value = getattr(quote, field, None)
+        if value is not None:
+            response[field] = value
+    response["freshness_status"] = (
+        "fresh_request" if response.get("fetched_at") else "timestamp_unavailable"
+    )
+    return response
 
 
 get_realtime_quote_tool = ToolDefinition(
     name="get_realtime_quote",
     description="Get real-time stock quote including price, change%, volume ratio, "
-                "turnover rate, PE, PB, market cap. Returns live market data.",
+                "turnover rate, PE, PB, market cap. Returns live market data plus "
+                "fetched_at/provider_timestamp freshness metadata.",
     parameters=[
         ToolParameter(
             name="stock_code",
@@ -317,13 +339,23 @@ get_realtime_quote_tool = ToolDefinition(
 def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
     """Get daily OHLCV history data."""
     effective_days, metadata = _normalize_history_days(days)
+    freshness_required = is_fresh_market_data_required()
 
     from src.services.history_loader import load_history_df
-    df, source = load_history_df(stock_code, days=effective_days)
+    df, source = load_history_df(
+        stock_code,
+        days=effective_days,
+        force_refresh=freshness_required,
+    )
 
     if df is None or df.empty:
         return _append_history_metadata(
-            {"error": f"No historical data available for {stock_code}"},
+            {
+                "error": f"No historical data available for {stock_code}",
+                "freshness_required": freshness_required,
+                "refresh_mode": "network" if freshness_required else "cache_or_network",
+                "retriable": False if freshness_required else True,
+            },
             metadata,
         )
 
@@ -351,6 +383,11 @@ def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
         if "date" in r:
             r["date"] = str(r["date"])
 
+    latest_data_date = None
+    if "date" in df.columns and not df["date"].empty:
+        latest_data_date = str(df["date"].max())[:10]
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
     response_code = stock_code
     if source == "db_cache" and records:
         response_code = records[-1].get("code") or response_code
@@ -364,6 +401,10 @@ def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
         "actual_records": len(records),
         "partial_cache": source == "db_cache" and len(records) < effective_days,
         "total_records": len(records),
+        "latest_data_date": latest_data_date,
+        "fetched_at": fetched_at,
+        "freshness_required": freshness_required,
+        "refresh_mode": "network" if source != "db_cache" else "cache",
         "data": records,
     }, metadata)
 
@@ -371,7 +412,10 @@ def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
 get_daily_history_tool = ToolDefinition(
     name="get_daily_history",
     description="Get daily OHLCV (open, high, low, close, volume) historical data "
-                "with MA5/MA10/MA20 indicators. Returns the last N trading days.",
+                "with MA5/MA10/MA20 indicators. Returns the last N trading days. "
+                "For a current stock-analysis turn, this tool must perform a network "
+                "refresh and returns refresh_mode=network, cache_hit=false, fetched_at, "
+                "and latest_data_date.",
     parameters=[
         ToolParameter(
             name="stock_code",

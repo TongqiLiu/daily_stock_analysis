@@ -120,6 +120,12 @@ class BaseAgent(ABC):
 
             # Restrict tools if the agent declares a subset
             registry = self._filtered_registry()
+            requires_fresh_market_data = (
+                self.agent_name == "technical"
+                and bool(ctx.stock_code)
+                and registry.get("get_realtime_quote") is not None
+                and registry.get("get_daily_history") is not None
+            )
 
             loop_kwargs: Dict[str, Any] = {
                 "messages": messages,
@@ -130,6 +136,7 @@ class BaseAgent(ABC):
                 "max_wall_clock_seconds": timeout_seconds,
                 "stock_scope": ctx.meta.get("stock_scope"),
                 "emit_stage_events": False,
+                "require_fresh_market_data": requires_fresh_market_data,
             }
             if cancel_event is not None:
                 loop_kwargs["cancel_event"] = cancel_event

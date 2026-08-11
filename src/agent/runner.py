@@ -26,6 +26,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from src.agent.llm_adapter import LLMToolAdapter
 from src.agent.dashboard_payload import sanitize_agent_dashboard_payload
+from src.agent.freshness import (
+    reset_fresh_market_data_required,
+    set_fresh_market_data_required,
+    validate_fresh_market_data,
+)
 from src.agent.protocols import StageFailureReason
 from src.agent.stream_events import stream_event
 from src.agent.tools.registry import ToolRegistry
@@ -368,6 +373,7 @@ def run_agent_loop(
     stock_scope: Optional[StockScope] = None,
     emit_stage_events: bool = True,
     cancel_event: Optional[Any] = None,
+    require_fresh_market_data: bool = False,
 ) -> RunLoopResult:
     """Execute the ReAct LLM ↔ tool loop.
 
@@ -389,6 +395,8 @@ def run_agent_loop(
         emit_stage_events: Whether to emit the synthetic ``agent_loop``
             stage lifecycle. Orchestrated business stages disable this so
             ``stage_start`` / ``stage_done`` only describe real stages.
+        require_fresh_market_data: Require a successful current quote and
+            network-refreshed daily history before accepting a final answer.
 
     Returns:
         A :class:`RunLoopResult` with the final content, stats, and the
@@ -403,6 +411,12 @@ def run_agent_loop(
     total_tokens = 0
     provider_used = ""
     models_used: List[str] = []
+    freshness_token = set_fresh_market_data_required(require_fresh_market_data)
+    initial_message_count = len(messages)
+    last_freshness_issue = ""
+    required_stock_codes = None
+    if require_fresh_market_data and stock_scope is not None:
+        required_stock_codes = getattr(stock_scope, "allowed_stock_codes", None)
 
     # Minimum seconds needed for a meaningful LLM round-trip.  If the
     # remaining budget is positive but below this threshold, the step will
@@ -412,6 +426,7 @@ def run_agent_loop(
     _MIN_STEP_BUDGET_S = 8.0
 
     def _finish(result: RunLoopResult) -> RunLoopResult:
+        reset_fresh_market_data_required(freshness_token)
         if progress_callback and emit_stage_events:
             progress_callback(
                 stream_event(
@@ -629,6 +644,39 @@ def run_agent_loop(
 
         else:
             # ---- final answer branch ----
+            final_content = response.content or ""
+            is_error = response.provider == "error"
+
+            if require_fresh_market_data and not is_error:
+                freshness = validate_fresh_market_data(
+                    messages[initial_message_count:],
+                    required_stock_codes=required_stock_codes,
+                )
+                if not freshness.ok:
+                    last_freshness_issue = ", ".join(freshness.missing)
+                    logger.warning(
+                        "Agent final answer blocked by fresh-data gate: %s",
+                        last_freshness_issue,
+                    )
+                    if step + 1 >= max_steps:
+                        return _finish(RunLoopResult(
+                            success=False,
+                            content="",
+                            tool_calls_log=tool_calls_log,
+                            total_steps=step + 1,
+                            total_tokens=total_tokens,
+                            provider=provider_used,
+                            models_used=models_used,
+                            error=(
+                                "Fresh market data requirement not met: "
+                                f"{last_freshness_issue}"
+                            ),
+                            failure_reason=StageFailureReason.STAGE_FAILURE,
+                            messages=messages,
+                        ))
+                    messages.append({"role": "user", "content": freshness.retry_message})
+                    continue
+
             logger.info(
                 "Agent completed in %d steps (%.1fs, %d tokens)",
                 step + 1,
@@ -637,9 +685,6 @@ def run_agent_loop(
             )
             if progress_callback:
                 progress_callback(stream_event("generating", step=step + 1, message="正在生成最终分析..."))
-
-            final_content = response.content or ""
-            is_error = response.provider == "error"
 
             return _finish(RunLoopResult(
                 success=not is_error and bool(final_content),
@@ -664,7 +709,11 @@ def run_agent_loop(
         total_tokens=total_tokens,
         provider=provider_used,
         models_used=models_used,
-        error=f"Agent exceeded max steps ({max_steps}). Try increasing AGENT_MAX_STEPS if analysis tasks are complex.",
+        error=(
+            f"Fresh market data requirement not met: {last_freshness_issue}"
+            if require_fresh_market_data and last_freshness_issue
+            else f"Agent exceeded max steps ({max_steps}). Try increasing AGENT_MAX_STEPS if analysis tasks are complex."
+        ),
         failure_reason=StageFailureReason.STAGE_FAILURE,
         messages=messages,
     ))

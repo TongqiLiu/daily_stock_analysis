@@ -118,6 +118,7 @@ class LiteLLMAgentBackend(AgentBackend):
             max_wall_clock_seconds=request.max_wall_clock_seconds,
             stock_scope=request.stock_scope,
             cancel_event=request.cancel_event,
+            require_fresh_market_data=request.stock_scope is not None,
         )
         usage = {"total_tokens": loop_result.total_tokens} if loop_result.total_tokens > 0 else None
         error_code = None

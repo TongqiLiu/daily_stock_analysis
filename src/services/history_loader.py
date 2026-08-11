@@ -127,12 +127,17 @@ def load_history_df(
     stock_code: str,
     days: int = 60,
     target_date: Optional[date] = None,
+    force_refresh: bool = False,
 ) -> Tuple[Optional[pd.DataFrame], str]:
     """Load K-line history, DB first with DataFetcherManager fallback.
 
     Returns ``(df, source)`` where *source* is ``"db_cache"`` on DB hit or the
     actual provider name on network fallback.  Returns ``(None, "none")`` when
     both paths fail.
+
+    ``force_refresh=True`` skips the DB hit for current-analysis turns.  The
+    network provider chain remains responsible for its normal source fallback;
+    an old local DB snapshot is never presented as a successful refresh.
     """
     from src.storage import get_db
 
@@ -147,20 +152,26 @@ def load_history_df(
     start = end - timedelta(days=int(days * 1.8) + 10)
 
     # --- 1. DB lookup (canonical code, then prefix-stripped fallback) ------
-    try:
-        db = get_db()
-        _code, bars = _select_best_bars(db, stock_code, start, end)
-        required_records = max(min(days, _CACHE_MIN_RECORDS), 1)
-        latest_date = max((_bar_date(bar) for bar in bars), default=date.min)
-        if bars and latest_date >= end and len(bars) >= required_records:
-            df = pd.DataFrame([b.to_dict() for b in bars])
-            logger.debug(
-                "load_history_df(%s): %d bars from DB (requested %d)",
-                stock_code, len(df), days,
-            )
-            return df, "db_cache"
-    except Exception as e:
-        logger.debug("load_history_df(%s): DB read failed: %s", stock_code, e)
+    if not force_refresh:
+        try:
+            db = get_db()
+            _code, bars = _select_best_bars(db, stock_code, start, end)
+            required_records = max(min(days, _CACHE_MIN_RECORDS), 1)
+            latest_date = max((_bar_date(bar) for bar in bars), default=date.min)
+            if bars and latest_date >= end and len(bars) >= required_records:
+                df = pd.DataFrame([b.to_dict() for b in bars])
+                logger.debug(
+                    "load_history_df(%s): %d bars from DB (requested %d)",
+                    stock_code, len(df), days,
+                )
+                return df, "db_cache"
+        except Exception as e:
+            logger.debug("load_history_df(%s): DB read failed: %s", stock_code, e)
+    else:
+        logger.info(
+            "load_history_df(%s): forcing network refresh for current analysis",
+            stock_code,
+        )
 
     # --- 2. Network fallback via singleton DataFetcherManager -------------
     try:

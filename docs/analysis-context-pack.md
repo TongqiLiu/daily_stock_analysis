@@ -266,6 +266,8 @@ Agent 有三层需要分开记录的数据面。`src/core/pipeline.py` 的 Agent
 
 Agent 工具还会独立调用 `get_realtime_quote`、`get_daily_history`、`get_chip_distribution`、`get_analysis_context`、`get_stock_info` 等工具，容易与普通分析前置获取产生重复请求。当前 pack 生成只在 Agent 历史预取后复用 `storage.get_analysis_context()` 的日线可用性状态，不复用或暴露完整工具级 pack cache；P5 再决定是否做更深的数据质量评分与工具缓存复用。
 
+当前走势类 Agent 分析另有一条最新数据硬约束：本轮必须成功调用 `get_realtime_quote` 和 `get_daily_history`。后者在当前分析上下文中跳过 DB-first 命中并走网络数据源链，返回 `refresh_mode=network`、`cache_hit=false`、`fetched_at` 和 `latest_data_date`；历史对话、`get_analysis_context` 以及旧快照只能用于对比。若任一核心刷新失败，最终回答门禁会阻止生成“最新走势”结论。
+
 ### 告警
 
 告警链路在 `src/services/alert_worker.py` 中评估规则、记录触发历史并分发通知，具体字段语义见 [实时告警中心](alerts.md)。告警状态如 `triggered`、`skipped`、`degraded`、`failed` 是规则评估或记录状态，不能直接写入字段质量枚举。

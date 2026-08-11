@@ -108,6 +108,38 @@ def _make_stock_registry(executed_calls):
     return registry
 
 
+def _make_fresh_market_registry():
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="get_realtime_quote",
+            description="Gets fresh realtime quote",
+            parameters=[ToolParameter(name="stock_code", type="string", description="Stock code")],
+            handler=lambda stock_code: {
+                "code": stock_code,
+                "price": 144.91,
+                "fetched_at": "2026-08-12T01:00:00+00:00",
+            },
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="get_daily_history",
+            description="Gets network-refreshed history",
+            parameters=[ToolParameter(name="stock_code", type="string", description="Stock code")],
+            handler=lambda stock_code: {
+                "code": stock_code,
+                "cache_hit": False,
+                "refresh_mode": "network",
+                "fetched_at": "2026-08-12T01:00:01+00:00",
+                "latest_data_date": "2026-08-11",
+                "data": [{"date": "2026-08-11", "close": 144.91}],
+            },
+        )
+    )
+    return registry
+
+
 def _make_mock_adapter():
     """Create a MagicMock LLMToolAdapter."""
     adapter = MagicMock()
@@ -181,6 +213,62 @@ def test_agent_system_prompts_require_phase_decision_contract() -> None:
         assert '"data_limitations"' in prompt
         assert "quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated" in prompt
         assert "`confidence_level` 不得为高" in prompt
+
+
+def test_fresh_market_data_gate_blocks_final_answer_without_current_tools() -> None:
+    registry = _make_fresh_market_registry()
+    adapter = _make_mock_adapter()
+    adapter.call_with_tools.return_value = LLMResponse(
+        content="使用上次分析结果即可。",
+        tool_calls=[],
+        usage={},
+        provider="openai",
+    )
+
+    result = run_agent_loop(
+        messages=[{"role": "user", "content": "分析 VST 最新走势"}],
+        tool_registry=registry,
+        llm_adapter=adapter,
+        max_steps=2,
+        stock_scope=StockScope(expected_stock_code="VST", allowed_stock_codes={"VST"}),
+        require_fresh_market_data=True,
+    )
+
+    assert result.success is False
+    assert "Fresh market data requirement not met" in (result.error or "")
+    assert adapter.call_with_tools.call_count == 2
+
+
+def test_fresh_market_data_gate_accepts_network_refresh_before_final_answer() -> None:
+    registry = _make_fresh_market_registry()
+    adapter = _make_mock_adapter()
+    adapter.call_with_tools.side_effect = [
+        LLMResponse(
+            content="正在获取本轮行情。",
+            tool_calls=[
+                ToolCall(id="quote", name="get_realtime_quote", arguments={"stock_code": "VST"}),
+                ToolCall(id="history", name="get_daily_history", arguments={"stock_code": "VST"}),
+            ],
+            usage={},
+            provider="openai",
+        ),
+        LLMResponse(content="基于本轮数据完成分析。", tool_calls=[], usage={}, provider="openai"),
+    ]
+
+    result = run_agent_loop(
+        messages=[{"role": "user", "content": "分析 VST 最新走势"}],
+        tool_registry=registry,
+        llm_adapter=adapter,
+        max_steps=2,
+        stock_scope=StockScope(expected_stock_code="VST", allowed_stock_codes={"VST"}),
+        require_fresh_market_data=True,
+    )
+
+    assert result.success is True
+    assert [item["tool"] for item in result.tool_calls_log] == [
+        "get_realtime_quote",
+        "get_daily_history",
+    ]
 
 
 # ============================================================

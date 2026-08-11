@@ -10,6 +10,10 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from src.agent.tools.data_tools import _handle_get_daily_history
+from src.agent.freshness import (
+    reset_fresh_market_data_required,
+    set_fresh_market_data_required,
+)
 from src.services.history_loader import reset_frozen_target_date, set_frozen_target_date
 
 
@@ -157,6 +161,28 @@ class DailyHistoryCacheToolTest(unittest.TestCase):
         db.save_daily_data.assert_called_once_with(df, "600519", "Fetcher")
         self.assertFalse(result["cache_hit"])
         self.assertEqual(result["source"], "Fetcher")
+
+    def test_current_analysis_bypasses_fresh_db_cache(self) -> None:
+        target = date(2026, 4, 24)
+        db = _FakeDb({"600519": _rows("600519", target, 40)})
+        df = pd.DataFrame(
+            [{"date": target, "open": 1, "high": 2, "low": 0.5, "close": 1.5}]
+        )
+        manager = SimpleNamespace(get_daily_data=MagicMock(return_value=(df, "Fetcher")))
+        token = set_fresh_market_data_required(True)
+        try:
+            with patch("src.storage.get_db", return_value=db), \
+                 patch("src.agent.tools.data_tools._get_db", return_value=db), \
+                 patch("src.services.history_loader._get_fetcher_manager", return_value=manager):
+                result = self._run_with_frozen_date(target, "600519", days=60)
+        finally:
+            reset_fresh_market_data_required(token)
+
+        manager.get_daily_data.assert_called_once_with("600519", days=60)
+        self.assertFalse(result["cache_hit"])
+        self.assertEqual(result["refresh_mode"], "network")
+        self.assertTrue(result["freshness_required"])
+        self.assertEqual(result["latest_data_date"], str(target))
 
     def test_save_failure_does_not_hide_fetched_data(self) -> None:
         target = date(2026, 4, 24)
