@@ -732,8 +732,9 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             review = self._inject_data_into_review(review, overview, news)
 
             # 美股市场附加流动性面板（US10Y 等关键指标）
-            if self.region == "us" and self.liquidity_service:
-                liquidity_block = self.liquidity_service.get_liquidity_block()
+            liquidity_service = getattr(self, "liquidity_service", None)
+            if self.region == "us" and liquidity_service:
+                liquidity_block = liquidity_service.get_liquidity_block()
                 if liquidity_block:
                     logger.info("[大盘] 附加美股流动性面板（含 US10Y 风险监控）")
                     review = review.rstrip() + "\n\n" + liquidity_block
@@ -1748,8 +1749,9 @@ Market conditions can change quickly. The data above is for reference only and d
 *Review Time: {datetime.now().strftime('%H:%M')}*
 """
             # 美股市场附加流动性面板（US10Y 等关键指标）
-            if self.region == "us" and self.liquidity_service:
-                liquidity_block = self.liquidity_service.get_liquidity_block()
+            liquidity_service = getattr(self, "liquidity_service", None)
+            if self.region == "us" and liquidity_service:
+                liquidity_block = liquidity_service.get_liquidity_block()
                 if liquidity_block:
                     logger.info("[大盘模板] 附加美股流动性面板（含 US10Y 风险监控）")
                     report = report.rstrip() + "\n\n" + liquidity_block
@@ -1819,8 +1821,9 @@ Market conditions can change quickly. The data above is for reference only and d
 *复盘时间: {datetime.now().strftime('%H:%M')}*
 """
         # 美股市场附加流动性面板（US10Y 等关键指标）
-        if self.region == "us" and self.liquidity_service:
-            liquidity_block = self.liquidity_service.get_liquidity_block()
+        liquidity_service = getattr(self, "liquidity_service", None)
+        if self.region == "us" and liquidity_service:
+            liquidity_block = liquidity_service.get_liquidity_block()
             if liquidity_block:
                 logger.info("[大盘模板] 附加美股流动性面板（含 US10Y 风险监控）")
                 report = report.rstrip() + "\n\n" + liquidity_block

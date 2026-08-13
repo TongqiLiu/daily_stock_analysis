@@ -173,6 +173,7 @@ function viewFieldsForSession(
 
 interface AgentChatState {
   messages: Message[];
+  selectedSkillIds: string[] | null;
   loading: boolean;
   progressSteps: ProgressStep[];
   sessionId: string;
@@ -192,11 +193,14 @@ interface AgentChatState {
   streamsBySession: Record<string, SessionStreamRuntime>;
   /** Message cache keyed by session_id (keeps background streams' turns). */
   messagesBySession: Record<string, Message[]>;
+  /** Persisted or locally selected Skills keyed by session_id. */
+  selectedSkillIdsBySession: Record<string, string[] | null>;
   /** Finished-session error/terminal banners retained until the session is viewed again. */
   sessionExtras: Record<string, SessionViewExtras>;
 }
 
 interface AgentChatActions {
+  setSelectedSkillIds: (skillIds: string[]) => void;
   setCurrentRoute: (path: string) => void;
   clearCompletionBadge: () => void;
   loadSessions: () => Promise<void>;
@@ -244,15 +248,24 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
     }
   };
 
-  const cacheCurrentMessages = () => {
-    const { sessionId, messages, messagesBySession } = get();
-    if (messages.length === 0 && !messagesBySession[sessionId]) {
-      return;
-    }
+  const cacheCurrentSessionState = () => {
+    const {
+      sessionId,
+      messages,
+      messagesBySession,
+      selectedSkillIds,
+      selectedSkillIdsBySession,
+    } = get();
     set({
-      messagesBySession: {
-        ...messagesBySession,
-        [sessionId]: messages,
+      messagesBySession: messages.length > 0 || messagesBySession[sessionId]
+        ? {
+            ...messagesBySession,
+            [sessionId]: messages,
+          }
+        : messagesBySession,
+      selectedSkillIdsBySession: {
+        ...selectedSkillIdsBySession,
+        [sessionId]: selectedSkillIds,
       },
     });
   };
@@ -285,6 +298,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
 
   return {
   messages: [],
+  selectedSkillIds: null,
   loading: false,
   progressSteps: [],
   sessionId: getInitialSessionId(),
@@ -302,7 +316,16 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
   stopError: false,
   streamsBySession: {},
   messagesBySession: {},
+  selectedSkillIdsBySession: {},
   sessionExtras: {},
+
+  setSelectedSkillIds: (skillIds) => set((s) => ({
+    selectedSkillIds: skillIds,
+    selectedSkillIdsBySession: {
+      ...s.selectedSkillIdsBySession,
+      [s.sessionId]: skillIds,
+    },
+  })),
 
   setCurrentRoute: (path) => set({ currentRoute: path }),
 
@@ -335,24 +358,27 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       if (savedId) {
         const sessionExists = sessionList.some((s) => s.session_id === savedId);
         if (sessionExists) {
-          const msgs = await agentApi.getChatSessionMessages(savedId);
-          if (msgs.length > 0) {
-            const mapped = msgs.map((m) => ({
-              id: m.id,
-              role: m.role,
-              content: m.content,
-            }));
-            set((s) => ({
-              messages: mapped,
-              messagesBySession: {
-                ...s.messagesBySession,
-                [savedId]: mapped,
-              },
-            }));
-          }
+          const detail = await agentApi.getChatSessionMessages(savedId);
+          const mapped = detail.messages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+          }));
+          set((s) => ({
+            messages: mapped,
+            selectedSkillIds: detail.session_state.selected_skill_ids,
+            messagesBySession: {
+              ...s.messagesBySession,
+              [savedId]: mapped,
+            },
+            selectedSkillIdsBySession: {
+              ...s.selectedSkillIdsBySession,
+              [savedId]: detail.session_state.selected_skill_ids,
+            },
+          }));
         } else {
           const newId = generateUUID();
-          set({ sessionId: newId });
+          set({ sessionId: newId, selectedSkillIds: null });
           localStorage.setItem(STORAGE_KEY_SESSION, newId);
         }
       } else {
@@ -369,11 +395,12 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
     const { sessionId, messages } = get();
     if (targetSessionId === sessionId && messages.length > 0) return;
 
-    cacheCurrentMessages();
+    cacheCurrentSessionState();
 
     const {
       streamsBySession,
       messagesBySession,
+      selectedSkillIdsBySession,
       sessionExtras,
     } = get();
     const cachedMessages = messagesBySession[targetSessionId];
@@ -381,6 +408,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
 
     // Do not abort the previous session's stream — it keeps running in the background.
     set({
+      selectedSkillIds: selectedSkillIdsBySession[targetSessionId] ?? null,
       sessionId: targetSessionId,
       ...viewFieldsForSession(
         streamsBySession,
@@ -391,21 +419,22 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
     });
     localStorage.setItem(STORAGE_KEY_SESSION, targetSessionId);
 
-    // Active stream already owns the live message cache; skip stale API overwrite.
+    // Active streams own the freshest message cache and must not be replaced
+    // by an older persisted session snapshot.
     if (hasActiveStream) {
       return;
     }
 
     try {
-      const msgs = await agentApi.getChatSessionMessages(targetSessionId);
+      const detail = await agentApi.getChatSessionMessages(targetSessionId);
       if (get().sessionId !== targetSessionId) {
         return;
       }
-      // If a stream started while we were fetching, keep the live cache.
+      // If a stream started while we were fetching, keep its live cache.
       if (get().streamsBySession[targetSessionId]) {
         return;
       }
-      const mapped = msgs.map((m) => ({
+      const mapped = detail.messages.map((m) => ({
         id: m.id,
         role: m.role,
         content: m.content,
@@ -420,9 +449,14 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       const nextMessages = useLocal ? localCached! : mapped;
       set((s) => ({
         messages: nextMessages,
+        selectedSkillIds: detail.session_state.selected_skill_ids,
         messagesBySession: {
           ...s.messagesBySession,
           [targetSessionId]: nextMessages,
+        },
+        selectedSkillIdsBySession: {
+          ...s.selectedSkillIdsBySession,
+          [targetSessionId]: detail.session_state.selected_skill_ids,
         },
       }));
     } catch {
@@ -435,17 +469,22 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
 
   startNewChat: () => {
     // Keep any in-flight streams running in the background.
-    cacheCurrentMessages();
+    cacheCurrentSessionState();
     const newId = generateUUID();
-    set({
+    set((s) => ({
       sessionId: newId,
       messages: [],
+      selectedSkillIds: null,
       messagesBySession: {
-        ...get().messagesBySession,
+        ...s.messagesBySession,
         [newId]: [],
       },
+      selectedSkillIdsBySession: {
+        ...s.selectedSkillIdsBySession,
+        [newId]: null,
+      },
       ...emptyViewStreamFields(),
-    });
+    }));
     localStorage.setItem(STORAGE_KEY_SESSION, newId);
   },
 
