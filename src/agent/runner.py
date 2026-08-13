@@ -83,6 +83,7 @@ _THINKING_TOOL_LABELS: Dict[str, str] = {
     "analyze_vcp_breakout_trader": "VCP突破判断",
     "get_volume_analysis": "量能分析",
     "calculate_ma": "均线计算",
+    "calculate_multi_strategy_score": "多策略确定性计分",
     "get_skill_backtest_summary": "技能回测概览",
     "get_strategy_backtest_summary": "策略回测概览",
     "get_stock_backtest_summary": "个股回测数据",
@@ -258,6 +259,222 @@ def _try_repair_json(text: str, repair_fn: Callable) -> Optional[Dict[str, Any]]
         return None
 
 
+_MULTI_STRATEGY_SCORE_TOOL = "calculate_multi_strategy_score"
+_WAVE_THREE_TERMS = (
+    "第3浪候选",
+    "第 3 浪候选",
+    "第三浪候选",
+    "三浪候选",
+    "第3浪启动",
+    "第 3 浪启动",
+    "第三浪启动",
+    "3浪启动",
+    "第3浪已启动",
+    "第 3 浪已启动",
+    "第三浪已启动",
+    "三浪启动",
+    "三浪开启",
+    "第三浪开启",
+    "第3浪进行中",
+    "第 3 浪进行中",
+    "第三浪进行中",
+    "3浪进行中",
+    "第3浪中段",
+    "第 3 浪中段",
+    "第三浪中段",
+    "第3浪初期",
+    "第 3 浪初期",
+    "第三浪初期",
+)
+
+
+def _requires_deterministic_multi_strategy_score(messages: List[Dict[str, Any]]) -> bool:
+    """Detect the built-in consensus contract without changing every caller API."""
+    return any(
+        message.get("role") == "system"
+        and _MULTI_STRATEGY_SCORE_TOOL in str(message.get("content") or "")
+        and "12 项固定总权重" in str(message.get("content") or "")
+        for message in messages
+    )
+
+
+def _requires_wave_three_diagram(messages: List[Dict[str, Any]]) -> bool:
+    """Detect an active skill contract that requires explainable Wave 3 diagrams."""
+    return any(
+        message.get("role") == "system"
+        and "浪型图与判定" in str(message.get("content") or "")
+        and "替代数浪" in str(message.get("content") or "")
+        and "第3浪" in str(message.get("content") or "").replace(" ", "")
+        for message in messages
+    )
+
+
+def _latest_multi_strategy_score_payload(
+    messages: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    for message in reversed(messages):
+        if (
+            message.get("role") != "tool"
+            or message.get("name") != _MULTI_STRATEGY_SCORE_TOOL
+        ):
+            continue
+        try:
+            payload = json.loads(str(message.get("content") or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def _wave_three_output_issues(content: str) -> List[str]:
+    """Return missing explainability fields when a report claims a Wave 3 setup."""
+    if not any(term in content for term in _WAVE_THREE_TERMS):
+        return []
+
+    issues: List[str] = []
+    if "浪型图" not in content:
+        issues.append("浪型图章节")
+    code_blocks = re.findall(r"```(?:text)?\s*(.*?)```", content, re.DOTALL | re.IGNORECASE)
+    chart = next(
+        (block for block in code_blocks if all(marker in block for marker in ("O", "A", "B"))),
+        "",
+    )
+    if not chart:
+        issues.append("标有 O/A/B 的代码块浪型图")
+    else:
+        point_lines = {}
+        for marker in ("O", "A", "B"):
+            point_lines[marker] = next(
+                (
+                    line
+                    for line in chart.splitlines()
+                    if re.search(rf"(?:^|\s){marker}\s*[:：]", line)
+                ),
+                "",
+            )
+        current_line = next((line for line in chart.splitlines() if "当前" in line), "")
+        dated_price_lines = [*point_lines.values(), current_line]
+        date_pattern = re.compile(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}")
+        points_complete = True
+        for line in dated_price_lines:
+            if not line or not date_pattern.search(line):
+                points_complete = False
+                break
+            without_date = date_pattern.sub("", line)
+            without_wave_number = re.sub(r"第\s*\d+\s*浪", "", without_date)
+            if not re.search(r"\d+(?:\.\d+)?", without_wave_number):
+                points_complete = False
+                break
+        if not points_complete:
+            issues.append("O/A/B/当前点的日期与价格")
+    if "回撤" not in content:
+        issues.append("第2浪回撤比例")
+    if "量能" not in content:
+        issues.append("量能确认说明")
+    if "未满足" not in content and "不足" not in content:
+        issues.append("未满足条件")
+    if "替代" not in content:
+        issues.append("替代数浪")
+    if "确认位" not in content:
+        issues.append("确认位")
+    if "弱化位" not in content:
+        issues.append("弱化位")
+    if "证伪位" not in content and "失效位" not in content:
+        issues.append("硬证伪位")
+    if "置信度" not in content:
+        issues.append("浪型置信度")
+    if "1.0" not in content and "1.618" not in content:
+        issues.append("浪型情景目标公式")
+    return issues
+
+
+def _validate_multi_strategy_final_answer(
+    content: str,
+    messages: List[Dict[str, Any]],
+) -> tuple[bool, str, str]:
+    """Validate that the final report faithfully uses the deterministic score result."""
+    payload = _latest_multi_strategy_score_payload(messages)
+    if payload is None:
+        issue = "未调用 calculate_multi_strategy_score，或工具结果无法解析"
+        return False, issue, (
+            "[系统校验] 多策略联合报告不能直接输出。请先调用 "
+            "calculate_multi_strategy_score；工具返回 invalid 时修正全部 12 项并重试。"
+        )
+    if payload.get("status") != "ok":
+        issue = f"评分工具未通过校验：{payload.get('issues') or payload.get('error')}"
+        return False, issue, (
+            "[系统校验] 确定性评分工具返回 invalid。请按工具给出的 issues 修正 12 项，"
+            "重新调用 calculate_multi_strategy_score 后再输出报告。"
+        )
+
+    expected_score = f"{float(payload['weighted_score']):.1f}"
+    expected_numerator = format(float(payload.get("weighted_numerator")), ".10g")
+    expected_weight = format(float(payload.get("included_weight")), ".10g")
+    expected_decision = str(payload.get("decision") or "")
+    expected_position = str(payload.get("position_guidance") or "")
+    missing: List[str] = []
+    if not re.search(
+        rf"加权综合得分\s*[:：]\s*(?:\*\*)?{re.escape(expected_score)}\s*/\s*100",
+        content,
+    ):
+        missing.append(f"工具得分 {expected_score}/100")
+    if not re.search(
+        rf"{re.escape(expected_numerator)}(?:\.0+)?\s*(?:/|÷)\s*"
+        rf"{re.escape(expected_weight)}(?:\.0+)?(?:\D|$)",
+        content,
+    ):
+        missing.append(f"计算式 {expected_numerator}/{expected_weight}")
+    if expected_decision and expected_decision not in content:
+        missing.append(f"决策 {expected_decision}")
+    if expected_position and expected_position not in content:
+        missing.append(f"仓位建议 {expected_position}")
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    absent_strategy_names = [
+        str(row.get("display_name") or "")
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("display_name")
+        and str(row["display_name"]) not in content
+    ]
+    if absent_strategy_names:
+        missing.append("12项策略行（缺：" + "、".join(absent_strategy_names) + "）")
+    evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+    evidence_expectations = (
+        ("完整", evidence.get("complete_count")),
+        ("部分", evidence.get("partial_count")),
+        ("缺失", evidence.get("missing_count")),
+    )
+    for label, count in evidence_expectations:
+        if count is not None and not re.search(rf"{label}\s*[:：]?\s*{count}(?:\D|$)", content):
+            missing.append(f"证据{label}数 {count}")
+    coverage = evidence.get("coverage_pct")
+    if coverage is not None:
+        expected_coverage = format(float(coverage), ".10g")
+        if not re.search(rf"{re.escape(expected_coverage)}(?:\.0+)?\s*%", content):
+            missing.append(f"证据覆盖率 {expected_coverage}%")
+    if payload.get("instrument_type") == "leveraged_etf":
+        for risk_term in ("日内复位", "波动损耗", "隔夜跳空"):
+            if risk_term not in content:
+                missing.append(risk_term)
+    missing.extend(_wave_three_output_issues(content))
+    if not missing:
+        return True, "", ""
+
+    issue = "最终报告未忠实复制工具结果或浪型解释不完整：" + "、".join(missing)
+    retry_message = (
+        "[系统校验] 最终报告未通过，请重新输出完整报告。必须逐字采用评分工具的 "
+        f"weighted_score={expected_score}、included_weight={expected_weight}、"
+        f"decision={expected_decision}、position_guidance={expected_position}。"
+    )
+    if _wave_three_output_issues(content):
+        retry_message += (
+            " 报告既然判断第3浪候选/启动，还必须补齐带 O/A/B/当前点日期价格的"
+            "代码块浪型图、第2浪回撤比例、量能支持与未满足项、替代数浪、确认位、"
+            "弱化位、硬证伪位、1.0/1.618 情景目标公式和置信度。"
+        )
+    return False, issue, retry_message
+
+
 def _remaining_timeout_seconds(
     start_time: float,
     max_wall_clock_seconds: Optional[float],
@@ -374,6 +591,7 @@ def run_agent_loop(
     emit_stage_events: bool = True,
     cancel_event: Optional[Any] = None,
     require_fresh_market_data: bool = False,
+    enforce_report_contracts: bool = True,
 ) -> RunLoopResult:
     """Execute the ReAct LLM ↔ tool loop.
 
@@ -397,6 +615,8 @@ def run_agent_loop(
             ``stage_start`` / ``stage_done`` only describe real stages.
         require_fresh_market_data: Require a successful current quote and
             network-refreshed daily history before accepting a final answer.
+        enforce_report_contracts: Enforce user-facing multi-strategy and Wave 3
+            report contracts. Structured internal sub-agents must disable this.
 
     Returns:
         A :class:`RunLoopResult` with the final content, stats, and the
@@ -414,6 +634,16 @@ def run_agent_loop(
     freshness_token = set_fresh_market_data_required(require_fresh_market_data)
     initial_message_count = len(messages)
     last_freshness_issue = ""
+    require_multi_strategy_score = (
+        enforce_report_contracts
+        and _requires_deterministic_multi_strategy_score(messages)
+    )
+    last_multi_strategy_issue = ""
+    require_wave_three_diagram = (
+        enforce_report_contracts
+        and _requires_wave_three_diagram(messages)
+    )
+    last_wave_three_issue = ""
     required_stock_codes = None
     if require_fresh_market_data and stock_scope is not None:
         required_stock_codes = getattr(stock_scope, "allowed_stock_codes", None)
@@ -677,6 +907,68 @@ def run_agent_loop(
                     messages.append({"role": "user", "content": freshness.retry_message})
                     continue
 
+            if require_multi_strategy_score and not is_error:
+                score_ok, score_issue, retry_message = _validate_multi_strategy_final_answer(
+                    final_content,
+                    messages[initial_message_count:],
+                )
+                if not score_ok:
+                    last_multi_strategy_issue = score_issue
+                    logger.warning(
+                        "Agent final answer blocked by deterministic multi-strategy gate: %s",
+                        score_issue,
+                    )
+                    if step + 1 >= max_steps:
+                        return _finish(RunLoopResult(
+                            success=False,
+                            content="",
+                            tool_calls_log=tool_calls_log,
+                            total_steps=step + 1,
+                            total_tokens=total_tokens,
+                            provider=provider_used,
+                            models_used=models_used,
+                            error=f"Multi-strategy report validation failed: {score_issue}",
+                            failure_reason=StageFailureReason.STAGE_FAILURE,
+                            messages=messages,
+                        ))
+                    messages.append({"role": "user", "content": retry_message})
+                    continue
+
+            if require_wave_three_diagram and not require_multi_strategy_score and not is_error:
+                wave_issues = _wave_three_output_issues(final_content)
+                if wave_issues:
+                    last_wave_three_issue = "、".join(wave_issues)
+                    logger.warning(
+                        "Agent final answer blocked by Wave 3 explainability gate: %s",
+                        last_wave_three_issue,
+                    )
+                    if step + 1 >= max_steps:
+                        return _finish(RunLoopResult(
+                            success=False,
+                            content="",
+                            tool_calls_log=tool_calls_log,
+                            total_steps=step + 1,
+                            total_tokens=total_tokens,
+                            provider=provider_used,
+                            models_used=models_used,
+                            error=(
+                                "Wave 3 report validation failed: "
+                                f"{last_wave_three_issue}"
+                            ),
+                            failure_reason=StageFailureReason.STAGE_FAILURE,
+                            messages=messages,
+                        ))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[系统校验] 报告判断了第3浪候选/启动，但解释不完整。请重新输出，"
+                            "补齐带 O/A/B/当前点日期价格的代码块浪型图、第2浪回撤比例、"
+                            "量能支持与未满足项、替代数浪、确认位、弱化位、硬证伪位、"
+                            "1.0/1.618 情景目标公式和置信度。"
+                        ),
+                    })
+                    continue
+
             logger.info(
                 "Agent completed in %d steps (%.1fs, %d tokens)",
                 step + 1,
@@ -712,7 +1004,15 @@ def run_agent_loop(
         error=(
             f"Fresh market data requirement not met: {last_freshness_issue}"
             if require_fresh_market_data and last_freshness_issue
-            else f"Agent exceeded max steps ({max_steps}). Try increasing AGENT_MAX_STEPS if analysis tasks are complex."
+            else (
+                f"Multi-strategy report validation failed: {last_multi_strategy_issue}"
+                if require_multi_strategy_score and last_multi_strategy_issue
+                else (
+                    f"Wave 3 report validation failed: {last_wave_three_issue}"
+                    if require_wave_three_diagram and last_wave_three_issue
+                    else f"Agent exceeded max steps ({max_steps}). Try increasing AGENT_MAX_STEPS if analysis tasks are complex."
+                )
+            )
         ),
         failure_reason=StageFailureReason.STAGE_FAILURE,
         messages=messages,

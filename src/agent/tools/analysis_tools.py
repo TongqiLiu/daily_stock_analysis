@@ -4,10 +4,14 @@ Analysis tools — wraps StockTrendAnalyzer as an agent-callable tool.
 
 Tools:
 - analyze_trend: comprehensive technical trend analysis
+- calculate_multi_strategy_score: deterministic 12-strategy evidence and score validation
 """
 
+import json
 import logging
-from typing import Optional
+import math
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Optional
 
 from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
@@ -18,6 +22,368 @@ _ANALYSIS_READ_POLICY = ToolPolicy.declared(
     side_effects=["network_read", "db_read"],
     permissions=["market_data:read"],
     scope_dimensions=["stock"],
+)
+
+_DETERMINISTIC_ANALYSIS_POLICY = ToolPolicy.declared(
+    read_only=True,
+    side_effects=[],
+    permissions=[],
+)
+
+
+MULTI_STRATEGY_SCORE_SPECS = (
+    ("bull_trend", "多头趋势", Decimal("1.0")),
+    ("chan_theory", "缠论", Decimal("1.0")),
+    ("ma_golden_cross", "均线金叉", Decimal("0.9")),
+    ("shrink_pullback", "缩量回踩", Decimal("0.9")),
+    ("volume_breakout", "放量突破", Decimal("0.8")),
+    ("wave_theory", "波浪理论", Decimal("0.8")),
+    ("bottom_volume", "底部放量", Decimal("0.7")),
+    ("box_oscillation", "箱体震荡", Decimal("0.7")),
+    ("dragon_head", "龙头策略", Decimal("0.7")),
+    ("emotion_cycle", "情绪周期", Decimal("0.6")),
+    ("one_yang_three_yin", "一阳夹三阴", Decimal("0.6")),
+    ("fear_greed_sentiment", "贪恐情绪极值", Decimal("0.5")),
+)
+
+_MULTI_STRATEGY_TOTAL_WEIGHT = sum(
+    (weight for _, _, weight in MULTI_STRATEGY_SCORE_SPECS),
+    Decimal("0"),
+)
+_MULTI_STRATEGY_SPEC_BY_ID = {
+    strategy_id: (display_name, weight)
+    for strategy_id, display_name, weight in MULTI_STRATEGY_SCORE_SPECS
+}
+_MULTI_STRATEGY_ID_BY_NAME = {
+    display_name: strategy_id
+    for strategy_id, display_name, _ in MULTI_STRATEGY_SCORE_SPECS
+}
+
+_SIGNAL_ALIASES = {
+    "buy": "buy",
+    "买入": "buy",
+    "hold": "hold",
+    "观望": "hold",
+    "sell": "sell",
+    "卖出": "sell",
+    "unavailable": "unavailable",
+    "不可评估": "unavailable",
+}
+_SIGNAL_LABELS = {
+    "buy": "买入",
+    "hold": "观望",
+    "sell": "卖出",
+    "unavailable": "不可评估",
+}
+_STRENGTH_ALIASES = {
+    "strong": "strong",
+    "强": "strong",
+    "medium": "medium",
+    "中": "medium",
+    "weak": "weak",
+    "弱": "weak",
+    "none": "none",
+    "-": "none",
+    "无": "none",
+}
+_STRENGTH_LABELS = {
+    "strong": "强",
+    "medium": "中",
+    "weak": "弱",
+    "none": "-",
+}
+_EVIDENCE_ALIASES = {
+    "complete": "complete",
+    "完整": "complete",
+    "partial": "partial",
+    "部分": "partial",
+    "missing": "missing",
+    "缺失": "missing",
+}
+_EVIDENCE_LABELS = {
+    "complete": "完整",
+    "partial": "部分",
+    "missing": "缺失",
+}
+
+
+def _multi_strategy_score_matches_band(signal: str, strength: str, score: Decimal) -> bool:
+    """Validate one score against the score bands promised by the meta-skill."""
+    ranges = {
+        ("buy", "strong"): (Decimal("80"), Decimal("95")),
+        ("buy", "medium"): (Decimal("65"), Decimal("80")),
+        ("buy", "weak"): (Decimal("55"), Decimal("65")),
+        ("hold", "medium"): (Decimal("45"), Decimal("55")),
+        ("sell", "weak"): (Decimal("35"), Decimal("45")),
+        ("sell", "medium"): (Decimal("20"), Decimal("35")),
+        ("sell", "strong"): (Decimal("5"), Decimal("20")),
+    }
+    bounds = ranges.get((signal, strength))
+    return bool(bounds and bounds[0] <= score <= bounds[1])
+
+
+def _format_decimal(value: Decimal) -> str:
+    """Render a Decimal without scientific notation or insignificant zeros."""
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _multi_strategy_decision(score: Decimal, *, leveraged: bool) -> tuple[str, str]:
+    """Map a deterministic score to a decision and risk-aware position guide."""
+    if score >= Decimal("75"):
+        return (
+            "强烈买入",
+            "杠杆ETF上限20%，必须分批" if leveraged else "重仓50-80%",
+        )
+    if score >= Decimal("60"):
+        return (
+            "偏多",
+            "杠杆ETF上限10-15%" if leveraged else "中仓30-50%",
+        )
+    if score >= Decimal("40"):
+        return (
+            "观望",
+            "杠杆ETF观察或不超过5%" if leveraged else "轻仓不超过20%",
+        )
+    if score > Decimal("25"):
+        return (
+            "偏空",
+            "杠杆ETF减至不超过5%" if leveraged else "减仓至不超过10%",
+        )
+    return "卖出", "清仓"
+
+
+def _handle_calculate_multi_strategy_score(
+    scores_json: str,
+    instrument_type: str = "standard",
+) -> dict:
+    """Validate 12 strategy rows and calculate their weighted score deterministically."""
+    try:
+        raw_scores: Any = json.loads(scores_json) if isinstance(scores_json, str) else scores_json
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "status": "invalid",
+            "error": "scores_json must be a valid JSON array",
+            "detail": str(exc),
+        }
+
+    if not isinstance(raw_scores, list):
+        return {
+            "status": "invalid",
+            "error": "scores_json must decode to a JSON array",
+        }
+
+    normalized_instrument_type = str(instrument_type or "standard").strip().lower()
+    if normalized_instrument_type not in {"standard", "leveraged_etf"}:
+        return {
+            "status": "invalid",
+            "error": "instrument_type must be standard or leveraged_etf",
+        }
+
+    entries_by_id: dict[str, dict] = {}
+    issues: list[str] = []
+    for index, item in enumerate(raw_scores, start=1):
+        if not isinstance(item, dict):
+            issues.append(f"row {index}: expected an object")
+            continue
+        raw_strategy = str(item.get("strategy") or item.get("strategy_id") or "").strip()
+        strategy_id = (
+            raw_strategy
+            if raw_strategy in _MULTI_STRATEGY_SPEC_BY_ID
+            else _MULTI_STRATEGY_ID_BY_NAME.get(raw_strategy, "")
+        )
+        if not strategy_id:
+            issues.append(f"row {index}: unknown strategy {raw_strategy!r}")
+            continue
+        if strategy_id in entries_by_id:
+            issues.append(f"row {index}: duplicate strategy {strategy_id}")
+            continue
+        entries_by_id[strategy_id] = item
+
+    expected_ids = [strategy_id for strategy_id, _, _ in MULTI_STRATEGY_SCORE_SPECS]
+    missing_ids = [strategy_id for strategy_id in expected_ids if strategy_id not in entries_by_id]
+    if missing_ids:
+        issues.append(f"missing strategies: {', '.join(missing_ids)}")
+    if len(raw_scores) != len(expected_ids):
+        issues.append(f"expected 12 rows, received {len(raw_scores)}")
+
+    normalized_rows: list[dict] = []
+    weighted_numerator = Decimal("0")
+    included_weight = Decimal("0")
+    complete_count = 0
+    partial_count = 0
+    missing_count = 0
+
+    for strategy_id, display_name, weight in MULTI_STRATEGY_SCORE_SPECS:
+        item = entries_by_id.get(strategy_id)
+        if item is None:
+            continue
+        evidence_status = _EVIDENCE_ALIASES.get(
+            str(item.get("evidence_status") or "").strip().lower()
+        )
+        if evidence_status is None:
+            issues.append(
+                f"{strategy_id}: evidence_status must be complete, partial, or missing"
+            )
+            continue
+
+        signal = _SIGNAL_ALIASES.get(str(item.get("signal") or "").strip().lower())
+        strength = _STRENGTH_ALIASES.get(str(item.get("strength") or "").strip().lower())
+        reason = str(item.get("reason") or item.get("evidence") or "").strip()
+        if not reason:
+            issues.append(f"{strategy_id}: reason is required")
+
+        if evidence_status == "missing":
+            missing_count += 1
+            if signal != "unavailable" or strength != "none":
+                issues.append(
+                    f"{strategy_id}: missing evidence must use signal=不可评估 and strength=-"
+                )
+            if item.get("score") not in (None, "", "-"):
+                issues.append(f"{strategy_id}: missing evidence must not provide a numeric score")
+            normalized_rows.append({
+                "strategy": strategy_id,
+                "display_name": display_name,
+                "signal": "不可评估",
+                "strength": "-",
+                "score": None,
+                "weight": float(weight),
+                "included": False,
+                "evidence_status": "缺失",
+                "reason": reason,
+            })
+            continue
+
+        if evidence_status == "complete":
+            complete_count += 1
+        else:
+            partial_count += 1
+        if signal not in {"buy", "hold", "sell"}:
+            issues.append(f"{strategy_id}: invalid signal")
+            continue
+        if strength not in {"strong", "medium", "weak"}:
+            issues.append(f"{strategy_id}: invalid strength")
+            continue
+        if evidence_status == "partial" and strength == "strong":
+            issues.append(f"{strategy_id}: partial evidence cannot use strong strength")
+            continue
+        try:
+            raw_score = item.get("score")
+            if isinstance(raw_score, bool):
+                raise ValueError("boolean score")
+            score = Decimal(str(raw_score))
+            if not math.isfinite(float(score)):
+                raise ValueError("non-finite score")
+        except (TypeError, ValueError, ArithmeticError, OverflowError):
+            issues.append(f"{strategy_id}: score must be a finite number")
+            continue
+        if not _multi_strategy_score_matches_band(signal, strength, score):
+            issues.append(
+                f"{strategy_id}: score {score} does not match "
+                f"{_SIGNAL_LABELS[signal]}/{_STRENGTH_LABELS[strength]} band"
+            )
+            continue
+
+        weighted_value = score * weight
+        weighted_numerator += weighted_value
+        included_weight += weight
+        normalized_rows.append({
+            "strategy": strategy_id,
+            "display_name": display_name,
+            "signal": _SIGNAL_LABELS[signal],
+            "strength": _STRENGTH_LABELS[strength],
+            "score": float(score),
+            "weight": float(weight),
+            "included": True,
+            "weighted_value": float(weighted_value),
+            "evidence_status": _EVIDENCE_LABELS[evidence_status],
+            "reason": reason,
+        })
+
+    if issues:
+        return {
+            "status": "invalid",
+            "error": "multi-strategy score validation failed",
+            "issues": issues,
+            "expected_strategy_order": expected_ids,
+            "configured_total_weight": float(_MULTI_STRATEGY_TOTAL_WEIGHT),
+        }
+    if included_weight <= 0:
+        return {
+            "status": "invalid",
+            "error": "no strategy has evaluable evidence",
+        }
+
+    weighted_score = (weighted_numerator / included_weight).quantize(
+        Decimal("0.1"),
+        rounding=ROUND_HALF_UP,
+    )
+    evidence_coverage = (
+        included_weight / _MULTI_STRATEGY_TOTAL_WEIGHT * Decimal("100")
+    ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    leveraged = normalized_instrument_type == "leveraged_etf"
+    decision, position_guidance = _multi_strategy_decision(weighted_score, leveraged=leveraged)
+    if evidence_coverage < Decimal("70.0") or complete_count + partial_count < 8:
+        decision = "证据不足（观望）"
+        position_guidance = "不新增仓位，补齐证据后重评"
+
+    return {
+        "status": "ok",
+        "instrument_type": normalized_instrument_type,
+        "rows": normalized_rows,
+        "weighted_numerator": float(weighted_numerator),
+        "included_weight": float(included_weight),
+        "configured_total_weight": float(_MULTI_STRATEGY_TOTAL_WEIGHT),
+        "weighted_score": float(weighted_score),
+        "decision": decision,
+        "position_guidance": position_guidance,
+        "evidence": {
+            "complete_count": complete_count,
+            "partial_count": partial_count,
+            "missing_count": missing_count,
+            "coverage_pct": float(evidence_coverage),
+        },
+        "formula": (
+            f"{_format_decimal(weighted_numerator)} / {_format_decimal(included_weight)} "
+            f"= {_format_decimal(weighted_score)}"
+        ),
+    }
+
+
+calculate_multi_strategy_score_tool = ToolDefinition(
+    name="calculate_multi_strategy_score",
+    description=(
+        "Validate all 12 multi-strategy rows and calculate the weighted score, evidence coverage, "
+        "decision, and risk-aware position guidance deterministically. Pass scores_json as a JSON "
+        "array in canonical strategy order; each row needs strategy, signal, strength, score, "
+        "evidence_status, and reason. Missing evidence must use signal='不可评估', strength='-', "
+        "and score=null. Use instrument_type='leveraged_etf' for leveraged ETFs."
+    ),
+    parameters=[
+        ToolParameter(
+            name="scores_json",
+            type="string",
+            description=(
+                "JSON array of exactly 12 rows. Example row: "
+                "{\"strategy\":\"bull_trend\",\"signal\":\"买入\",\"strength\":\"中\","
+                "\"score\":72,\"evidence_status\":\"complete\",\"reason\":\"MA5>MA10\"}."
+            ),
+        ),
+        ToolParameter(
+            name="instrument_type",
+            type="string",
+            description=(
+                "Required explicit classification: standard for stocks/ordinary ETFs; "
+                "leveraged_etf for 2x/3x leveraged ETFs such as KORU."
+            ),
+            enum=["standard", "leveraged_etf"],
+        ),
+    ],
+    handler=_handle_calculate_multi_strategy_score,
+    category="analysis",
+    policy=_DETERMINISTIC_ANALYSIS_POLICY,
 )
 
 
@@ -779,6 +1145,7 @@ ALL_ANALYSIS_TOOLS = [
     calculate_ma_tool,
     get_volume_analysis_tool,
     analyze_pattern_tool,
+    calculate_multi_strategy_score_tool,
     analyze_ema200_setup_tool,
     analyze_vcp_h1_h2_buy_tool,
     analyze_vcp_breakout_trader_tool,

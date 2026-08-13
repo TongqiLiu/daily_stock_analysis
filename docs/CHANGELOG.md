@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 多策略联合新增 12 项证据分级与确定性评分校验，固定完整权重 9.2、缺失证据动态排除并报告覆盖率；第 3 浪候选/启动强制输出日期价位浪型图、替代数浪及确认/弱化/证伪条件。
+- [修复] Codex App Server 问股提示词与实际三个只读工具对齐，要求最新分析时不再把已保存分析上下文表述为本轮更新数据。
 - [修复] 问股 Agent 支持可选上游流式聚合，并将可见历史摘要超时改为默认 90 秒可配置，降低长推理经兼容网关时的超时与连接重置。
 - [改进] 问股支持多会话并发流式分析：切换会话或开启新对话不再中断后台进行中的分析，侧边栏对运行中会话显示「分析中」标记。
 - [修复] 问股运行状态检查中、检查失败或后端确认不可用时仍允许编辑并保留输入草稿，仅暂停发送；同时避免中文输入法确认候选时误触发送。

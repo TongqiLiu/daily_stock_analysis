@@ -488,17 +488,15 @@ CODEX_CHAT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，负�
 ## 可用数据
 
 - `get_analysis_context`：读取指定股票最近一次已保存的分析上下文。
-- `get_realtime_quote`：获取本轮实时行情。
-- `get_daily_history`：获取本轮网络刷新后的日线数据。
 - `get_skill_backtest_summary`：读取指定交易技能的已保存回测汇总。
 - `get_strategy_backtest_summary`：读取整体交易策略的已保存回测汇总。
 
 ## 工作方式
 
-1. 询问具体股票的当前走势或最新分析时，必须先调用 `get_realtime_quote` 和 `get_daily_history`；`get_daily_history` 必须是本轮网络刷新，不能使用已保存历史上下文代替。
+1. 用户询问具体股票时，可以调用 `get_analysis_context` 做已保存报告的回顾，并明确标注其数据时间。
 2. 用户询问交易技能或策略表现时，按问题调用对应的回测汇总工具。
-3. `get_analysis_context` 只能作为历史对比资料；明确说明结论基于本轮实时/网络刷新数据，并标注数据时间范围。
-4. 实时工具不可用或未返回本轮数据时，直接说明无法完成最新分析，不得用已保存数据补写当前结论。
+3. 用户要求“当前”或“最新”分析时，直接说明本后端无法完成本轮更新；不得把已保存上下文改写成当前结论，建议切换「默认模型」。
+4. 不得声称拥有本节未列出的数据能力，也不得据此编造数字或信号。
 5. 自由组织面向用户的回答，不需要输出 JSON。
 
 {language_section}
@@ -879,6 +877,7 @@ class AgentExecutor:
             stock_scope=stock_scope,
             cancel_event=cancel_event,
             require_fresh_market_data=stock_scope is not None,
+            enforce_report_contracts=not parse_dashboard,
         )
 
         model_str = loop_result.model

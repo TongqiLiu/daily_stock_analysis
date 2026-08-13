@@ -137,6 +137,7 @@ class BaseAgent(ABC):
                 "stock_scope": ctx.meta.get("stock_scope"),
                 "emit_stage_events": False,
                 "require_fresh_market_data": requires_fresh_market_data,
+                "enforce_report_contracts": False,
             }
             if cancel_event is not None:
                 loop_kwargs["cancel_event"] = cancel_event

@@ -124,12 +124,12 @@ CLI 全部参数见 `main.py:222-358`，重点：
 
 YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载 `user_invocable: true` 的技能。目前 `ema5_200_setup` 作为用户可见的 `EMA200回踩` 入口，底层使用 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势逻辑；`vcp_h1_h2_buy` 对应 VCP_H1_H2_BUY 日线指标；`vcp_breakout_trader` 对应 VCP_BREAKOUT_TRADER 日线突破交易员指标；`ema_200_highlow` 和 `nunu_wave` 保留定义和底层能力，但暂不在问股 / 策略选择中展示。
 
-选择规则：`multi_strategy_consensus` 是自带 12 项子策略和严格汇总格式的元 skill，因此与其他专项 skill 互斥。Web 默认勾选它时，改选 Serenity 投研、价值投资等专项框架会自动取消元 skill；反向选择元 skill 会清空已有专项组合。专项 skill 仍可最多组合 3 个，后端会按用户选择顺序生成执行计划、去重汇总必要工具，并要求每个 skill 分别产出结果后再综合。API/旧客户端若同时传入元 skill 与专项 skill，后端保留专项 skill 并丢弃元 skill，避免严格输出格式互相覆盖。
+选择规则：`multi_strategy_consensus` 是自带 12 项子策略和严格汇总格式的元 skill，因此与其他专项 skill 互斥。Web 默认勾选它时，改选 Serenity 投研、价值投资等专项框架会自动取消元 skill；反向选择元 skill 会清空已有专项组合。专项 skill 仍可最多组合 3 个，后端会按用户选择顺序生成执行计划、去重汇总必要工具，并要求每个 skill 分别产出结果后再综合。API/旧客户端若同时传入元 skill 与专项 skill，后端保留专项 skill 并丢弃元 skill，避免严格输出格式互相覆盖。元 skill 的 12 项固定总权重为 9.2，最终得分、有效分母、决策和仓位由 `calculate_multi_strategy_score` 确定性计算并在返回前校验；关键证据缺失的策略会从分子、分母同时排除并报告覆盖率。若报告判断第 3 浪候选/启动，则强制附带日期和价位浪型图、替代数浪、确认位、弱化位、硬证伪位及置信度。
 
 | # | id | 显示名 | 默认优先级 | 类别 | 用途简介 |
 |---|---|---|---|---|---|
 | 1 | `five_dimension_analysis` | 五维分析 | 4 | framework | 基本面、技术面、消息面、情绪面、期权结构五维共振；缺少期权/情绪数据时显式降级 |
-| 2 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：调用 12 个子策略逐项打分，输出表格 + 加权综合得分 + 决策映射（前端默认勾选） |
+| 2 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：12 项证据分级并确定性计分；三浪候选强制输出浪型图与主备计数（前端默认勾选） |
 | 3 | `bull_trend` | 默认多头趋势 | 10 | trend | 后端 `default_skill_id`：MA5>MA10>MA20 + MACD 金叉，关注 7 条核心交易基线 |
 | 4 | `ma_golden_cross` | 均线金叉 | 20 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
 | 5 | `serenity_research` | Serenity投研 | 24 | framework | 读取公开研报/评级更新并套用 Serenity 买方 memo、增长概率、TAM-Adj-PEG、GF-DMA 和 news-to-financial-statement 交叉验证 |
@@ -151,7 +151,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | 21 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
 | 22 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
 | 23 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
-| 24 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别 |
+| 24 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别；三浪候选强制输出带日期价位的浪型图、替代计数与证伪条件 |
 | 25 | `nunu_wave` | nunu波浪 | 81 | framework | 暂隐藏；保留级别优先的进阶波浪框架：阶段四问、复杂调整、跨级别楔形、截尾五浪、序列日/共振日、主备计数切换与失效位优先 |
 | 26 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
 | 27 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
@@ -183,7 +183,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `get_valuation_percentile` | stock_code, metric?, lookback_years? | PE/PB/PS 历史分位（A 股完整 5 年，美股仅当前值 status='partial'，港股 unavailable）|
 | `get_dcf_valuation` | stock_code, forecast_years? | 轻量 DCF 三情景估值（Bull/Base/Bear），返回内在价值区间与相对现价偏离 |
 
-### 5.2 分析类（`analysis_tools.py` + `value_analysis_tools.py`，8 个）
+### 5.2 分析类（`analysis_tools.py` + `value_analysis_tools.py`，9 个）
 
 | 工具名 | 用途 |
 |---|---|
@@ -191,6 +191,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `calculate_ma` | 多周期均线计算（MA5/10/20/30/60/120/250）+ 乖离率 |
 | `get_volume_analysis` | 量比、放量/缩量、量价配合/背离 |
 | `analyze_pattern` | K 线 / 图表形态识别：Doji / Hammer / 双底 / 突破 等 |
+| `calculate_multi_strategy_score` | 校验多策略 12 项信号/强度/证据并确定性计算有效分母、综合得分、覆盖率、决策和仓位 |
 | `analyze_ema200_setup` | EMA200 setup 结构判断：基础 reclaim candidate、HL/双底、SPY_ORB_EMA200_v2 5m ORB + EMA200 顺势信号、结构止损与 1R 空间 |
 | `analyze_vcp_h1_h2_buy` | VCP_H1_H2_BUY 日线判断：趋势模板、波动/量能收缩、枢轴突破、H1/H2 和 BUY 去重 |
 | `analyze_vcp_breakout_trader` | VCP_BREAKOUT_TRADER 日线判断：VCP/牛旗准备区、higher lows、突破前 Low-Cheat、放量突破、10%风险过滤、过度延展与结构失败 |
