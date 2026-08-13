@@ -802,6 +802,30 @@ class LLMToolAdapter:
                 base_delay = 2.0
         return min(30.0, max(0.0, base_delay) * (2 ** retry_round))
 
+    def _is_upstream_stream_enabled(self) -> bool:
+        """Return whether provider responses should be consumed incrementally."""
+        raw_value = getattr(self._config, "agent_llm_upstream_stream", False)
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+        return False
+
+    @staticmethod
+    def _aggregate_litellm_stream(response: Any, messages: List[Dict[str, Any]]) -> Any:
+        """Consume a LiteLLM stream and rebuild the ordinary response contract."""
+        if getattr(response, "choices", None) is not None:
+            # Some compatible providers may ignore stream=True and return a
+            # normal ModelResponse. Keep that response usable.
+            return response
+
+        chunks = list(response)
+        rebuilt = litellm.stream_chunk_builder(chunks, messages=messages)
+        if rebuilt is None:
+            raise RuntimeError("Agent LLM upstream stream ended without response chunks")
+        logger.debug("Agent LLM upstream stream aggregated %d chunk(s)", len(chunks))
+        return rebuilt
+
     @staticmethod
     def _get_model_provider(model: str) -> str:
         """Return LiteLLM provider namespace for model fallback grouping."""
@@ -843,6 +867,14 @@ class LLMToolAdapter:
 
         if tools:
             call_kwargs["tools"] = tools
+
+        upstream_stream = self._is_upstream_stream_enabled()
+        if upstream_stream:
+            # Keep the existing Agent contract: consume chunks internally and
+            # return one normalized response after rebuilding content, usage,
+            # reasoning and tool-call deltas. Receiving early chunks prevents
+            # idle reverse proxies from resetting long inference requests.
+            call_kwargs["stream"] = True
 
         # Use Router for primary model (multi-key), direct litellm for others
         use_channel_router = self._has_channel_config()
@@ -917,6 +949,9 @@ class LLMToolAdapter:
                 model_list=recovery_model_list,
                 logger=logger,
             )
+
+        if upstream_stream:
+            response = self._aggregate_litellm_stream(response, openai_messages)
 
         return self._parse_litellm_response(
             response,

@@ -280,6 +280,12 @@ LITELLM_MODEL=openai/hermes-agent
 
 The Agent adapter is the sole owner of transport retries. LiteLLM Router and provider-SDK automatic retries are disabled for Agent calls so a single gateway failure is not multiplied across nested retry layers. Each retry round still contains only models that failed with a transport error and remains bounded by the `AGENT_ORCHESTRATOR_TIMEOUT_S` budget. When the primary and fallback models share one OpenAI-compatible Base URL, they are in the same failure domain; use one extra retry round and add a provider or Base URL from a different failure domain when endpoint-level resilience is required.
 
+For OpenAI-compatible gateways that reset long requests while waiting for the first response header, enable upstream streaming. The Agent consumes chunks internally and rebuilds the same complete text/tool-call response before continuing, so the user-facing Agent contract does not change:
+
+```env
+AGENT_LLM_UPSTREAM_STREAM=true
+```
+
 `POST /api/v1/agent/chat/stream` now emits SSE heartbeat comments while a model is generating without business progress events. It no longer reports a separate 300-second idle timeout ahead of the Agent execution budget. Browser closure, navigation, or connection loss propagates a cooperative cancellation signal through the orchestrator, child Agent, and remaining model fallback chain; after the current blocking request reaches its network return point, the worker stops retrying and does not persist a synthetic assistant failure reply.
 
 ### Ask-Stock Visible Chat Context Compression
@@ -289,6 +295,8 @@ By default, ask-stock injects only the 20 most recent visible messages. The foll
 ```env
 AGENT_CONTEXT_COMPRESSION_ENABLED=true
 AGENT_CONTEXT_COMPRESSION_PROFILE=balanced
+# Give long-running summary models a separate timeout instead of the former fixed 20-second budget
+AGENT_CONTEXT_SUMMARY_TIMEOUT_S=90
 # Blank values follow the selected profile preset
 AGENT_CONTEXT_COMPRESSION_TRIGGER_TOKENS=
 AGENT_CONTEXT_PROTECTED_TURNS=

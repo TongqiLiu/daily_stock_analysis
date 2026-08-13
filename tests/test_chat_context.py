@@ -33,12 +33,14 @@ def _config(
     trigger: int = 12000,
     protected: int = 1,
     profile: str = "balanced",
+    summary_timeout: int = 90,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         agent_context_compression_enabled=enabled,
         agent_context_compression_profile=profile,
         agent_context_compression_trigger_tokens=trigger,
         agent_context_protected_turns=protected,
+        agent_context_summary_timeout_s=summary_timeout,
         llm_model_list=[],
         agent_litellm_model="openai/test-model",
         litellm_model="openai/test-model",
@@ -488,7 +490,11 @@ def test_over_trigger_generates_summary_and_updates_covered_message_id() -> None
     )
 
     with patch("src.agent.chat_context.estimate_messages_tokens", return_value=999999):
-        history = build_visible_chat_history(session_id, adapter, _config(trigger=1, protected=1))
+        history = build_visible_chat_history(
+            session_id,
+            adapter,
+            _config(trigger=1, protected=1, summary_timeout=123),
+        )
 
     summary = db.get_conversation_summary(session_id)
     assert summary is not None
@@ -496,6 +502,7 @@ def test_over_trigger_generates_summary_and_updates_covered_message_id() -> None
     assert summary["source_message_count"] == 4
     assert history[0]["content"].startswith(SUMMARY_USER_PREFIX)
     assert [msg["content"] for msg in history[1:]] == ["u3"]
+    assert adapter.call_text.call_args.kwargs["timeout"] == 123
 
 
 def test_summary_compression_does_not_persist_agent_usage_without_provider_usage() -> None:

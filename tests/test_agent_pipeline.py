@@ -53,12 +53,16 @@ class TestAgentConfig(unittest.TestCase):
         self.assertEqual(config.agent_max_steps, AGENT_MAX_STEPS_DEFAULT)
         self.assertEqual(config.agent_skills, [])
         self.assertEqual(config.agent_skill_concurrency, 3)
+        self.assertFalse(config.agent_llm_upstream_stream)
+        self.assertEqual(config.agent_context_summary_timeout_s, 90)
 
     @patch.dict(os.environ, {
         'AGENT_MODE': 'true',
         'AGENT_MAX_STEPS': '15',
         'AGENT_SKILLS': 'dragon_head,shrink_pullback,volume_breakout',
         'AGENT_SKILL_CONCURRENCY': '4',
+        'AGENT_LLM_UPSTREAM_STREAM': 'true',
+        'AGENT_CONTEXT_SUMMARY_TIMEOUT_S': '180',
     }, clear=True)
     def test_agent_config_from_env(self):
         """Agent config should be loaded from environment."""
@@ -69,6 +73,8 @@ class TestAgentConfig(unittest.TestCase):
         self.assertEqual(config.agent_max_steps, 15)
         self.assertEqual(config.agent_skills, ['dragon_head', 'shrink_pullback', 'volume_breakout'])
         self.assertEqual(config.agent_skill_concurrency, 4)
+        self.assertTrue(config.agent_llm_upstream_stream)
+        self.assertEqual(config.agent_context_summary_timeout_s, 180)
 
     @patch.dict(os.environ, {'AGENT_SKILL_CONCURRENCY': '9'}, clear=True)
     def test_agent_skill_concurrency_is_clamped(self):
@@ -2767,6 +2773,91 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(result.content, "agent ok")
         self.assertEqual(mock_completion.call_args.kwargs["temperature"], 1.0)
         self.assertEqual(mock_completion.call_args.kwargs["max_retries"], 0)
+
+    @patch("src.agent.llm_adapter.Router")
+    def test_llm_adapter_aggregates_upstream_stream_with_tool_calls(self, _mock_router):
+        """Upstream streaming should preserve reasoning and tool-call deltas."""
+        from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+        from src.agent.llm_adapter import LLMToolAdapter
+
+        mock_cfg = SimpleNamespace(
+            agent_litellm_model="",
+            litellm_model="openai/deepseek-v4-pro-0813",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+            llm_temperature=0.7,
+            agent_llm_upstream_stream=True,
+            gemini_api_keys=[],
+            anthropic_api_keys=[],
+            openai_api_keys=[],
+            deepseek_api_keys=[],
+            openai_base_url=None,
+        )
+        adapter = LLMToolAdapter(config=mock_cfg)
+        adapter._router = None
+        chunks = [
+            ModelResponse(
+                id="stream-tool",
+                model="deepseek-v4-pro-0813",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            role="assistant",
+                            reasoning_content="need data",
+                            tool_calls=[
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_realtime_quote",
+                                        "arguments": "{\"stock_code\"",
+                                    },
+                                }
+                            ],
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+            ),
+            ModelResponse(
+                id="stream-tool",
+                model="deepseek-v4-pro-0813",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            tool_calls=[
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": ":\"VST\"}"},
+                                }
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+            ),
+        ]
+
+        with patch(
+            "src.agent.llm_adapter.litellm.completion",
+            return_value=iter(chunks),
+        ) as mock_completion:
+            result = adapter._call_litellm_model(
+                [{"role": "user", "content": "analyze VST"}],
+                [{"type": "function", "function": {"name": "get_realtime_quote"}}],
+                "openai/deepseek-v4-pro-0813",
+            )
+
+        self.assertTrue(mock_completion.call_args.kwargs["stream"])
+        self.assertEqual(result.reasoning_content, "need data")
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0].name, "get_realtime_quote")
+        self.assertEqual(result.tool_calls[0].arguments, {"stock_code": "VST"})
 
     @patch("src.agent.llm_adapter.Router")
     def test_llm_adapter_cancellation_stops_fallback_chain(self, _mock_router):

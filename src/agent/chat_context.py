@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 VISIBLE_ROLES = {"user", "assistant"}
 SUMMARY_USER_PREFIX = "[系统生成的历史对话摘要，仅供延续本会话]"
-SUMMARY_LLM_TIMEOUT_SECONDS = 20
+SUMMARY_LLM_TIMEOUT_SECONDS = 90
 
 SUMMARY_SYSTEM_PROMPT = """你是股票问答系统的会话压缩器，只能总结已经出现过的用户可见对话内容。
 
@@ -411,12 +411,17 @@ def _generate_summary(
     to_summarize: Sequence[VisibleMessage],
     max_tokens: int,
 ) -> Tuple[Optional[str], Any]:
+    summary_timeout = getattr(
+        config,
+        "agent_context_summary_timeout_s",
+        SUMMARY_LLM_TIMEOUT_SECONDS,
+    )
     try:
         response = llm_adapter.call_text(
             build_summary_messages(previous_summary, to_summarize),
             temperature=0,
             max_tokens=max_tokens,
-            timeout=SUMMARY_LLM_TIMEOUT_SECONDS,
+            timeout=summary_timeout,
         )
     except Exception as exc:
         logger.warning("Conversation summary LLM call raised: %s", exc)

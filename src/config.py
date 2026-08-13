@@ -803,6 +803,7 @@ class Config:
     agent_orchestrator_timeout_s: int = 900  # Cooperative timeout budget for the whole multi-agent pipeline
     agent_llm_transient_retries: int = 2  # Retry full model chain after transport-only failures
     agent_llm_retry_base_delay_s: float = 2.0  # Exponential backoff base for transport retries
+    agent_llm_upstream_stream: bool = False  # Consume provider responses as a stream, then rebuild one response
     agent_technical_agent_timeout_s: float = 0
     agent_intel_agent_timeout_s: float = 0
     agent_risk_agent_timeout_s: float = 0
@@ -820,6 +821,7 @@ class Config:
     agent_context_compression_profile: str = AGENT_CONTEXT_COMPRESSION_DEFAULT_PROFILE
     agent_context_compression_trigger_tokens: int = 12000
     agent_context_protected_turns: int = 4
+    agent_context_summary_timeout_s: int = 90
     agent_event_monitor_enabled: bool = False  # Enable periodic event-driven alert checks in schedule mode
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
@@ -1744,6 +1746,10 @@ class Config:
                 minimum=0.0,
                 maximum=30.0,
             ),
+            agent_llm_upstream_stream=parse_env_bool(
+                os.getenv('AGENT_LLM_UPSTREAM_STREAM'),
+                default=False,
+            ),
             agent_technical_agent_timeout_s=parse_env_float(
                 os.getenv('AGENT_TECHNICAL_AGENT_TIMEOUT_S'), 0,
                 field_name='AGENT_TECHNICAL_AGENT_TIMEOUT_S', minimum=0,
@@ -1804,6 +1810,13 @@ class Config:
             agent_context_compression_profile=agent_context_compression_profile,
             agent_context_compression_trigger_tokens=agent_context_compression_trigger_tokens,
             agent_context_protected_turns=agent_context_protected_turns,
+            agent_context_summary_timeout_s=parse_env_int(
+                os.getenv('AGENT_CONTEXT_SUMMARY_TIMEOUT_S'),
+                90,
+                field_name='AGENT_CONTEXT_SUMMARY_TIMEOUT_S',
+                minimum=10,
+                maximum=600,
+            ),
             agent_event_monitor_enabled=os.getenv('AGENT_EVENT_MONITOR_ENABLED', 'false').lower() == 'true',
             agent_event_monitor_interval_minutes=parse_env_int(
                 os.getenv('AGENT_EVENT_MONITOR_INTERVAL_MINUTES'),

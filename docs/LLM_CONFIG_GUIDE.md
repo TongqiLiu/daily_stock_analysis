@@ -290,6 +290,8 @@ Hermes 是保留渠道名，只支持本机 loopback `/v1` OpenAI-compatible gen
 ```env
 AGENT_LLM_TRANSIENT_RETRIES=2
 AGENT_LLM_RETRY_BASE_DELAY_S=2
+# 长推理网关容易断开时启用；Agent 内部会把流式 chunks 聚合回原有完整响应
+AGENT_LLM_UPSTREAM_STREAM=true
 ```
 
 每轮只重试上一轮发生传输异常的模型，并继续受 `AGENT_ORCHESTRATOR_TIMEOUT_S` 剩余预算约束。鉴权失败、余额不足、限流、参数错误和上下文超限不会进入这条传输重试链。Agent 适配层是这条链路的唯一重试所有者，LiteLLM Router 和底层 SDK 的自动重试会关闭，避免同一次故障被多层重复放大。若主模型和 fallback 共用同一个 OpenAI-compatible Base URL，它们仍属于同一网络故障域，建议将额外轮数设为 `1`；要避免端点整体不可用，需再配置一个不同服务商/不同 Base URL 的 fallback。
@@ -303,6 +305,8 @@ AGENT_LLM_RETRY_BASE_DELAY_S=2
 ```env
 AGENT_CONTEXT_COMPRESSION_ENABLED=true
 AGENT_CONTEXT_COMPRESSION_PROFILE=balanced
+# 历史摘要使用独立超时，避免大型模型在固定 20 秒预算内频繁失败
+AGENT_CONTEXT_SUMMARY_TIMEOUT_S=90
 # 留空则跟随 profile preset
 AGENT_CONTEXT_COMPRESSION_TRIGGER_TOKENS=
 AGENT_CONTEXT_PROTECTED_TURNS=
