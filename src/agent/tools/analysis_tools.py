@@ -46,6 +46,21 @@ MULTI_STRATEGY_SCORE_SPECS = (
     ("fear_greed_sentiment", "贪恐情绪极值", Decimal("0.5")),
 )
 
+MULTI_STRATEGY_DIMENSIONS = {
+    "bull_trend": "趋势",
+    "ma_golden_cross": "趋势",
+    "shrink_pullback": "量价",
+    "volume_breakout": "量价",
+    "bottom_volume": "量价",
+    "chan_theory": "结构",
+    "wave_theory": "结构",
+    "box_oscillation": "结构",
+    "one_yang_three_yin": "结构",
+    "emotion_cycle": "情绪",
+    "fear_greed_sentiment": "情绪",
+    "dragon_head": "相对强弱",
+}
+
 _MULTI_STRATEGY_TOTAL_WEIGHT = sum(
     (weight for _, _, weight in MULTI_STRATEGY_SCORE_SPECS),
     Decimal("0"),
@@ -246,6 +261,7 @@ def _handle_calculate_multi_strategy_score(
             normalized_rows.append({
                 "strategy": strategy_id,
                 "display_name": display_name,
+                "dimension": MULTI_STRATEGY_DIMENSIONS[strategy_id],
                 "signal": "不可评估",
                 "strength": "-",
                 "score": None,
@@ -254,6 +270,19 @@ def _handle_calculate_multi_strategy_score(
                 "evidence_status": "缺失",
                 "reason": reason,
             })
+            continue
+
+        if (
+            strategy_id == "fear_greed_sentiment"
+            and any(
+                marker in reason.lower()
+                for marker in ("proxy_score", "代理", "not_configured", "unavailable", "不可用")
+            )
+        ):
+            issues.append(
+                "fear_greed_sentiment: unavailable/proxy evidence must be marked missing "
+                "and excluded from the denominator"
+            )
             continue
 
         if evidence_status == "complete":
@@ -292,6 +321,7 @@ def _handle_calculate_multi_strategy_score(
         normalized_rows.append({
             "strategy": strategy_id,
             "display_name": display_name,
+            "dimension": MULTI_STRATEGY_DIMENSIONS[strategy_id],
             "signal": _SIGNAL_LABELS[signal],
             "strength": _STRENGTH_LABELS[strength],
             "score": float(score),
@@ -1022,6 +1052,89 @@ analyze_ema200_setup_tool = ToolDefinition(
 )
 
 
+def _handle_analyze_intraday_t(
+    stock_code: str,
+    timeframe: str = "3m",
+    bars: int = 260,
+) -> dict:
+    """Run deterministic intraday T-trading structure checks."""
+    from src.services.intraday_history_loader import load_intraday_history
+    from src.services.intraday_t_service import analyze_intraday_t
+
+    if not (stock_code and str(stock_code).strip()):
+        return {"error": "stock_code is required"}
+    if timeframe != "3m":
+        return {
+            "error": "Intraday T-trading analysis currently supports 3m only",
+            "code": stock_code,
+            "timeframe": timeframe,
+        }
+    try:
+        requested_bars = max(int(bars or 260), 80)
+    except (TypeError, ValueError):
+        requested_bars = 260
+
+    try:
+        df, source = load_intraday_history(
+            stock_code,
+            timeframe="3m",
+            bars=requested_bars,
+        )
+        if df is None or df.empty:
+            return {
+                "error": f"No 3-minute data available for intraday T analysis on {stock_code}",
+                "code": stock_code,
+                "timeframe": "3m",
+            }
+        result = analyze_intraday_t(df, source=source, timeframe="3m")
+        result["code"] = stock_code
+        result["requested_bars"] = requested_bars
+        return result
+    except Exception as exc:
+        return {
+            "error": f"Intraday T analysis failed: {str(exc)}",
+            "code": stock_code,
+            "timeframe": "3m",
+        }
+
+
+analyze_intraday_t_tool = ToolDefinition(
+    name="analyze_intraday_t",
+    description=(
+        "Deterministically analyze a 3-minute chart for intraday T-trading. "
+        "Calculates EMA20, EMA50, Wilder ATR14, confirmed HH/HL/LH/LL pivots, "
+        "trend-versus-range regime, failed second-push high-sell confirmation, "
+        "support plus higher-low plus EMA20-reclaim buyback confirmation, "
+        "1-1.5 ATR spacing, and T-position guardrails."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., 'MSTX', 'OKLL', 'CONL', or 'KORU'.",
+        ),
+        ToolParameter(
+            name="timeframe",
+            type="string",
+            description="Chart timeframe. This rule set is fixed to 3-minute bars.",
+            required=False,
+            enum=["3m"],
+            default="3m",
+        ),
+        ToolParameter(
+            name="bars",
+            type="integer",
+            description="Number of recent 3-minute bars to fetch (260 recommended; 80+ required).",
+            required=False,
+            default=260,
+        ),
+    ],
+    handler=_handle_analyze_intraday_t,
+    category="analysis",
+    policy=_ANALYSIS_READ_POLICY,
+)
+
+
 def _handle_analyze_vcp_h1_h2_buy(stock_code: str, days: int = 260) -> dict:
     """Run deterministic daily VCP + H1/H2 buy setup checks."""
     from src.services.history_loader import load_history_df
@@ -1147,6 +1260,7 @@ ALL_ANALYSIS_TOOLS = [
     analyze_pattern_tool,
     calculate_multi_strategy_score_tool,
     analyze_ema200_setup_tool,
+    analyze_intraday_t_tool,
     analyze_vcp_h1_h2_buy_tool,
     analyze_vcp_breakout_trader_tool,
 ]

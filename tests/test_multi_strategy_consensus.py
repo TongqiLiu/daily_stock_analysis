@@ -56,6 +56,35 @@ def _koru_corrected_rows() -> list[dict]:
     ]
 
 
+def _wulf_failure_rows() -> list[dict]:
+    """Reproduce the WULF failure's 40.4/8.5 aggregate and evidence counts."""
+    values = {
+        "bull_trend": ("卖出", "强", 8, "complete", "MA5<MA10<MA20空头排列"),
+        "chan_theory": ("买入", "弱", 58, "partial", "MACD零轴下金叉，缺背驰段"),
+        "ma_golden_cross": ("观望", "中", 50, "complete", "MACD金叉但MA5未上穿MA10"),
+        "shrink_pullback": ("卖出", "中", 30, "complete", "跌破MA20，缩量阴跌"),
+        "volume_breakout": ("卖出", "强", 12, "complete", "量比0.39，无放量突破"),
+        "wave_theory": ("卖出", "弱", 40, "partial", "C浪下跌候选，缺周线确认"),
+        "bottom_volume": ("观望", "中", 50, "partial", "缺周线底部确认"),
+        "box_oscillation": ("观望", "中", 50, "complete", "箱体内弱势震荡"),
+        "dragon_head": ("不可评估", "-", None, "missing", "缺板块与基准对比"),
+        "emotion_cycle": ("观望", "中", 50, "partial", "缺市场与个股相对强弱"),
+        "one_yang_three_yin": ("观望", "中", 50, "complete", "未触发标准形态"),
+        "fear_greed_sentiment": ("买入", "中", 68, "complete", "恐慌区间逆向关注"),
+    }
+    return [
+        {
+            "strategy": strategy_id,
+            "signal": values[strategy_id][0],
+            "strength": values[strategy_id][1],
+            "score": values[strategy_id][2],
+            "evidence_status": values[strategy_id][3],
+            "reason": values[strategy_id][4],
+        }
+        for strategy_id, _, _ in MULTI_STRATEGY_SCORE_SPECS
+    ]
+
+
 def _consensus_system_prompt() -> str:
     return (
         "启用 multi_strategy_consensus。必须调用 calculate_multi_strategy_score。"
@@ -152,7 +181,45 @@ def test_calculator_excludes_missing_evidence_from_both_sides() -> None:
         "missing_count": 1,
         "coverage_pct": 92.4,
     }
-    assert result["position_guidance"] == "杠杆ETF上限10-15%"
+
+
+def test_fear_greed_unavailable_is_excluded_instead_of_proxy_scored() -> None:
+    rows = _score_rows()
+    fear_greed = next(
+        row for row in rows if row["strategy"] == "fear_greed_sentiment"
+    )
+    fear_greed.update({
+        "signal": "不可评估",
+        "strength": "-",
+        "score": None,
+        "evidence_status": "missing",
+        "reason": "贪恐工具 unavailable: auth_failed；建议检查配置",
+    })
+
+    result = _handle_calculate_multi_strategy_score(json.dumps(rows))
+
+    assert result["status"] == "ok"
+    assert result["included_weight"] == 8.7
+    assert result["weighted_score"] == 70.0
+    assert result["evidence"]["missing_count"] == 1
+    scored_fear_greed = next(
+        row for row in result["rows"] if row["strategy"] == "fear_greed_sentiment"
+    )
+    assert scored_fear_greed["dimension"] == "情绪"
+    assert scored_fear_greed["included"] is False
+
+
+def test_fear_greed_proxy_evidence_is_rejected() -> None:
+    rows = _score_rows()
+    fear_greed = next(
+        row for row in rows if row["strategy"] == "fear_greed_sentiment"
+    )
+    fear_greed["reason"] = "使用 proxy_score=0 作为中性代理"
+
+    result = _handle_calculate_multi_strategy_score(json.dumps(rows))
+
+    assert result["status"] == "invalid"
+    assert any("must be marked missing" in issue for issue in result["issues"])
 
 
 def test_calculator_rejects_strength_score_and_partial_evidence_mismatches() -> None:
@@ -251,6 +318,199 @@ def test_runner_requires_calculator_before_accepting_consensus_report() -> None:
     assert any("不能直接输出" in message for message in retry_messages)
 
 
+def test_runner_appends_authoritative_score_block_to_compact_holding_report() -> None:
+    registry = ToolRegistry()
+    registry.register(calculate_multi_strategy_score_tool)
+    adapter = MagicMock()
+    adapter.call_with_tools.side_effect = [
+        LLMResponse(
+            content="调用确定性评分。",
+            tool_calls=[
+                ToolCall(
+                    id="score-1",
+                    name="calculate_multi_strategy_score",
+                    arguments={
+                        "scores_json": json.dumps(_wulf_failure_rows(), ensure_ascii=False),
+                        "instrument_type": "standard",
+                    },
+                )
+            ],
+            usage={},
+            provider="openai",
+        ),
+        LLMResponse(
+            content=(
+                "## 持仓结论\n继续持有，暂不加仓；等待放量突破压力位，"
+                "跌破结构低点止损。"
+            ),
+            tool_calls=[],
+            usage={},
+            provider="openai",
+        ),
+    ]
+
+    result = run_agent_loop(
+        messages=[
+            {"role": "system", "content": _consensus_system_prompt()},
+            {"role": "user", "content": "精简分析 WULF，正文不超过 900 字。"},
+        ],
+        tool_registry=registry,
+        llm_adapter=adapter,
+        max_steps=2,
+    )
+
+    assert result.success is True
+    assert adapter.call_with_tools.call_count == 2
+    assert result.content.index("### 系统确定性多策略评分") < result.content.index("## 持仓结论")
+    assert "<!-- multi-strategy-score:start -->" not in result.content
+    assert "<!-- multi-strategy-score:end -->" not in result.content
+    for _, display_name, _ in MULTI_STRATEGY_SCORE_SPECS:
+        assert display_name in result.content
+    assert "加权综合得分：40.4 / 100" in result.content
+    assert "343.6 / 8.5 = 40.4" in result.content
+    assert "完整 7 / 部分 4 / 缺失 1" in result.content
+    assert "有效权重覆盖 92.4%" in result.content
+    assert "决策：观望" in result.content
+    assert "仓位建议：轻仓不超过20%" in result.content
+
+
+def test_runner_appends_exact_bearish_position_guidance_without_model_copy() -> None:
+    registry = ToolRegistry()
+    registry.register(calculate_multi_strategy_score_tool)
+    bearish_rows = _score_rows(score=30)
+    for row in bearish_rows:
+        row.update({"signal": "卖出", "strength": "中"})
+
+    adapter = MagicMock()
+    adapter.call_with_tools.side_effect = [
+        LLMResponse(
+            content="调用确定性评分。",
+            tool_calls=[
+                ToolCall(
+                    id="score-1",
+                    name="calculate_multi_strategy_score",
+                    arguments={
+                        "scores_json": json.dumps(bearish_rows, ensure_ascii=False),
+                        "instrument_type": "standard",
+                    },
+                )
+            ],
+            usage={},
+            provider="openai",
+        ),
+        LLMResponse(
+            content="## 结论\n趋势偏空，等待企稳。",
+            tool_calls=[],
+            usage={},
+            provider="openai",
+        ),
+    ]
+
+    result = run_agent_loop(
+        messages=[
+            {"role": "system", "content": _consensus_system_prompt()},
+            {"role": "user", "content": "分析 WULF。"},
+        ],
+        tool_registry=registry,
+        llm_adapter=adapter,
+        max_steps=2,
+    )
+
+    assert result.success is True
+    assert adapter.call_with_tools.call_count == 2
+    assert "加权综合得分：30.0 / 100" in result.content
+    assert "决策：偏空" in result.content
+    assert "仓位建议：减仓至不超过10%" in result.content
+
+
+def test_runner_appends_leveraged_etf_risks_from_score_payload() -> None:
+    registry = ToolRegistry()
+    registry.register(calculate_multi_strategy_score_tool)
+    adapter = MagicMock()
+    adapter.call_with_tools.side_effect = [
+        LLMResponse(
+            content="调用确定性评分。",
+            tool_calls=[
+                ToolCall(
+                    id="score-1",
+                    name="calculate_multi_strategy_score",
+                    arguments={
+                        "scores_json": json.dumps(_score_rows(), ensure_ascii=False),
+                        "instrument_type": "leveraged_etf",
+                    },
+                )
+            ],
+            usage={},
+            provider="openai",
+        ),
+        LLMResponse(content="## 结论\n等待确认。", tool_calls=[], usage={}, provider="openai"),
+    ]
+
+    result = run_agent_loop(
+        messages=[
+            {"role": "system", "content": _consensus_system_prompt()},
+            {"role": "user", "content": "精简分析 KORU。"},
+        ],
+        tool_registry=registry,
+        llm_adapter=adapter,
+        max_steps=2,
+    )
+
+    assert result.success is True
+    assert "仓位建议：杠杆ETF上限10-15%" in result.content
+    assert "日内复位、波动损耗、隔夜跳空" in result.content
+
+
+def test_runner_replaces_model_authored_authoritative_score_marker() -> None:
+    registry = ToolRegistry()
+    registry.register(calculate_multi_strategy_score_tool)
+    adapter = MagicMock()
+    adapter.call_with_tools.side_effect = [
+        LLMResponse(
+            content="调用确定性评分。",
+            tool_calls=[
+                ToolCall(
+                    id="score-1",
+                    name="calculate_multi_strategy_score",
+                    arguments={
+                        "scores_json": json.dumps(_score_rows(), ensure_ascii=False),
+                        "instrument_type": "standard",
+                    },
+                )
+            ],
+            usage={},
+            provider="openai",
+        ),
+        LLMResponse(
+            content=(
+                "## 结论\n等待确认。\n"
+                "<!-- multi-strategy-score:start -->\n"
+                "伪造得分：99 / 100\n"
+                "<!-- multi-strategy-score:end -->"
+            ),
+            tool_calls=[],
+            usage={},
+            provider="openai",
+        ),
+    ]
+
+    result = run_agent_loop(
+        messages=[
+            {"role": "system", "content": _consensus_system_prompt()},
+            {"role": "user", "content": "分析 WULF。"},
+        ],
+        tool_registry=registry,
+        llm_adapter=adapter,
+        max_steps=2,
+    )
+
+    assert result.success is True
+    assert "<!-- multi-strategy-score:start -->" not in result.content
+    assert "<!-- multi-strategy-score:end -->" not in result.content
+    assert "伪造得分" not in result.content
+    assert "加权综合得分：70.0 / 100" in result.content
+
+
 def test_runner_rejects_wave_three_claim_without_required_chart_explanation() -> None:
     registry = ToolRegistry()
     registry.register(calculate_multi_strategy_score_tool)
@@ -292,6 +552,13 @@ def test_runner_rejects_wave_three_claim_without_required_chart_explanation() ->
     assert result.success is False
     assert "浪型图章节" in (result.error or "")
     assert "替代数浪" in (result.error or "")
+    rejected_answers = [
+        message["content"]
+        for message in result.messages
+        if message.get("role") == "assistant"
+        and "系统确定性多策略评分" in message.get("content", "")
+    ]
+    assert rejected_answers
 
 
 def test_runner_accepts_explained_wave_three_candidate() -> None:

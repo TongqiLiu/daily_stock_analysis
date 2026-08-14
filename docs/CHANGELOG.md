@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 多策略联合评分表增加趋势、量价、结构、情绪、相对强弱五类维度；贪恐数据不可用时改按缺失证据排除，不再使用代理中性分，并明确综合分不是收益概率。
+- [改进] 多策略确定性评分区块不再向最终报告输出 `multi-strategy-score` HTML 注释标记，内部仍保留标记清理能力。
+- [新功能] 问股新增「日内做T」可选策略，基于3分钟EMA20/EMA50、HH/HL/LH/LL、ATR14确定性判断趋势/箱体、高卖、低接、价差空间与T仓纪律。
+- [改进] 问股页切换历史对话后默认定位到最新消息，底部输入框新增可拖拽及键盘调节的高度控制。
+- [改进] 期权收租技能新增「支撑/阻力」硬性风控：支撑附近不卖 Call、可考虑卖 Put；阻力附近不卖 Put、可考虑卖 Call（options-income-scanner 等）。
+- [修复] 多策略联合报告改由后端根据评分工具结果自动附加权威 12 项评分区块，避免精简持仓报告因模型漏写策略行而耗尽 Agent 步骤；浪型解释门禁保持不变。
 - [改进] 多策略联合新增 12 项证据分级与确定性评分校验，固定完整权重 9.2、缺失证据动态排除并报告覆盖率；第 3 浪候选/启动强制输出日期价位浪型图、替代数浪及确认/弱化/证伪条件。
 - [修复] Codex App Server 问股提示词与实际三个只读工具对齐，要求最新分析时不再把已保存分析上下文表述为本轮更新数据。
 - [修复] 问股 Agent 支持可选上游流式聚合，并将可见历史摘要超时改为默认 90 秒可配置，降低长推理经兼容网关时的超时与连接重置。

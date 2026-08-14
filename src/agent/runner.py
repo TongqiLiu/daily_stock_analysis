@@ -326,6 +326,110 @@ def _latest_multi_strategy_score_payload(
     return None
 
 
+def _markdown_table_cell(value: Any) -> str:
+    """Render an untrusted tool value safely inside one Markdown table cell."""
+    if value is None:
+        return "—"
+    rendered = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    return rendered.replace("|", r"\|").replace("\n", "<br>") or "—"
+
+
+def _format_multi_strategy_number(value: Any, *, decimals: Optional[int] = None) -> str:
+    """Format deterministic score payload numbers without binary-float noise."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if decimals is not None:
+        return f"{number:.{decimals}f}"
+    return format(number, ".10g")
+
+
+def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
+    """Render the authoritative user-facing score block from a valid tool payload."""
+    if payload.get("status") != "ok":
+        return ""
+    rows = payload.get("rows")
+    evidence = payload.get("evidence")
+    if not isinstance(rows, list) or not isinstance(evidence, dict):
+        return ""
+
+    lines = [
+        "### 系统确定性多策略评分",
+        "",
+        "> 以下评分区块由系统根据 `calculate_multi_strategy_score` 的返回结果生成；如与正文中的手工复述冲突，以本区块为准。",
+        "",
+        "| # | 策略 | 维度 | 信号 | 强度 | 评分 | 权重 | 证据 | 关键依据 |",
+        "|---|---|---|---|---|---:|---:|---|---|",
+    ]
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        score = (
+            _format_multi_strategy_number(row.get("score"))
+            if row.get("included") is not False and row.get("score") is not None
+            else "—"
+        )
+        weight = _format_multi_strategy_number(row.get("weight"), decimals=1)
+        lines.append(
+            "| "
+            + " | ".join([
+                str(index),
+                _markdown_table_cell(row.get("display_name") or row.get("strategy")),
+                _markdown_table_cell(row.get("dimension")),
+                _markdown_table_cell(row.get("signal")),
+                _markdown_table_cell(row.get("strength")),
+                score,
+                weight,
+                _markdown_table_cell(row.get("evidence_status")),
+                _markdown_table_cell(row.get("reason")),
+            ])
+            + " |"
+        )
+
+    expected_score = _format_multi_strategy_number(payload.get("weighted_score"), decimals=1)
+    numerator = _format_multi_strategy_number(payload.get("weighted_numerator"))
+    included_weight = _format_multi_strategy_number(payload.get("included_weight"))
+    coverage = _format_multi_strategy_number(evidence.get("coverage_pct"), decimals=1)
+    lines.extend([
+        "",
+        f"- **加权综合得分：{expected_score} / 100**",
+        f"- 计算过程：{numerator} / {included_weight} = {expected_score}",
+        "- 证据覆盖："
+        f"完整 {evidence.get('complete_count', '—')} / "
+        f"部分 {evidence.get('partial_count', '—')} / "
+        f"缺失 {evidence.get('missing_count', '—')}，有效权重覆盖 {coverage}%",
+        f"- 决策：{_markdown_table_cell(payload.get('decision'))}",
+        f"- 仓位建议：{_markdown_table_cell(payload.get('position_guidance'))}",
+        "- 评分性质：这是基于当前证据的综合评分，不是收益概率；同一维度内的同向策略可能存在相关性，不能按行数直接叠加信心。",
+    ])
+    if payload.get("instrument_type") == "leveraged_etf":
+        lines.append("- 杠杆 ETF 风险：日内复位、波动损耗、隔夜跳空。")
+    return "\n".join(lines)
+
+
+def _append_multi_strategy_score_section(
+    content: str,
+    payload: Optional[Dict[str, Any]],
+) -> str:
+    """Replace model-authored blocks and place authoritative evidence before narrative."""
+    if not isinstance(payload, dict):
+        return content
+    section = _render_multi_strategy_score_section(payload)
+    if not section:
+        return content
+    start_marker = "<!-- multi-strategy-score:start -->"
+    end_marker = "<!-- multi-strategy-score:end -->"
+    narrative = re.sub(
+        rf"\s*{re.escape(start_marker)}.*?{re.escape(end_marker)}\s*",
+        "\n\n",
+        content,
+        flags=re.DOTALL,
+    )
+    narrative = narrative.replace(start_marker, "").replace(end_marker, "").rstrip()
+    return f"{section}\n\n{narrative}" if narrative else section
+
+
 def _wave_three_output_issues(content: str) -> List[str]:
     """Return missing explainability fields when a report claims a Wave 3 setup."""
     if not any(term in content for term in _WAVE_THREE_TERMS):
@@ -456,17 +560,19 @@ def _validate_multi_strategy_final_answer(
         for risk_term in ("日内复位", "波动损耗", "隔夜跳空"):
             if risk_term not in content:
                 missing.append(risk_term)
-    missing.extend(_wave_three_output_issues(content))
+    wave_issues = _wave_three_output_issues(content)
+    missing.extend(wave_issues)
     if not missing:
         return True, "", ""
 
     issue = "最终报告未忠实复制工具结果或浪型解释不完整：" + "、".join(missing)
     retry_message = (
-        "[系统校验] 最终报告未通过，请重新输出完整报告。必须逐字采用评分工具的 "
-        f"weighted_score={expected_score}、included_weight={expected_weight}、"
-        f"decision={expected_decision}、position_guidance={expected_position}。"
+        "[系统校验] 最终报告未通过。本次具体缺失："
+        + "、".join(missing)
+        + "。确定性评分表、计算式、证据覆盖、决策和仓位由系统自动附加，"
+        "请不要手工重写；只需重新输出修正后的分析正文。"
     )
-    if _wave_three_output_issues(content):
+    if wave_issues:
         retry_message += (
             " 报告既然判断第3浪候选/启动，还必须补齐带 O/A/B/当前点日期价格的"
             "代码块浪型图、第2浪回撤比例、量能支持与未满足项、替代数浪、确认位、"
@@ -908,6 +1014,13 @@ def run_agent_loop(
                     continue
 
             if require_multi_strategy_score and not is_error:
+                score_payload = _latest_multi_strategy_score_payload(
+                    messages[initial_message_count:]
+                )
+                final_content = _append_multi_strategy_score_section(
+                    final_content,
+                    score_payload,
+                )
                 score_ok, score_issue, retry_message = _validate_multi_strategy_final_answer(
                     final_content,
                     messages[initial_message_count:],
@@ -918,6 +1031,12 @@ def run_agent_loop(
                         "Agent final answer blocked by deterministic multi-strategy gate: %s",
                         score_issue,
                     )
+                    messages.append({
+                        "role": "assistant",
+                        "content": final_content,
+                        "_trace_provider": response.provider,
+                        "_trace_model": m,
+                    })
                     if step + 1 >= max_steps:
                         return _finish(RunLoopResult(
                             success=False,
