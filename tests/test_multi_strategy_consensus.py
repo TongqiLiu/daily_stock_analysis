@@ -92,6 +92,17 @@ def _consensus_system_prompt() -> str:
     )
 
 
+def _market_structure() -> dict:
+    return {
+        "current_price": 102.0,
+        "support_levels": [98.5, 100.0],
+        "resistance_levels": [106.5, 108.0],
+        "breakout_status": "未确认",
+        "invalidation_level": 97.8,
+        "evidence": "前低、MA20与20日高点",
+    }
+
+
 def _valid_final_report(*, wave_three: bool = False) -> str:
     strategy_lines = "\n".join(
         f"| {index} | {display_name} | 买入 | 中 | 70 | {weight} | 完整 | 有效证据 |"
@@ -139,9 +150,20 @@ def test_calculator_uses_fixed_9_2_weight_and_programmatic_formula() -> None:
     assert result["included_weight"] == 9.2
     assert result["configured_total_weight"] == 9.2
     assert result["weighted_score"] == 70.0
+    assert result["dimension_weighted_score"] == 70.0
     assert result["formula"] == "644 / 9.2 = 70"
+    assert result["dimension_formula"] == "70 / 1 = 70"
     assert result["decision"] == "偏多"
-    assert result["position_guidance"] == "中仓30-50%"
+    assert result["position_guidance"] == "等待确认后小仓试仓，并按止损距离计算仓位"
+    assert result["bias"] == {
+        "code": "bullish",
+        "label": "偏多",
+        "score": 70.0,
+    }
+    assert result["actions"]["no_position"] == "watch"
+    assert result["actions"]["has_position"] == "hold"
+    assert result["confidence"]["level"] == "high"
+    assert len(result["dimensions"]) == 5
 
 
 def test_calculator_tool_requires_explicit_instrument_classification() -> None:
@@ -175,12 +197,12 @@ def test_calculator_excludes_missing_evidence_from_both_sides() -> None:
     assert result["weighted_numerator"] == 595.0
     assert result["included_weight"] == 8.5
     assert result["weighted_score"] == 70.0
-    assert result["evidence"] == {
-        "complete_count": 11,
-        "partial_count": 0,
-        "missing_count": 1,
-        "coverage_pct": 92.4,
-    }
+    assert result["evidence"]["complete_count"] == 11
+    assert result["evidence"]["partial_count"] == 0
+    assert result["evidence"]["missing_count"] == 1
+    assert result["evidence"]["coverage_pct"] == 92.4
+    assert result["evidence"]["quality_coverage_pct"] == 92.4
+    assert result["evidence"]["available_dimension_count"] == 4
 
 
 def test_fear_greed_unavailable_is_excluded_instead_of_proxy_scored() -> None:
@@ -253,6 +275,36 @@ def test_calculator_forces_insufficient_decision_when_coverage_is_too_low() -> N
     assert result["position_guidance"] == "不新增仓位，补齐证据后重评"
 
 
+def test_calculator_does_not_treat_all_partial_evidence_as_strong_buy() -> None:
+    rows = _score_rows(score=79)
+    for row in rows:
+        row["evidence_status"] = "partial"
+
+    result = _handle_calculate_multi_strategy_score(json.dumps(rows, ensure_ascii=False))
+
+    assert result["status"] == "ok"
+    assert result["weighted_score"] == 79.0
+    assert result["evidence"]["coverage_pct"] == 100.0
+    assert result["evidence"]["quality_coverage_pct"] == 50.0
+    assert result["decision"] == "证据不足（观望）"
+    assert result["confidence"]["level"] == "insufficient"
+    assert result["actions"]["no_position"] == "watch"
+    assert any(
+        blocker["code"] == "low_evidence_quality"
+        for blocker in result["decision_blockers"]
+    )
+
+
+def test_calculator_uses_non_overlapping_score_band_boundaries() -> None:
+    rows = _score_rows()
+    rows[0].update({"signal": "买入", "strength": "中", "score": 80})
+
+    result = _handle_calculate_multi_strategy_score(json.dumps(rows, ensure_ascii=False))
+
+    assert result["status"] == "invalid"
+    assert any("score 80" in issue for issue in result["issues"])
+
+
 def test_koru_like_inputs_use_evidence_adjusted_score_and_leveraged_position() -> None:
     result = _handle_calculate_multi_strategy_score(
         json.dumps(_koru_corrected_rows(), ensure_ascii=False),
@@ -263,14 +315,15 @@ def test_koru_like_inputs_use_evidence_adjusted_score_and_leveraged_position() -
     assert result["weighted_numerator"] == 548.5
     assert result["included_weight"] == 8.5
     assert result["weighted_score"] == 64.5
+    assert result["dimension_weighted_score"] == 65.4
     assert result["decision"] == "偏多"
-    assert result["position_guidance"] == "杠杆ETF上限10-15%"
-    assert result["evidence"] == {
-        "complete_count": 7,
-        "partial_count": 4,
-        "missing_count": 1,
-        "coverage_pct": 92.4,
-    }
+    assert result["position_guidance"] == "杠杆ETF等待确认后小仓试仓"
+    assert result["evidence"]["complete_count"] == 7
+    assert result["evidence"]["partial_count"] == 4
+    assert result["evidence"]["missing_count"] == 1
+    assert result["evidence"]["coverage_pct"] == 92.4
+    assert result["evidence"]["quality_coverage_pct"] == 75.5
+    assert result["evidence"]["available_dimension_count"] == 4
 
 
 def test_runner_requires_calculator_before_accepting_consensus_report() -> None:
@@ -332,6 +385,9 @@ def test_runner_appends_authoritative_score_block_to_compact_holding_report() ->
                     arguments={
                         "scores_json": json.dumps(_wulf_failure_rows(), ensure_ascii=False),
                         "instrument_type": "standard",
+                        "market_structure_json": json.dumps(
+                            _market_structure(), ensure_ascii=False
+                        ),
                     },
                 )
             ],
@@ -370,8 +426,18 @@ def test_runner_appends_authoritative_score_block_to_compact_holding_report() ->
     assert "343.6 / 8.5 = 40.4" in result.content
     assert "完整 7 / 部分 4 / 缺失 1" in result.content
     assert "有效权重覆盖 92.4%" in result.content
-    assert "决策：观望" in result.content
-    assert "仓位建议：轻仓不超过20%" in result.content
+    assert "五维综合得分：37.2 / 100" in result.content
+    assert "12 项原始加权综合得分：40.4 / 100" in result.content
+    assert "决策：偏空" in result.content
+    assert "仓位建议：不新增仓位；已有仓位考虑减仓并收紧止损" in result.content
+    assert "#### 1. 结论摘要" in result.content
+    assert "#### 2. 价格结构（支撑/阻力）" in result.content
+    assert "#### 3. 五维证据汇总" in result.content
+    assert "#### 4. 12 项策略评分明细" in result.content
+    assert "#### 5. 评分审计" in result.content
+    assert "近端支撑：100" in result.content
+    assert "近端阻力：106.5" in result.content
+    assert "质量折算覆盖 75.5%" in result.content
 
 
 def test_runner_appends_exact_bearish_position_guidance_without_model_copy() -> None:
@@ -420,7 +486,7 @@ def test_runner_appends_exact_bearish_position_guidance_without_model_copy() -> 
     assert adapter.call_with_tools.call_count == 2
     assert "加权综合得分：30.0 / 100" in result.content
     assert "决策：偏空" in result.content
-    assert "仓位建议：减仓至不超过10%" in result.content
+    assert "仓位建议：不新增仓位；已有仓位考虑减仓并收紧止损" in result.content
 
 
 def test_runner_appends_leveraged_etf_risks_from_score_payload() -> None:
@@ -457,7 +523,7 @@ def test_runner_appends_leveraged_etf_risks_from_score_payload() -> None:
     )
 
     assert result.success is True
-    assert "仓位建议：杠杆ETF上限10-15%" in result.content
+    assert "仓位建议：杠杆ETF等待确认后小仓试仓" in result.content
     assert "日内复位、波动损耗、隔夜跳空" in result.content
 
 

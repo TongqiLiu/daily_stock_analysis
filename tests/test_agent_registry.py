@@ -517,6 +517,71 @@ class TestBuiltinSkills(unittest.TestCase):
         self.assertIn("vcp_breakout_trader", user_visible_ids)
         self.assertNotIn("ema_200_highlow", user_visible_ids)
 
+    def test_intraday_t_skill_is_user_visible_and_tool_backed(self):
+        """Expose the deterministic 3-minute T-trading skill in Ask Stock."""
+        from src.agent.factory import get_tool_registry
+        from src.agent.skills.base import SkillManager
+
+        manager = SkillManager()
+        manager.load_builtin_strategies()
+
+        skill = manager.get("intraday_t_trading")
+        self.assertIsNotNone(skill)
+        self.assertEqual(skill.display_name, "日内做T")
+        self.assertEqual(skill.category, "pattern")
+        self.assertTrue(skill.user_invocable)
+        self.assertEqual(skill.default_priority, 31)
+        self.assertEqual(skill.required_tools, ["analyze_intraday_t"])
+
+        registered_tools = set(get_tool_registry().list_names())
+        self.assertIn("analyze_intraday_t", registered_tools)
+
+        user_visible_ids = {
+            item.name for item in manager.list_skills() if item.user_invocable
+        }
+        self.assertIn("intraday_t_trading", user_visible_ids)
+
+    def test_options_strategy_skill_is_user_visible_and_tool_backed(self):
+        """Expose the option strategy selector only with the real-data tool."""
+        from src.agent.factory import get_tool_registry
+        from src.agent.skills.base import SkillManager
+
+        manager = SkillManager()
+        manager.load_builtin_strategies()
+
+        skill = manager.get("options_strategy_analysis")
+        self.assertIsNotNone(skill)
+        self.assertEqual(skill.display_name, "期权策略分析")
+        self.assertEqual(skill.category, "framework")
+        self.assertTrue(skill.user_invocable)
+        self.assertEqual(skill.required_tools, [
+            "get_realtime_quote",
+            "analyze_trend",
+            "get_option_strategy_snapshot",
+            "get_option_strategy_analysis",
+        ])
+
+        registered_tools = set(get_tool_registry().list_names())
+        self.assertIn("get_option_strategy_snapshot", registered_tools)
+        self.assertIn("get_option_strategy_analysis", registered_tools)
+        self.assertIn("options_strategy_analysis", {item.name for item in manager.list_skills() if item.user_invocable})
+
+    def test_multi_strategy_can_be_combined_with_option_analysis(self):
+        """Keep the broad scorecard and option specialist together."""
+        from src.agent.factory import normalize_requested_skill_ids
+
+        normalized = normalize_requested_skill_ids(
+            None,
+            ["multi_strategy_consensus", "options_strategy_analysis"],
+        )
+        assert set(normalized) == {"multi_strategy_consensus", "options_strategy_analysis"}
+
+        specialist_only = normalize_requested_skill_ids(
+            None,
+            ["multi_strategy_consensus", "value_investing"],
+        )
+        assert specialist_only == ["value_investing"]
+
     def test_nunu_wave_is_hidden_from_user_selectors(self):
         """Keep the Nunu Wave definition available without showing it in Ask Stock."""
         from src.agent.skills.base import SkillManager

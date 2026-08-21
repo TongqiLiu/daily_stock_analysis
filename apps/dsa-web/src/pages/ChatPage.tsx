@@ -181,11 +181,36 @@ const PROMPT_TEMPLATES = [
 用一句话说明：现在应该买入、等待、持有、减仓、止损，还是只观察。`,
     skills: ['multi_strategy_consensus'],
   },
+  {
+    id: 'option-combination-analysis',
+    title: '期权组合分析',
+    description: '真实报价、组合盈亏、Greeks',
+    prompt: `请对 {stock} 做期权组合策略分析。
+
+要求：
+- 先获取正股现价、趋势、支撑/阻力和失效位，再读取真实期权链与报价。
+- 根据真实到期日、行权价、IV、OI、Bid/Ask 设计 1-2 个可比较的组合。
+- 必须调用组合级期权策略分析，引用真实的组合 Bid/Ask、最大收益、最大损失、盈亏平衡点、盈利概率、Delta 和 Theta。
+- 如果 Futu/Longbridge 权限、报价或 Greeks 缺失，明确写“数据缺失，无法判断”，禁止估算或手动拼接组合价格。
+
+请用表格输出：
+1. 期权数据可信度
+2. 正股与期权结构
+3. 策略比较：方向、最大收益、最大损失、盈亏平衡点、主要风险、当前状态
+4. 入场条件、失效条件和不交易条件
+5. 最终建议：交易 / 等待 / 不交易。`,
+    skills: ['options_strategy_analysis'],
+  },
 ];
 
 const MAX_SELECTED_SKILLS = 3;
 const PREFERRED_DEFAULT_SKILL_ID = 'multi_strategy_consensus';
 const EXCLUSIVE_META_SKILL_ID = 'multi_strategy_consensus';
+const COMPATIBLE_META_SKILL_IDS = new Set(['options_strategy_analysis']);
+const INPUT_AUTO_GROW_MAX_HEIGHT = 200;
+const INPUT_MANUAL_MAX_HEIGHT = 320;
+const INPUT_MIN_HEIGHT = 44;
+const INPUT_RESIZE_STEP = 24;
 const CONTEXT_COMPRESSION_CONFIG_KEY = 'AGENT_CONTEXT_COMPRESSION_ENABLED';
 const CONVERSATION_COPY_KEY = '__conversation__';
 const STRONG_COMPARE_STOCK_MESSAGE_RE = /比较|对比|\bvs\b|和[^，。,.!?！？]{0,40}比/i;
@@ -363,6 +388,7 @@ const ChatPage: React.FC = () => {
   const [contextCompressionError, setContextCompressionError] = useState<string | null>(null);
   const [copiedMessages, setCopiedMessages] = useState<Set<string>>(new Set());
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [manualInputHeight, setManualInputHeight] = useState<number | null>(null);
   const [watchlistCodes, setWatchlistCodes] = useState<string[]>([]);
   const [isWatchlistActioning, setIsWatchlistActioning] = useState(false);
   const [watchlistMessage, setWatchlistMessage] = useState<string | null>(null);
@@ -385,6 +411,13 @@ const ChatPage: React.FC = () => {
   const followUpContextRef = useRef<ChatFollowUpContext | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const pendingScrollBehaviorRef = useRef<ScrollBehavior>('auto');
+  const pendingSessionScrollRef = useRef<string | null>(null);
+  const manualInputHeightRef = useRef<number | null>(null);
+  const inputResizeDragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+  } | null>(null);
   const agentStatusRequestIdRef = useRef(0);
 
   // Get localized text (default to Chinese)
@@ -530,6 +563,12 @@ const ChatPage: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
+  const snapMessagesViewportToBottom = useCallback(() => {
+    const viewport = messagesViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, []);
+
   const requestScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     shouldStickToBottomRef.current = true;
     pendingScrollBehaviorRef.current = behavior;
@@ -541,10 +580,18 @@ const ChatPage: React.FC = () => {
   }, [syncScrollState]);
 
   useEffect(() => {
+    if (pendingSessionScrollRef.current === sessionId) {
+      shouldStickToBottomRef.current = true;
+      setShowJumpToBottom(false);
+      return;
+    }
     syncScrollState();
   }, [syncScrollState, sessionId]);
 
   useEffect(() => {
+    if (pendingSessionScrollRef.current === sessionId) {
+      return;
+    }
     const behavior = pendingScrollBehaviorRef.current;
     const shouldAutoScroll = shouldStickToBottomRef.current;
     if (!shouldAutoScroll) {
@@ -734,9 +781,12 @@ const ChatPage: React.FC = () => {
         normalized.push(cleaned);
       }
     }
-    const compatibleSkills = normalized.length > 1
-      ? normalized.filter((skillId) => skillId !== EXCLUSIVE_META_SKILL_ID)
-      : normalized;
+    if (!normalized.includes(EXCLUSIVE_META_SKILL_ID)) {
+      return normalized.slice(0, MAX_SELECTED_SKILLS);
+    }
+    const compatibleSkills = normalized.filter(
+      (skillId) => skillId === EXCLUSIVE_META_SKILL_ID || COMPATIBLE_META_SKILL_IDS.has(skillId),
+    );
     return compatibleSkills.slice(0, MAX_SELECTED_SKILLS);
   }, []);
 
@@ -746,22 +796,94 @@ const ChatPage: React.FC = () => {
       return;
     }
     if (skillId === EXCLUSIVE_META_SKILL_ID) {
-      setSelectedSkillIds([EXCLUSIVE_META_SKILL_ID]);
+      const compatibleSkills = selectedSkillIds.filter((id) => COMPATIBLE_META_SKILL_IDS.has(id));
+      setSelectedSkillIds([...compatibleSkills, EXCLUSIVE_META_SKILL_ID]);
       return;
     }
-    const compatibleSelection = selectedSkillIds.filter(
-      (id) => id !== EXCLUSIVE_META_SKILL_ID,
-    );
+    const compatibleSelection = selectedSkillIds.includes(EXCLUSIVE_META_SKILL_ID)
+      ? (COMPATIBLE_META_SKILL_IDS.has(skillId)
+        ? selectedSkillIds.filter(
+          (id) => id === EXCLUSIVE_META_SKILL_ID || COMPATIBLE_META_SKILL_IDS.has(id),
+        )
+        : selectedSkillIds.filter((id) => id !== EXCLUSIVE_META_SKILL_ID))
+      : selectedSkillIds;
     if (compatibleSelection.length >= MAX_SELECTED_SKILLS) return;
     setSelectedSkillIds([...compatibleSelection, skillId]);
   }, [selectedSkillIds, setSelectedSkillIds]);
 
   const resizeInputToContent = useCallback(() => {
     const textarea = inputRef.current;
-    if (!textarea) return;
+    if (!textarea || manualInputHeightRef.current !== null) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, INPUT_AUTO_GROW_MAX_HEIGHT)}px`;
   }, []);
+
+  const getInputManualMaxHeight = useCallback(() => (
+    Math.max(
+      INPUT_MIN_HEIGHT,
+      Math.min(INPUT_MANUAL_MAX_HEIGHT, Math.round(window.innerHeight * 0.4)),
+    )
+  ), []);
+
+  const applyManualInputHeight = useCallback((height: number) => {
+    const nextHeight = Math.max(
+      INPUT_MIN_HEIGHT,
+      Math.min(getInputManualMaxHeight(), Math.round(height)),
+    );
+    manualInputHeightRef.current = nextHeight;
+    setManualInputHeight(nextHeight);
+  }, [getInputManualMaxHeight]);
+
+  const resetInputHeightToAuto = useCallback(() => {
+    manualInputHeightRef.current = null;
+    setManualInputHeight(null);
+    window.requestAnimationFrame(() => resizeInputToContent());
+  }, [resizeInputToContent]);
+
+  const handleInputResizePointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    const startHeight = Math.max(INPUT_MIN_HEIGHT, textarea.getBoundingClientRect().height);
+    inputResizeDragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight,
+    };
+    applyManualInputHeight(startHeight);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }, [applyManualInputHeight]);
+
+  const handleInputResizePointerMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = inputResizeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    applyManualInputHeight(drag.startHeight + drag.startY - event.clientY);
+  }, [applyManualInputHeight]);
+
+  const handleInputResizePointerEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = inputResizeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    inputResizeDragRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+
+  const handleInputResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const currentHeight = manualInputHeightRef.current
+      ?? inputRef.current?.getBoundingClientRect().height
+      ?? INPUT_MIN_HEIGHT;
+    if (event.key === 'Home') {
+      applyManualInputHeight(INPUT_MIN_HEIGHT);
+    } else if (event.key === 'End') {
+      applyManualInputHeight(getInputManualMaxHeight());
+    } else {
+      applyManualInputHeight(
+        currentHeight + (event.key === 'ArrowUp' ? INPUT_RESIZE_STEP : -INPUT_RESIZE_STEP),
+      );
+    }
+  }, [applyManualInputHeight, getInputManualMaxHeight]);
 
   const getPromptTemplateStockText = useCallback(() => {
     const code = activeStockContext?.stock_code || activeStockCode;
@@ -805,10 +927,22 @@ const ChatPage: React.FC = () => {
     followUpContextRef.current = null;
     setActiveStockContext(null);
     setActiveStockCode(null);
+    pendingSessionScrollRef.current = targetSessionId;
     requestScrollToBottom('auto');
-    switchSession(targetSessionId);
+    void Promise.resolve(switchSession(targetSessionId)).finally(() => {
+      if (pendingSessionScrollRef.current !== targetSessionId) return;
+      requestScrollToBottom('auto');
+      window.requestAnimationFrame(() => {
+        if (pendingSessionScrollRef.current !== targetSessionId) return;
+        window.requestAnimationFrame(() => {
+          if (pendingSessionScrollRef.current !== targetSessionId) return;
+          snapMessagesViewportToBottom();
+          pendingSessionScrollRef.current = null;
+        });
+      });
+    });
     setSidebarOpen(false);
-  }, [requestScrollToBottom, sessionId, switchSession]);
+  }, [requestScrollToBottom, sessionId, snapMessagesViewportToBottom, switchSession]);
 
   const confirmDelete = useCallback(() => {
     if (!deleteConfirmId) return;
@@ -1888,21 +2022,35 @@ const ChatPage: React.FC = () => {
               )}
 
               <div className="flex items-end gap-3">
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="例如：分析 600519 / 茅台现在适合买入吗？ (Enter 发送, Shift+Enter 换行)"
-                  rows={1}
-                  className="input-surface input-focus-glow flex-1 min-h-[44px] max-h-[200px] rounded-xl border bg-transparent px-4 py-2.5 text-sm transition-all focus:outline-none resize-none disabled:cursor-not-allowed disabled:opacity-60"
-                  style={{ height: 'auto' }}
-                  onInput={(e) => {
-                    const t = e.target as HTMLTextAreaElement;
-                    t.style.height = 'auto';
-                    t.style.height = `${Math.min(t.scrollHeight, 200)}px`;
-                  }}
-                />
+                <div className="relative min-w-0 flex-1 pt-2">
+                  <button
+                    type="button"
+                    className="group absolute inset-x-0 top-0 z-10 flex h-3 touch-none cursor-ns-resize items-start justify-center rounded-full outline-none"
+                    aria-label="调整输入框高度"
+                    onPointerDown={handleInputResizePointerDown}
+                    onPointerMove={handleInputResizePointerMove}
+                    onPointerUp={handleInputResizePointerEnd}
+                    onPointerCancel={handleInputResizePointerEnd}
+                    onDoubleClick={resetInputHeightToAuto}
+                    onKeyDown={handleInputResizeKeyDown}
+                  >
+                    <span className="mt-1 block h-1 w-10 rounded-full bg-white/12 transition-all group-hover:w-14 group-hover:bg-cyan/55 group-focus-visible:w-14 group-focus-visible:bg-cyan/70 group-focus-visible:ring-2 group-focus-visible:ring-cyan/20" />
+                  </button>
+                  <textarea
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="例如：分析 600519 / 茅台现在适合买入吗？ (Enter 发送, Shift+Enter 换行)"
+                    rows={1}
+                    className="input-surface input-focus-glow block min-h-[44px] w-full resize-none overflow-y-auto rounded-xl border bg-transparent px-4 py-2.5 text-sm transition-[border-color,box-shadow] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    style={{
+                      height: manualInputHeight === null ? 'auto' : `${manualInputHeight}px`,
+                      maxHeight: `min(40vh, ${INPUT_MANUAL_MAX_HEIGHT}px)`,
+                    }}
+                    onInput={resizeInputToContent}
+                  />
+                </div>
                 <Tooltip
                   content={copiedMessages.has(CONVERSATION_COPY_KEY) ? '当前对话已复制' : '复制当前对话'}
                 >

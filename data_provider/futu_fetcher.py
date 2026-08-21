@@ -16,6 +16,7 @@ FutuFetcher - 富途 OpenD 可选数据源 (Priority 6)
 import logging
 import os
 import threading
+from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -41,6 +42,14 @@ def _to_futu_code(stock_code: str) -> Optional[str]:
         return None
 
     upper = code.upper()
+    if upper.startswith("US."):
+        ticker = upper[3:].strip()
+        return f"US.{ticker}" if ticker else None
+    if upper.startswith("HK."):
+        digits = upper[3:].strip()
+        if digits.isdigit() and 1 <= len(digits) <= 5:
+            return f"HK.{digits.zfill(5)}"
+        return None
     if "." in upper:
         base, suffix = upper.rsplit(".", 1)
         if suffix in {"US", "HK", "SH", "SZ", "BJ"}:
@@ -235,6 +244,53 @@ class FutuFetcher(BaseFetcher):
             return data.copy()
         except Exception as exc:
             logger.debug("[Futu] request_history_kline(%s) 失败: %s", futu_code, exc)
+            raise
+
+    def get_weekly_data(self, stock_code: str, weeks: int = 104) -> pd.DataFrame:
+        """Fetch provider-native weekly OHLCV bars from Futu OpenD.
+
+        Weekly bars are intentionally requested from OpenD instead of being
+        reconstructed from the project's daily cache.  Callers can still use
+        daily aggregation as a fallback when this optional provider is not
+        available.
+        """
+        if not self.is_available_for_request("weekly_data"):
+            raise RuntimeError("Futu temporarily unavailable")
+
+        futu_code = _to_futu_code(stock_code)
+        if futu_code is None:
+            raise ValueError(f"Cannot convert {stock_code} to Futu code")
+
+        try:
+            weeks = max(1, min(int(weeks), 260))
+        except (TypeError, ValueError):
+            weeks = 104
+
+        ctx = self._get_ctx()
+        if ctx is None:
+            raise RuntimeError("Futu OpenQuoteContext not available")
+
+        try:
+            from futu import RET_OK, KLType, AuType
+
+            end_date = date.today().isoformat()
+            start_date = (date.today() - timedelta(days=(weeks + 2) * 7)).isoformat()
+
+            ret, data, *_ = ctx.request_history_kline(
+                code=futu_code,
+                start=start_date,
+                end=end_date,
+                ktype=KLType.K_WEEK,
+                autype=AuType.QFQ,
+            )
+            if ret != RET_OK or data is None:
+                raise RuntimeError(str(data))
+            if data.empty:
+                return pd.DataFrame()
+            normalized = self._normalize_data(data.copy(), stock_code)
+            return normalized.tail(weeks).reset_index(drop=True)
+        except Exception as exc:
+            logger.debug("[Futu] request_weekly_kline(%s) 失败: %s", futu_code, exc)
             raise
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:

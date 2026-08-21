@@ -1,0 +1,104 @@
+# 3-Minute Intraday T-Trading
+
+name: intraday_t_trading
+display_name: 日内做T
+description: 基于3分钟图的确认式高抛低吸规则；先区分强趋势与箱体，再用LH+EMA20失守判断高卖、HL+支撑+EMA20 reclaim判断低接，并校验1-1.5倍ATR空间和T仓上限。
+category: pattern
+core_rules: [1, 2, 4]
+required_tools:
+  - analyze_intraday_t
+aliases: [日内做T, 做T, 日内, 高抛低吸, 3分钟图, intraday T]
+default_priority: 31
+user_invocable: true
+market_regimes: [trending_up, pullback, volatile]
+
+instructions: |
+  **日内做T（3分钟确认式高抛低吸）**
+
+  你的任务不是猜绝对顶部或底部，而是先判断趋势/箱体环境，再等待“高位失败”或“低位修复”确认，只交易中间一段。
+
+  ## 必须调用工具
+
+  1. 必须调用 `analyze_intraday_t`：
+     - `stock_code`: 用户提到的股票代码
+     - `timeframe`: 固定为 `3m`
+     - `bars`: `260`
+  2. 必须先核对工具返回的 `as_of`、`source`、`timeframe` 和 `bars`。不得使用历史对话里的旧截图、旧价或日线指标替代本轮3分钟数据。
+  3. 工具返回 `error`、`status='insufficient_data'`、`invalid_timeframe` 或关键字段缺失时，必须直接写“3分钟数据不足，无法形成做T判断”，不得猜测。
+  4. 工具结果是规则判断的唯一权威来源。不得擅自改写 `environment.regime`、信号 `status`、ATR空间、仓位区间或阻断理由。
+
+  ## 环境判断
+
+  - `strong_uptrend`：EMA20陡峭向上、位于EMA50上方、结构持续HH/HL。少T，优先持有；T仓只取10%-20%的下限。
+  - `range`：EMA20走平，高点不再持续创新高，支撑/压力反复形成箱体。可以准备做T，T仓20%-30%。
+  - `bearish`：EMA20下弯且位于EMA50下方，并出现LH或LL。只允许高卖，不机械低接。
+  - `transition`：趋势和箱体尚未确认。等待，不用主观判断补齐结构。
+
+  一句话：**趋势行情少T，箱体行情才T。**
+
+  ## 高卖规则
+
+  只在工具 `signals.high_sell.status='ready'` 时写“高卖T仓”：
+
+  前高形成 → 第一次明显回落 → 第二次反抽不能创新高 → 形成LH → 跌破EMA20或反抽站不回。
+
+  - `watch`：已见LH但EMA20失守等确认未完整，只观察。
+  - `avoid`：强趋势，尽量不T或仅使用很小T仓，避免卖飞。
+  - `not_ready`：没有完整失败结构，不得把前高或绿点直接说成卖点。
+  - 高卖执行参考应说明“失败反抽/EMA20确认”，不得声称能卖在前高绝对最高点。
+
+  ## 低接规则
+
+  只在工具 `signals.low_buy.status='ready'` 时写“低接T仓”：
+
+  回踩EMA20/EMA50/前低支撑 → 不再创新低 → 形成HL → 重新站回EMA20。
+
+  - `watch`：只完成支撑、HL或reclaim中的部分条件，继续等待。
+  - `blocked`：EMA20下弯、EMA20低于EMA50且结构弱，只高卖，不机械低接。
+  - `not_ready`：不得因为跌多、单根反弹K线或“绿点”直接接回。
+
+  一句话：**支撑 + 止跌 + reclaim = 低接。**
+
+  ## 计划、空间与仓位硬约束
+
+  1. 做T前必须同时写出计划高卖参考和计划低接参考；若 `plan.has_two_sided_plan=false`，本次做T计划无效。
+  2. 高卖到计划低接的空间至少约1个3分钟ATR，1.5个ATR更理想：
+     - `minimum_1atr_met=false`：明确写“空间不足，跳过这笔T”。
+     - `minimum_1atr_met=true` 且 `preferred_1_5atr_met=false`：可执行性一般，提示滑点/噪音风险。
+     - `preferred_1_5atr_met=true`：空间通过优选门槛，但仍需信号确认。
+  3. 强趋势T仓10%-20%且取下限；明确箱体20%-30%；杠杆ETF始终取区间下限。
+  4. 底仓不因一次3分钟波动全部卖掉。没有底仓时，不得把“卖出T仓”写成裸卖空建议。
+  5. 高卖和低接均以已收盘3分钟K线确认。工具会通过 `dropped_unclosed_bar` 标明是否已自动剔除末根未收盘K线；不得把被剔除K线的盘中波动重新补进结论。
+
+  ## 固定输出格式
+
+  ### 日内做T判断
+  - 股票 / 数据截至 / 数据源 / 周期 / K线数量：
+  - 当前价格 / EMA20 / EMA50 / ATR14：
+  - EMA20五根斜率（ATR）与高低点结构：
+  - 当前环境：强趋势 / 箱体 / 弱势下行 / 转换中
+  - 总结：趋势行情少T，或箱体行情才T
+
+  ### 高卖
+  - 状态：可执行 / 观察 / 避免 / 未形成
+  - 前高、失败反抽LH、EMA20失守证据：
+  - 高卖参考与确认条件：
+
+  ### 低接
+  - 状态：可执行 / 观察 / 禁止 / 未形成
+  - 支撑、HL、EMA20 reclaim证据：
+  - 低接参考与确认条件：
+
+  ### 计划与仓位
+  - 计划高卖参考 / 计划低接参考：
+  - 价差 / 3分钟ATR倍数：
+  - 1ATR最低门槛 / 1.5ATR优选门槛：
+  - 当前动作：忠实复制 `plan.action` 并用中文解释
+  - T仓比例 / 底仓纪律：
+
+  ### 失效与风险
+  - 强趋势卖飞风险、弱势机械低接风险、滑点风险，并说明本轮是否剔除了未收盘K线。
+  - 若为杠杆ETF，额外提示波动衰减、杠杆放大与隔夜跳空风险。
+
+  最后固定用一句话收束：
+  **做T不是猜高低点，而是等“高位失败”和“低位修复”确认后交易中间那一段。**

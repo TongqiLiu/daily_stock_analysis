@@ -117,6 +117,53 @@ It complements `options-strategy-advisor`: use this skill first to screen candid
 - Event risk: blocked | elevated | clear
 ```
 
+## 支撑位 / 阻力位（卖 Put·Call 硬性风控）
+
+**后续凡做卖 Put / 卖 Call / 收租分析，必须标注关键支撑与阻力；位置优先级与趋势、事件同级，高于「权利金厚」。**
+
+核心对称规则（用户偏好）：
+
+| 价格位置 | 卖 Call | 卖 Put |
+|---|---|---|
+| **低点 / 支撑位附近**（测试或贴近支撑） | **不建议卖 Call**（容易卖飞反弹；低点应保留上行） | **可考虑卖 Put**（接货价靠近支撑更合理） |
+| **高点 / 阻力位附近**（测试或贴近阻力） | **可考虑卖 Call**（冲高受阻适合收租/减仓） | **不建议卖 Put**（阻力区卖 Put = 接飞刀） |
+| 区间中部 / 位置不清 | 远价小仓或观望 | 远价小仓或观望 |
+
+### 如何识别支撑 / 阻力（实用定义）
+
+优先使用可复核的价位，至少写出 1–2 个：
+
+- **支撑**：20D/60D 低点、近期摆动低点、MA20/MA50（若仍有效）、整数关口、前缺口上沿
+- **阻力**：20D/60D 高点、近期摆动高点、MA20/MA50/MA200（上方压制）、整数关口、前缺口下沿
+- 标注：`at_support` / `near_support` / `mid_range` / `near_resistance` / `at_resistance` / `unclear`
+
+「附近」经验阈值：距关键位大约 **≤1×ATR14** 或 **≤2–3%**（高波动标的可放宽到 ATR）。
+
+### 对推荐的硬性含义
+
+| 场景 | 默认动作 |
+|---|---|
+| 现价在**支撑附近** + 用户问卖 Call | **Skip / 降级**；若有正股，等反弹至阻力或中轴再卖，或只卖**很远价外** |
+| 现价在**支撑附近** + 用户问卖 Put（愿接货） | 可推荐；strike / breakeven 宜在支撑下方或贴支撑 |
+| 现价在**阻力附近** + 用户问卖 Put | **Skip / 降级**；勿因高 IV 开新短 Put |
+| 现价在**阻力附近** + 用户问卖 Call（有正股/愿减仓） | 可推荐；strike 宜在阻力上方或贴阻力 |
+| 刚跌破支撑 / 刚突破阻力 | 等确认再开仓；假突破期默认降级 |
+
+### 与趋势规则的关系
+
+- **单边下跌 + 虚假「支撑」**：仍以趋势为准，不因「看起来有支撑」就常规卖 Put。
+- **震荡市**：支撑/阻力规则权重最高——低吸（Put）高抛（Call）的收租逻辑。
+- **单边上涨贴近阻力**：卖 Call 合理；卖 Put 仍要小心追高接货。
+
+### 输出中必须体现
+
+在 `## Market Context` 增加：
+
+- `Support`: [价位 + 来源，如 20D low / MA50]
+- `Resistance`: [价位 + 来源]
+- `Price location`: `at_support` / `near_support` / `mid_range` / `near_resistance` / `at_resistance` / `unclear`
+- 若位置与所求侧冲突（支撑卖 Call / 阻力卖 Put）：`## Avoid / Downgrade` 写明原因
+
 ## Workflow
 
 ### 1. Parse Intent
@@ -143,7 +190,7 @@ Collect:
 - Current price, day change, 5D/20D trend, volume vs average volume.
 - SPY and QQQ benchmark changes for divergence.
 - HV20/HV60, ATR14, 20/50/200 day moving averages.
-- Recent 20D/60D lows/highs as support and resistance references.
+- Recent 20D/60D lows/highs as support and resistance references; **explicitly classify price location** (`at_support` / `near_resistance` / etc.).
 - Next earnings date and ex-dividend date.
 - **Event calendar for the planned hold window** (open → expiry): earnings, FOMC, CPI/PPI/NFP, ex-div, and any ticker-specific binary events the user cares about.
 - Option chain: bid, ask, last, mid, volume, open interest, IV, and estimated delta/probability.
@@ -165,6 +212,7 @@ When running from `.claude/skills`, use the same relative script in that skill d
 Prefer puts when all are true:
 
 - The stock is in the user's acceptable assignment universe, or it passes a conservative quality screen.
+- **Price is at/near support or mid-range — not at/near resistance**（见「支撑位 / 阻力位」）.
 - The breakeven is near or below a credible support zone, not just slightly under spot.
 - The option has acceptable liquidity: OI preferably `>= 100`, volume preferably present, bid/ask spread preferably `<= 15%`; tolerate `<= 30%` only for small size and limit orders.
 - No earnings or binary event before expiration unless the user explicitly wants event risk.
@@ -180,6 +228,7 @@ Reject or downgrade:
 - Leveraged ETFs for routine assignment (`SOXL`, `TQQQ`, `SQQQ`, `YINN`, `LABU`, etc.).
 - **单边下跌趋势**（见上文硬性风控）：常规收租 **一律不推荐卖 Put**；高 IV 仅作警告，不作开仓理由。
 - **关键事件节点**（见「关键事件节点」）：持仓跨财报 / FOMC / 重大宏观 → 常规收租 **Skip** 或换到期到事件前。
+- **阻力位附近卖 Put**（见「支撑位 / 阻力位」）：默认 **Skip**；勿在冲高受阻区接货。
 - Broken downtrends below major moving averages unless the user explicitly wants deep-value assignment.
 - High-beta / levered proxies in downtrends (`MSTR`, meme/high-HV small caps) for **new** short puts.
 - Stocks with unresolved accounting, fraud, delisting, liquidity, or regulatory existential risk.
@@ -190,9 +239,12 @@ Reject or downgrade:
 Prefer calls when:
 
 - The user owns at least 100 shares or explicitly wants to trim.
+- **Price is at/near resistance or extended after rally — not at/near support**（见「支撑位 / 阻力位」）；**低点支撑位默认不卖 Call**。
 - The strike is above the user's desired sell price or above a resistance/expected-move level.
 - The premium meaningfully improves the exit price.
 - The stock is extended after a strong rally or positively diverging from a weak market.
+
+Do not sell calls when price is testing major support / recent lows unless the user explicitly wants to exit regardless of rebound.
 
 Choose call delta by portfolio role:
 
@@ -236,6 +288,7 @@ Use this structure:
 - SPY/QQQ:
 - Trend regime: (uptrend / range / one-way downtrend / unclear)
 - vs SPY 20D/60D:
+- Support / Resistance / Price location: (at_support | near_support | mid_range | near_resistance | at_resistance | unclear)
 - IV vs trend note: (若 IV 高但单边下跌，明确写「权利金陷阱」)
 - Event calendar / Event risk: (clear / elevated / blocked)
 - Weekly-option warning:

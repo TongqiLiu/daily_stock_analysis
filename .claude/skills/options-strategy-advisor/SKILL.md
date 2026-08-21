@@ -27,6 +27,7 @@ Before simulating or recommending **cash-secured puts / premium selling / wheel*
 
 1. **「单边下跌趋势（收租硬性风控）」** — flag `downtrend`, do not sell puts on high IV alone in downtrends.
 2. **「关键事件节点（收租硬性风控）」** — check earnings / FOMC / CPI / NFP / ex-div in the hold window; routine 收租 → `event risk: blocked` means **Skip** unless user explicitly wants an event trade.
+3. **「支撑位 / 阻力位（卖 Put·Call 硬性风控）」** — at/near **support**：do **not** sell calls (consider sell puts if assignment OK); at/near **resistance**：do **not** sell puts (consider sell calls if covered/willing to trim). Write `Price location` in Market Context.
 
 - Prefer low–moderate IV quality names for routine 收租; high-beta names (e.g. MSTR) in downtrends → skip new short puts or hand off to `options-portfolio-risk-manager`.
 

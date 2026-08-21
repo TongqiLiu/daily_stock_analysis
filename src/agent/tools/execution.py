@@ -200,7 +200,13 @@ def _normalize_guard_stock_code(value: Any) -> str:
         value = int(value)
     raw = value if isinstance(value, str) else str(value)
     normalized = _normalize_tool_stock_code(raw)
-    return normalized if isinstance(normalized, str) else str(normalized)
+    normalized_text = normalized if isinstance(normalized, str) else str(normalized)
+    # Agent prompts may use the explicit Futu/provider form (US.NFLX) while
+    # the conversation scope stores the canonical bare US ticker (NFLX).
+    # They refer to the same stock and must not trip the fail-closed guard.
+    if normalized_text.startswith("US."):
+        return normalized_text[3:]
+    return normalized_text
 
 
 def _iter_allowed_stock_codes(stock_scope: Any) -> Iterable[Any]:

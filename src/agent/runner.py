@@ -354,14 +354,197 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
     if not isinstance(rows, list) or not isinstance(evidence, dict):
         return ""
 
+    expected_score = _format_multi_strategy_number(payload.get("weighted_score"), decimals=1)
+    primary_score = _format_multi_strategy_number(
+        payload.get("dimension_weighted_score", payload.get("weighted_score")),
+        decimals=1,
+    )
+    bias = payload.get("bias") if isinstance(payload.get("bias"), dict) else {}
+    actions = payload.get("actions") if isinstance(payload.get("actions"), dict) else {}
+    confidence = (
+        payload.get("confidence") if isinstance(payload.get("confidence"), dict) else {}
+    )
+    dimensions = payload.get("dimensions") if isinstance(payload.get("dimensions"), list) else []
+    market_structure = (
+        payload.get("market_structure")
+        if isinstance(payload.get("market_structure"), dict)
+        else {}
+    )
+    blockers = (
+        payload.get("decision_blockers")
+        if isinstance(payload.get("decision_blockers"), list)
+        else []
+    )
+    direction_label = bias.get("label") or payload.get("decision")
+    confidence_label = confidence.get("label") or "—"
+    quality_coverage = _format_multi_strategy_number(
+        evidence.get("quality_coverage_pct"), decimals=1
+    )
+    available_dimensions = evidence.get("available_dimension_count", "—")
+    dimension_count = evidence.get("dimension_count", "—")
+
     lines = [
         "### 系统确定性多策略评分",
         "",
         "> 以下评分区块由系统根据 `calculate_multi_strategy_score` 的返回结果生成；如与正文中的手工复述冲突，以本区块为准。",
         "",
+        "#### 1. 结论摘要",
+        "",
+        "| 方向评分 | 市场方向 | 决策 | 结论置信度 |",
+        "|---:|---|---|---|",
+        "| "
+        + " | ".join([
+            f"{primary_score} / 100",
+            _markdown_table_cell(direction_label),
+            _markdown_table_cell(payload.get("decision")),
+            _markdown_table_cell(confidence_label),
+        ])
+        + " |",
+        "",
+        "| 空仓动作 | 持仓动作 | 仓位原则 |",
+        "|---|---|---|",
+        "| "
+        + " | ".join([
+            _markdown_table_cell(actions.get("no_position_label") or "按结论观察"),
+            _markdown_table_cell(actions.get("has_position_label") or "按失效位管理"),
+            _markdown_table_cell(payload.get("position_guidance")),
+        ])
+        + " |",
+        "",
+        "- 证据覆盖："
+        f"完整 {evidence.get('complete_count', '—')} / "
+        f"部分 {evidence.get('partial_count', '—')} / "
+        f"缺失 {evidence.get('missing_count', '—')}，"
+        f"有效权重覆盖 {_format_multi_strategy_number(evidence.get('coverage_pct'), decimals=1)}%，"
+        f"质量折算覆盖 {quality_coverage}%",
+        f"- 维度覆盖：{available_dimensions} / {dimension_count}",
+    ]
+    if blockers:
+        lines.extend(["- 决策阻断：" + "；".join(
+            _markdown_table_cell(item.get("message"))
+            for item in blockers
+            if isinstance(item, dict) and item.get("message")
+        )])
+
+    lines.extend(["", "#### 2. 价格结构（支撑/阻力）", ""])
+    structure_status = market_structure.get("status")
+    if structure_status in {"available", "partial"}:
+        location_labels = {
+            "near_support": "接近支撑",
+            "near_resistance": "接近阻力",
+            "between_levels": "位于支撑阻力之间",
+            "breakout": "突破阻力区",
+            "breakdown": "跌破支撑区",
+            "unknown": "位置未知",
+        }
+        current_price = _format_multi_strategy_number(market_structure.get("current_price"))
+        invalidation = _format_multi_strategy_number(market_structure.get("invalidation_level"))
+        lines.extend([
+            "| 当前价格 | 当前位置 | 突破/破位状态 | 硬失效位 |",
+            "|---:|---|---|---:|",
+            "| "
+            + " | ".join([
+                current_price,
+                _markdown_table_cell(
+                    location_labels.get(
+                        market_structure.get("price_location"),
+                        market_structure.get("price_location") or "位置未知",
+                    )
+                ),
+                _markdown_table_cell(market_structure.get("breakout_status")),
+                invalidation if invalidation != "—" else "—",
+            ])
+            + " |",
+            "",
+            "| 类型 | 参考价位 | 距当前价 | 结构说明 |",
+            "|---|---:|---:|---|",
+        ])
+        support_levels = market_structure.get("support_levels")
+        resistance_levels = market_structure.get("resistance_levels")
+        for level_type, level_values in (
+            ("支撑", support_levels),
+            ("阻力", resistance_levels),
+        ):
+            if not isinstance(level_values, list):
+                continue
+            for level in level_values[:3]:
+                distance = None
+                current = market_structure.get("current_price")
+                try:
+                    if current is not None:
+                        distance = (float(level) - float(current)) / float(current) * 100
+                except (TypeError, ValueError, ZeroDivisionError):
+                    distance = None
+                lines.append(
+                    "| "
+                    + " | ".join([
+                        level_type,
+                        _format_multi_strategy_number(level),
+                        f"{distance:+.2f}%" if distance is not None else "—",
+                        _markdown_table_cell(market_structure.get("evidence")),
+                    ])
+                    + " |"
+                )
+        lines.append(
+            "- 近端支撑："
+            + _format_multi_strategy_number(market_structure.get("nearest_support"))
+            + "；近端阻力："
+            + _format_multi_strategy_number(market_structure.get("nearest_resistance"))
+        )
+    else:
+        lines.append(
+            "- 本轮未获得结构化支撑/阻力数据；不得根据缺失数据自行补写价格位。"
+        )
+
+    if dimensions:
+        lines.extend([
+            "",
+            "#### 3. 五维证据汇总",
+            "",
+            "| 维度 | 得分 | 方向 | 证据（完整/部分/缺失） | 质量覆盖 | 主要支持 | 主要风险 |",
+            "|---|---:|---|---|---:|---|---|",
+        ])
+        for item in dimensions:
+            if not isinstance(item, dict):
+                continue
+            dimension_evidence = (
+                item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+            )
+            dimension_score = (
+                _format_multi_strategy_number(item.get("score"), decimals=1)
+                if item.get("score") is not None
+                else "—"
+            )
+            lines.append(
+                "| "
+                + " | ".join([
+                    _markdown_table_cell(item.get("dimension")),
+                    dimension_score,
+                    _markdown_table_cell(item.get("direction")),
+                    _markdown_table_cell(
+                        f"{dimension_evidence.get('complete', 0)}/"
+                        f"{dimension_evidence.get('partial', 0)}/"
+                        f"{dimension_evidence.get('missing', 0)}"
+                    ),
+                    (
+                        _format_multi_strategy_number(
+                            item.get("quality_coverage_pct"), decimals=1
+                        )
+                        + "%"
+                    ),
+                    _markdown_table_cell(item.get("supporting_factor")),
+                    _markdown_table_cell(item.get("risk_factor")),
+                ])
+                + " |"
+            )
+
+    lines.extend([
+        "",
+        "#### 4. 12 项策略评分明细",
+        "",
         "| # | 策略 | 维度 | 信号 | 强度 | 评分 | 权重 | 证据 | 关键依据 |",
         "|---|---|---|---|---|---:|---:|---|---|",
-    ]
+    ])
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
             continue
@@ -387,21 +570,25 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
             + " |"
         )
 
-    expected_score = _format_multi_strategy_number(payload.get("weighted_score"), decimals=1)
     numerator = _format_multi_strategy_number(payload.get("weighted_numerator"))
     included_weight = _format_multi_strategy_number(payload.get("included_weight"))
-    coverage = _format_multi_strategy_number(evidence.get("coverage_pct"), decimals=1)
+    dimension_numerator = _format_multi_strategy_number(
+        payload.get("dimension_weighted_numerator")
+    )
+    dimension_weight = _format_multi_strategy_number(
+        payload.get("included_dimension_weight")
+    )
     lines.extend([
         "",
-        f"- **加权综合得分：{expected_score} / 100**",
-        f"- 计算过程：{numerator} / {included_weight} = {expected_score}",
-        "- 证据覆盖："
-        f"完整 {evidence.get('complete_count', '—')} / "
-        f"部分 {evidence.get('partial_count', '—')} / "
-        f"缺失 {evidence.get('missing_count', '—')}，有效权重覆盖 {coverage}%",
+        "#### 5. 评分审计",
+        "",
+        f"- **五维综合得分：{primary_score} / 100**（最终方向与决策使用）",
+        f"- 五维计算过程：{dimension_numerator} / {dimension_weight} = {primary_score}",
+        f"- **12 项原始加权综合得分：{expected_score} / 100**（保留用于逐项审计）",
+        f"- 12 项计算过程：{numerator} / {included_weight} = {expected_score}",
         f"- 决策：{_markdown_table_cell(payload.get('decision'))}",
         f"- 仓位建议：{_markdown_table_cell(payload.get('position_guidance'))}",
-        "- 评分性质：这是基于当前证据的综合评分，不是收益概率；同一维度内的同向策略可能存在相关性，不能按行数直接叠加信心。",
+        "- 评分性质：最终方向使用五维综合得分，12 项原始加权分仅作审计；两者都不是收益概率。部分证据按 0.5 质量系数折算并用于限制决策强度。",
     ])
     if payload.get("instrument_type") == "leveraged_etf":
         lines.append("- 杠杆 ETF 风险：日内复位、波动损耗、隔夜跳空。")

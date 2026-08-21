@@ -437,6 +437,151 @@ get_daily_history_tool = ToolDefinition(
 
 
 # ============================================================
+# get_weekly_history
+# ============================================================
+
+def _normalize_weekly_history_weeks(weeks: Any) -> int:
+    try:
+        if isinstance(weeks, bool):
+            raise ValueError
+        return max(4, min(int(weeks), 260))
+    except (TypeError, ValueError):
+        return 104
+
+
+def _aggregate_daily_to_weekly(df):
+    """Aggregate standard daily OHLCV rows into completed/partial weeks."""
+    import pandas as pd
+
+    if df is None or df.empty or "date" not in df.columns:
+        return pd.DataFrame()
+
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    work = work.dropna(subset=["date"]).sort_values("date")
+    if work.empty:
+        return pd.DataFrame()
+    work = work.set_index("date")
+    aggregations = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+        "amount": "sum",
+    }
+    available = {name: method for name, method in aggregations.items() if name in work.columns}
+    weekly = work.resample("W-FRI", label="left", closed="left").agg(available)
+    weekly = weekly.dropna(subset=["close"]).reset_index(names="date")
+    if "pct_chg" not in weekly.columns:
+        weekly["pct_chg"] = weekly["close"].pct_change() * 100
+    weekly["date"] = weekly["date"].dt.strftime("%Y-%m-%d")
+    return weekly
+
+
+def _handle_get_weekly_history(stock_code: str, weeks: int = 104) -> dict:
+    """Fetch native Futu weekly bars, falling back to daily aggregation."""
+    import pandas as pd
+
+    effective_weeks = _normalize_weekly_history_weeks(weeks)
+    freshness_required = is_fresh_market_data_required()
+    source = None
+    fallback_reason = None
+    df = None
+
+    # Futu's provider-native K_WEEK keeps the broker's session/adjustment
+    # semantics intact. It is optional and must never block other analyses.
+    try:
+        from data_provider.futu_fetcher import FutuFetcher
+
+        futu = FutuFetcher()
+        if futu.is_available_for_request("weekly_data"):
+            df = futu.get_weekly_data(stock_code, weeks=effective_weeks)
+            if df is not None and not df.empty:
+                source = "FutuFetcher:weekly"
+        futu.close()
+    except Exception as exc:
+        fallback_reason = f"Futu weekly unavailable: {type(exc).__name__}: {exc}"
+        logger.info("get_weekly_history(%s): %s", stock_code, fallback_reason)
+
+    if df is None or df.empty:
+        from src.services.history_loader import load_history_df
+
+        daily_days = effective_weeks * 7 + 30
+        daily_df, daily_source = load_history_df(
+            stock_code,
+            days=daily_days,
+            force_refresh=freshness_required,
+        )
+        df = _aggregate_daily_to_weekly(daily_df)
+        if df is not None and not df.empty:
+            source = f"daily_aggregate:{daily_source}"
+        elif not fallback_reason:
+            fallback_reason = "Futu weekly and daily fallback returned no data"
+
+    if df is None or df.empty:
+        return {
+            "error": f"No weekly data available for {stock_code}",
+            "code": stock_code,
+            "period": "weekly",
+            "source": source or "none",
+            "weeks": effective_weeks,
+            "fallback_reason": fallback_reason,
+            "freshness_required": freshness_required,
+        }
+
+    records = df.tail(effective_weeks).to_dict(orient="records")
+    for record in records:
+        if "date" in record:
+            record["date"] = str(record["date"])[:10]
+
+    latest_date = str(records[-1].get("date") or "")[:10] if records else None
+    today = date.today()
+    current_week_start = today - pd.Timedelta(days=today.weekday())
+    is_partial = bool(latest_date and pd.Timestamp(latest_date).date() >= current_week_start)
+    return {
+        "code": stock_code,
+        "period": "weekly",
+        "source": source or "none",
+        "weeks": effective_weeks,
+        "actual_records": len(records),
+        "latest_data_date": latest_date,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "is_partial": is_partial,
+        "data_quality": "partial" if is_partial else "complete",
+        "fallback_reason": fallback_reason,
+        "freshness_required": freshness_required,
+        "data": records,
+    }
+
+
+get_weekly_history_tool = ToolDefinition(
+    name="get_weekly_history",
+    description="Get provider-native weekly OHLCV history when Futu OpenD is enabled. "
+                "If Futu is unavailable, aggregate the available daily history and "
+                "mark the fallback source explicitly. The current week is marked "
+                "is_partial=true and must not be treated as a completed weekly bar.",
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., 'US.INTC' or 'AAPL'.",
+        ),
+        ToolParameter(
+            name="weeks",
+            type="integer",
+            description="Number of weekly bars, 4-260 (default: 104).",
+            required=False,
+            default=104,
+        ),
+    ],
+    handler=_handle_get_weekly_history,
+    category="data",
+    policy=_MARKET_DATA_CACHE_POLICY,
+)
+
+
+# ============================================================
 # get_chip_distribution
 # ============================================================
 
@@ -699,6 +844,7 @@ get_portfolio_snapshot_tool = ToolDefinition(
 ALL_DATA_TOOLS = [
     get_realtime_quote_tool,
     get_daily_history_tool,
+    get_weekly_history_tool,
     get_chip_distribution_tool,
     get_analysis_context_tool,
     get_stock_info_tool,

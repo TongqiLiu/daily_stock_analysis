@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 问股策略选择器新增「期权策略分析」，通过真实期权链与报价工具分析到期日、IV/HV、成交量、OI 与供应商 Greeks；Futu OpenD 路径使用 `get_option_quote` 补齐链元数据之外的实时期权字段，权限、时间戳或关键字段缺失时只输出数据缺口，不编造 Gamma、PCR 或策略价格。
+- [新功能] 期权策略分析接入 Futu `get_option_strategy_analysis`，支持真实组合级 Bid/Ask、最大盈亏、盈亏平衡点、盈利概率、Delta 与 Theta；问股界面新增「期权组合分析」提示词入口。
+- [改进] 多策略联合新增 `get_weekly_history`：Futu OpenD 启用时优先读取原生周线，失败后回退日线聚合，并显式返回来源、时间戳、当前周未完成标记和回退原因。
+- [改进] 多策略联合评分区块接入 `analyze_trend` 的结构化支撑/阻力数据，新增当前位置、近端支撑、近端阻力、突破状态与失效位；缺失字段明确降级，不允许模型编造价格。
+- [改进] 多策略联合输出升级为“结论摘要、五维证据汇总、12 项评分明细、评分审计”四段式结构；保留逐项得分、权重与原始公式，改用去重后的五维综合得分驱动决策，新增证据质量/维度门控、空仓与持仓动作分离，并移除缺少风险参数时的固定重仓建议。
 - [改进] 多策略联合评分表增加趋势、量价、结构、情绪、相对强弱五类维度；贪恐数据不可用时改按缺失证据排除，不再使用代理中性分，并明确综合分不是收益概率。
 - [改进] 多策略确定性评分区块不再向最终报告输出 `multi-strategy-score` HTML 注释标记，内部仍保留标记清理能力。
 - [新功能] 问股新增「日内做T」可选策略，基于3分钟EMA20/EMA50、HH/HL/LH/LL、ATR14确定性判断趋势/箱体、高卖、低接、价差空间与T仓纪律。

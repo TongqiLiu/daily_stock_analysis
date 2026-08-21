@@ -1,0 +1,94 @@
+# Options Strategy Analysis Skill / 期权策略分析
+
+name: options_strategy_analysis
+display_name: 期权策略分析
+description: 基于真实期权链、IV/HV、OI、成交量与供应商 Greeks 分析 Call/Put 及价差策略；权限或字段缺失时明确降级，不伪造数据。
+category: framework
+core_rules: [1, 2, 3, 4, 5, 6]
+required_tools:
+  - get_realtime_quote
+  - analyze_trend
+  - get_option_strategy_snapshot
+  - get_option_strategy_analysis
+aliases: [期权策略, 期权分析, 期权链, Call Put, call/put, options]
+default_priority: 5
+user_invocable: true
+default_active: false
+default_router: false
+market_regimes: []
+
+instructions: |
+  **期权策略分析（Options Strategy Analysis）**
+
+  你的任务是基于本轮真实期权数据，分析 Call/Put、价差、保护性策略和收租策略的适用性。期权数据是辅助证据，不得单独替代股票趋势、支撑阻力和风险预算。
+
+  ## 一、工具顺序与数据门禁
+
+  1. 调用 `get_realtime_quote` 获取正股当前价和时间状态。
+  2. 调用 `analyze_trend` 获取趋势、支撑/阻力与失效位。
+  3. 先调用 `get_option_strategy_snapshot` 且省略 `expiry_date`，取得本轮可用到期日。
+  4. 若返回到期日列表，再根据用户指定期限选择对应日期；用户未指定期限时使用最近的可用标准到期日，并明确写出选择。随后必须再次调用 `get_option_strategy_snapshot` 获取该到期日的链和报价。
+  5. 若工具返回 `unavailable`、权限失败、链为空或关键字段缺失，必须停止期权策略推荐，只输出数据缺口和不可判断原因。
+  6. 当需要比较具体的多腿组合时，先从真实期权链选择合约，再调用 `get_option_strategy_analysis`，将返回的组合级 Bid/Ask、最大盈亏、盈亏平衡点、盈利概率、Delta 和 Theta 作为唯一的组合定价依据。
+
+  绝对禁止：
+  - 根据股价、常识或历史记忆编造期权价格、IV、OI、PCR、Gamma、Greeks 或大单。
+  - 把期权成交量直接解释为买入方向；无法确认开仓方向时只能写“方向不可确认”。
+  - 把模型理论 Greeks 当成供应商实测 Greeks。
+  - 不得把各腿报价手动相加替代 `get_option_strategy_analysis` 的组合级 Bid/Ask。
+  - 在没有真实 Gamma 和 OI 时计算或声称存在 GEX。
+
+  ## 二、解释规则
+
+  - Call/Put OI：说明合约集中区，不等于多空方向。
+  - Volume/OI：只作为活跃度线索；不能单独证明新开仓。
+  - IV/HV：判断期权定价环境；IV 高不自动等于卖方优势，必须考虑财报和跳空风险。
+  - Delta：用于描述方向暴露和合约筛选，不是到期盈利概率的保证。
+  - Gamma：用于描述 Delta 加速风险；只有工具实际返回时才展示。
+  - Theta/Vega：用于比较时间衰减和波动率暴露。
+  - 支撑/阻力：用于检查行权价和盈亏平衡点是否位于合理位置，不把 OI 行权价直接替代技术支撑阻力。
+  - 流动性不足、价差过宽或报价时间不明确时，策略状态为“不可执行/需等待更可靠报价”。
+
+  ## 三、策略选择边界
+
+  只在数据支持且风险可定义时比较以下策略：
+  - 看多：Long Call、Bull Call Spread、Bull Put Spread。
+  - 看空：Long Put、Bear Put Spread、Bear Call Spread。
+  - 持仓保护：Protective Put、Collar。
+  - 收租：Covered Call、Cash-Secured Put；必须说明被行权、下跌和跳空风险。
+  - 震荡/事件：Long Straddle/Strangle、Iron Condor；必须说明 IV、Theta 和最大损失。
+
+  不能因为数据缺失而强行二选一。若方向证据和期权定价证据冲突，优先输出“等待/不交易”与触发条件。
+
+  ## 四、固定输出结构
+
+  ### 1. 期权数据可信度
+  | 项目 | 结果 |
+  |---|---|
+  | 数据源 | Futu / Longbridge / 不可用 |
+  | 数据时间 | `as_of` |
+  | 权限状态 | available / unavailable / unknown |
+  | 链覆盖 | complete / partial / missing |
+  | Greeks | available / missing |
+  | OI | available / missing |
+  | 组合分析 | complete / missing |
+
+  ### 2. 正股与期权结构
+  - 正股当前价、趋势、支撑/阻力和失效位：仅引用工具返回。
+  - 到期日、Call/Put、行权价、IV/HV、Volume、OI、Bid/Ask：仅引用期权工具返回。
+  - 明确区分“实测数据”和“无法确认”。
+
+  ### 3. 策略比较表
+  | 策略 | 方向假设 | 最大收益 | 最大损失 | 主要风险 | 当前状态 |
+  |---|---|---|---|---|---|
+  - 数值缺失时写“无法计算”，不得估算；组合级数值优先引用 `get_option_strategy_analysis`。
+  - 最大收益/损失必须基于用户给出的或工具返回的真实权利金和合约乘数。
+
+  ### 4. 结论与触发条件
+  - 首选策略：只有数据完整且风险收益合理时给出，否则写“不交易/等待数据”。
+  - 入场条件：正股价格、支撑阻力、IV 或报价条件必须来自工具或明确用户输入。
+  - 失效条件：跌破/突破工具返回的结构位，或报价、权限、流动性失效。
+  - 仓位：不使用固定百分比；以最大可承受损失、账户规模和合约乘数为前提。缺少账户参数时只给方法，不给张数。
+
+  ### 5. 数据缺口与风险声明
+  必须列出权限、延迟、链覆盖、OI 更新频率、Greeks 缺失、财报/事件风险和无法确认的开仓方向。输出是情景分析，不是收益保证。

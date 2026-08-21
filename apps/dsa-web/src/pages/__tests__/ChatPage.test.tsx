@@ -879,6 +879,25 @@ describe('ChatPage', () => {
     expect(screen.getByRole('checkbox', { name: '通用分析' })).not.toBeChecked();
   });
 
+  it('shows the option strategy analysis selector from the backend catalog', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'bull_trend', name: '趋势分析', description: '趋势' },
+        { id: 'options_strategy_analysis', name: '期权策略分析', description: '真实期权链与风险结构' },
+      ],
+      default_skill_id: 'bull_trend',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('checkbox', { name: '期权策略分析' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '期权策略分析' })).not.toBeChecked();
+  });
+
   it('prefers multi-strategy consensus as default when available', async () => {
     mockGetSkills.mockResolvedValue({
       skills: [
@@ -896,6 +915,30 @@ describe('ChatPage', () => {
 
     expect(await screen.findByRole('checkbox', { name: '⚡ 多策略联合' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: '趋势分析' })).not.toBeChecked();
+  });
+
+  it('keeps multi-strategy consensus and option analysis together', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'bull_trend', name: '趋势分析', description: '趋势' },
+        { id: 'multi_strategy_consensus', name: '⚡ 多策略联合', description: '联合评分' },
+        { id: 'options_strategy_analysis', name: '期权策略分析', description: '期权链' },
+      ],
+      default_skill_id: 'bull_trend',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>,
+    );
+
+    const consensus = await screen.findByRole('checkbox', { name: '⚡ 多策略联合' });
+    const options = screen.getByRole('checkbox', { name: '期权策略分析' });
+    expect(consensus).toBeChecked();
+    fireEvent.click(options);
+    expect(consensus).toBeChecked();
+    expect(options).toBeChecked();
   });
 
   it('keeps the restored session skills when the Skill catalog finishes loading', async () => {
@@ -1075,6 +1118,32 @@ describe('ChatPage', () => {
     expect(input.value).toContain('常规输出控制在 900 字以内');
     expect(input.value).toContain('若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图');
     expect(screen.getByRole('checkbox', { name: '⚡ 多策略联合' })).toBeChecked();
+    expect(mockStartStream).not.toHaveBeenCalled();
+  });
+
+  it('exposes the Chinese option-combination analysis template', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'options_strategy_analysis', name: '期权策略分析', description: '真实期权链与组合盈亏' },
+      ],
+      default_skill_id: 'options_strategy_analysis',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>,
+    );
+
+    const templateButton = await screen.findByRole('button', {
+      name: '套用提示词模板 期权组合分析',
+    });
+    fireEvent.click(templateButton);
+
+    const input = screen.getByPlaceholderText(/分析 600519/) as HTMLTextAreaElement;
+    expect(input.value).toContain('期权组合策略分析');
+    expect(input.value).toContain('组合级期权策略分析');
+    expect(screen.getByRole('checkbox', { name: '期权策略分析' })).toBeChecked();
     expect(mockStartStream).not.toHaveBeenCalled();
   });
 
@@ -2325,6 +2394,78 @@ describe('ChatPage', () => {
     fireEvent.click(jumpButton);
 
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('scrolls to the latest message after a historical session finishes loading', async () => {
+    const switched = createDeferred<void>();
+    mockSwitchSession.mockReturnValueOnce(switched.promise);
+    mockStoreState.messages = [
+      { id: 'user-1', role: 'user', content: '当前会话问题' },
+      { id: 'assistant-1', role: 'assistant', content: '当前会话回答' },
+    ];
+    mockStoreState.sessions = [
+      ...mockStoreState.sessions,
+      {
+        session_id: 'session-2',
+        title: '很长的历史对话',
+        message_count: 20,
+        created_at: '2026-03-16T09:00:00Z',
+        last_active: '2026-03-16T09:05:00Z',
+      },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled());
+    vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear();
+    const viewport = screen.getByTestId('chat-message-scroll');
+    Object.defineProperty(viewport, 'scrollTop', { configurable: true, writable: true, value: 0 });
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 1200 });
+
+    fireEvent.click(screen.getByRole('button', { name: '切换到对话 很长的历史对话' }));
+    expect(mockSwitchSession).toHaveBeenCalledWith('session-2');
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    await act(async () => {
+      switched.resolve();
+      await switched.promise;
+    });
+
+    await waitFor(() => {
+      expect(viewport.scrollTop).toBe(1200);
+    });
+  });
+
+  it('lets users resize the input with the keyboard-accessible drag handle', async () => {
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    const textarea = await screen.findByPlaceholderText(/例如/);
+    const resizeHandle = screen.getByRole('button', { name: '调整输入框高度' });
+    vi.spyOn(textarea, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      width: 600,
+      height: 80,
+      top: 0,
+      right: 600,
+      bottom: 80,
+      left: 0,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowUp' });
+    expect(textarea).toHaveStyle({ height: '104px' });
+
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowDown' });
+    expect(textarea).toHaveStyle({ height: '80px' });
   });
 });
 

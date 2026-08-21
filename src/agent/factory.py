@@ -34,6 +34,7 @@ from src.config import AGENT_MAX_STEPS_DEFAULT
 logger = logging.getLogger(__name__)
 
 _EXCLUSIVE_META_SKILL_ID = "multi_strategy_consensus"
+_COMPATIBLE_META_SKILL_IDS = frozenset({"options_strategy_analysis"})
 
 # ---------------------------------------------------------------------------
 # Module-level caches
@@ -126,10 +127,17 @@ def _normalize_exclusive_skill_ids(skill_ids: List[str]) -> List[str]:
     if _EXCLUSIVE_META_SKILL_ID not in skill_ids or len(skill_ids) == 1:
         return skill_ids
 
-    normalized = [
+    compatible = [
         skill_id for skill_id in skill_ids
-        if skill_id != _EXCLUSIVE_META_SKILL_ID
+        if skill_id in _COMPATIBLE_META_SKILL_IDS
     ]
+    if not compatible:
+        normalized = [
+            skill_id for skill_id in skill_ids
+            if skill_id != _EXCLUSIVE_META_SKILL_ID
+        ]
+    else:
+        normalized = compatible + [_EXCLUSIVE_META_SKILL_ID]
     logger.warning(
         "[AgentFactory] Dropping exclusive meta-skill %s from combined selection; specialist skills=%s",
         _EXCLUSIVE_META_SKILL_ID,
@@ -302,9 +310,10 @@ def get_tool_registry():
     from src.agent.tools.market_tools import ALL_MARKET_TOOLS
     from src.agent.tools.backtest_tools import ALL_BACKTEST_TOOLS
     from src.agent.tools.value_analysis_tools import ALL_VALUE_ANALYSIS_TOOLS
+    from src.agent.tools.options_tools import ALL_OPTIONS_TOOLS
 
     registry = ToolRegistry()
-    for tool_fn in ALL_DATA_TOOLS + ALL_ANALYSIS_TOOLS + ALL_SEARCH_TOOLS + ALL_MARKET_TOOLS + ALL_BACKTEST_TOOLS + ALL_VALUE_ANALYSIS_TOOLS:
+    for tool_fn in ALL_DATA_TOOLS + ALL_OPTIONS_TOOLS + ALL_ANALYSIS_TOOLS + ALL_SEARCH_TOOLS + ALL_MARKET_TOOLS + ALL_BACKTEST_TOOLS + ALL_VALUE_ANALYSIS_TOOLS:
         registry.register(tool_fn)
 
     _TOOL_REGISTRY = registry

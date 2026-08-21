@@ -35,6 +35,9 @@ _SWITCH_PATTERN = re.compile(r"换成|改看|分析|看看|研究|诊断")
 _LOWERCASE_TICKER_PATTERN = re.compile(r"(?<![a-zA-Z.])([a-z]{2,5}(?:\.[a-z]{1,2})?)(?![a-zA-Z0-9])")
 _EXCHANGE_TOKEN_CANDIDATES = {"SH", "SZ", "BJ", "HK", "SS"}
 _CONTEXTUAL_INDICATOR_TOKENS = {"MA"}
+_DERIVATIVE_INDICATOR_TOKENS = {
+    "ATM", "CALL", "GEX", "HV", "IV", "ITM", "OI", "OTM", "PCR", "PUT",
+}
 _INDICATOR_CONTEXT_PATTERN = re.compile(
     r"指标|均线|移动平均|排列|多头|空头|金叉|死叉|支撑|压力|MA\d|SMA|EMA",
     re.IGNORECASE,
@@ -84,6 +87,8 @@ def _normalize_stock_code(value: Any) -> str:
 def _is_denied_candidate(candidate: str, text: str = "") -> bool:
     token = candidate.strip().upper()
     if token in _EXCHANGE_TOKEN_CANDIDATES:
+        return True
+    if token in _DERIVATIVE_INDICATOR_TOKENS:
         return True
     if token in _CONTEXTUAL_INDICATOR_TOKENS and _INDICATOR_CONTEXT_PATTERN.search(text or ""):
         return True

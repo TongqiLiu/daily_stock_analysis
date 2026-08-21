@@ -61,6 +61,28 @@ MULTI_STRATEGY_DIMENSIONS = {
     "dragon_head": "相对强弱",
 }
 
+_MULTI_STRATEGY_DIMENSION_ORDER = (
+    "趋势",
+    "量价",
+    "结构",
+    "情绪",
+    "相对强弱",
+)
+_MULTI_STRATEGY_DIMENSION_WEIGHTS = {
+    "趋势": Decimal("0.30"),
+    "量价": Decimal("0.25"),
+    "结构": Decimal("0.20"),
+    "情绪": Decimal("0.10"),
+    "相对强弱": Decimal("0.15"),
+}
+_MULTI_STRATEGY_EVIDENCE_QUALITY = {
+    "complete": Decimal("1"),
+    "partial": Decimal("0.5"),
+    "missing": Decimal("0"),
+}
+_MULTI_STRATEGY_MIN_QUALITY_COVERAGE = Decimal("65.0")
+_MULTI_STRATEGY_MIN_DIMENSION_COUNT = 4
+
 _MULTI_STRATEGY_TOTAL_WEIGHT = sum(
     (weight for _, _, weight in MULTI_STRATEGY_SCORE_SPECS),
     Decimal("0"),
@@ -124,17 +146,21 @@ _EVIDENCE_LABELS = {
 
 def _multi_strategy_score_matches_band(signal: str, strength: str, score: Decimal) -> bool:
     """Validate one score against the score bands promised by the meta-skill."""
-    ranges = {
-        ("buy", "strong"): (Decimal("80"), Decimal("95")),
-        ("buy", "medium"): (Decimal("65"), Decimal("80")),
-        ("buy", "weak"): (Decimal("55"), Decimal("65")),
-        ("hold", "medium"): (Decimal("45"), Decimal("55")),
-        ("sell", "weak"): (Decimal("35"), Decimal("45")),
-        ("sell", "medium"): (Decimal("20"), Decimal("35")),
-        ("sell", "strong"): (Decimal("5"), Decimal("20")),
-    }
-    bounds = ranges.get((signal, strength))
-    return bool(bounds and bounds[0] <= score <= bounds[1])
+    if (signal, strength) == ("buy", "strong"):
+        return Decimal("80") <= score <= Decimal("95")
+    if (signal, strength) == ("buy", "medium"):
+        return Decimal("65") <= score < Decimal("80")
+    if (signal, strength) == ("buy", "weak"):
+        return Decimal("55") < score < Decimal("65")
+    if (signal, strength) == ("hold", "medium"):
+        return Decimal("45") <= score <= Decimal("55")
+    if (signal, strength) == ("sell", "weak"):
+        return Decimal("35") < score < Decimal("45")
+    if (signal, strength) == ("sell", "medium"):
+        return Decimal("20") < score <= Decimal("35")
+    if (signal, strength) == ("sell", "strong"):
+        return Decimal("5") <= score <= Decimal("20")
+    return False
 
 
 def _format_decimal(value: Decimal) -> str:
@@ -145,34 +171,309 @@ def _format_decimal(value: Decimal) -> str:
     return rendered or "0"
 
 
+def _multi_strategy_bias(score: Decimal) -> tuple[str, str]:
+    """Return a direction label that is independent from the user action."""
+    if score >= Decimal("75"):
+        return "strong_bullish", "强势偏多"
+    if score >= Decimal("60"):
+        return "bullish", "偏多"
+    if score >= Decimal("40"):
+        return "neutral", "中性"
+    if score > Decimal("25"):
+        return "bearish", "偏空"
+    return "strong_bearish", "强势偏空"
+
+
+def _multi_strategy_actions(decision: str) -> dict[str, str]:
+    """Map one aggregate decision to separate flat/holding actions."""
+    if decision == "强烈买入":
+        return {
+            "no_position": "buy",
+            "no_position_label": "满足入场条件后分批试仓",
+            "has_position": "add",
+            "has_position_label": "持有，确认后再加仓",
+        }
+    if decision == "偏多":
+        return {
+            "no_position": "watch",
+            "no_position_label": "等待量价确认后试仓",
+            "has_position": "hold",
+            "has_position_label": "继续持有，暂不追高",
+        }
+    if decision == "观望":
+        return {
+            "no_position": "watch",
+            "no_position_label": "继续观察",
+            "has_position": "hold",
+            "has_position_label": "持有并按失效位管理",
+        }
+    if decision == "偏空":
+        return {
+            "no_position": "avoid",
+            "no_position_label": "暂不介入",
+            "has_position": "reduce",
+            "has_position_label": "反弹减仓并收紧止损",
+        }
+    if decision == "卖出":
+        return {
+            "no_position": "avoid",
+            "no_position_label": "回避",
+            "has_position": "sell",
+            "has_position_label": "按失效位退出",
+        }
+    return {
+        "no_position": "watch",
+        "no_position_label": "证据不足，等待补齐",
+        "has_position": "hold",
+        "has_position_label": "不加仓，优先控制风险",
+    }
+
+
+def _multi_strategy_dimension_label(score: Decimal) -> str:
+    if score >= Decimal("60"):
+        return "偏多"
+    if score <= Decimal("40"):
+        return "偏空"
+    return "中性"
+
+
+def _summarize_multi_strategy_dimensions(rows: list[dict]) -> list[dict]:
+    """Aggregate correlated strategy rows once per user-facing dimension."""
+    summaries: list[dict] = []
+    for dimension in _MULTI_STRATEGY_DIMENSION_ORDER:
+        dimension_rows = [row for row in rows if row.get("dimension") == dimension]
+        included_rows = [row for row in dimension_rows if row.get("included") is True]
+        configured_weight = sum(
+            (Decimal(str(row.get("weight") or 0)) for row in dimension_rows),
+            Decimal("0"),
+        )
+        included_weight = sum(
+            (Decimal(str(row.get("weight") or 0)) for row in included_rows),
+            Decimal("0"),
+        )
+        quality_weight = sum(
+            (
+                Decimal(str(row.get("weight") or 0))
+                * Decimal(str(row.get("evidence_quality") or 0))
+                for row in dimension_rows
+            ),
+            Decimal("0"),
+        )
+        counts = {
+            "complete": sum(row.get("evidence_status_code") == "complete" for row in dimension_rows),
+            "partial": sum(row.get("evidence_status_code") == "partial" for row in dimension_rows),
+            "missing": sum(row.get("evidence_status_code") == "missing" for row in dimension_rows),
+        }
+        summary: dict[str, Any] = {
+            "dimension": dimension,
+            "available": bool(included_rows),
+            "configured_weight": float(configured_weight),
+            "included_weight": float(included_weight),
+            "quality_coverage_pct": float(
+                (quality_weight / configured_weight * Decimal("100")).quantize(
+                    Decimal("0.1"), rounding=ROUND_HALF_UP
+                )
+            ) if configured_weight > 0 else 0.0,
+            "evidence": counts,
+            "conflict": len({row.get("signal_code") for row in included_rows}) > 1,
+            "supporting_factor": None,
+            "risk_factor": None,
+        }
+        if included_rows and included_weight > 0:
+            numerator = sum(
+                (
+                    Decimal(str(row.get("score")))
+                    * Decimal(str(row.get("weight") or 0))
+                    for row in included_rows
+                ),
+                Decimal("0"),
+            )
+            score = (numerator / included_weight).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP
+            )
+            supporting = max(included_rows, key=lambda row: float(row.get("score") or 0))
+            opposing = min(included_rows, key=lambda row: float(row.get("score") or 0))
+            summary.update({
+                "score": float(score),
+                "direction": _multi_strategy_dimension_label(score),
+                "supporting_factor": (
+                    supporting.get("reason") if float(supporting.get("score") or 0) > 50 else None
+                ),
+                "risk_factor": (
+                    opposing.get("reason") if float(opposing.get("score") or 0) < 50 else None
+                ),
+            })
+        else:
+            summary.update({"score": None, "direction": "证据缺失"})
+        summaries.append(summary)
+    return summaries
+
+
+def _multi_strategy_conflict_level(dimensions: list[dict], rows: list[dict]) -> str:
+    available = [item for item in dimensions if item.get("available")]
+    directions = {item.get("direction") for item in available}
+    if "偏多" in directions and "偏空" in directions:
+        return "high"
+    if any(item.get("conflict") for item in available):
+        return "medium"
+    row_signals = {row.get("signal_code") for row in rows if row.get("included") is True}
+    if "buy" in row_signals and "sell" in row_signals:
+        return "low"
+    return "none"
+
+
+def _calculate_multi_strategy_dimension_score(
+    dimensions: list[dict],
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Calculate one primary direction score after de-correlating row dimensions."""
+    numerator = Decimal("0")
+    included_weight = Decimal("0")
+    for item in dimensions:
+        if not item.get("available") or item.get("score") is None:
+            continue
+        dimension = str(item.get("dimension") or "")
+        weight = _MULTI_STRATEGY_DIMENSION_WEIGHTS.get(dimension)
+        if weight is None:
+            continue
+        numerator += Decimal(str(item["score"])) * weight
+        included_weight += weight
+    if included_weight <= 0:
+        return Decimal("0"), Decimal("0"), Decimal("50.0")
+    score = (numerator / included_weight).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP
+    )
+    return numerator, included_weight, score
+
+
+def _normalize_multi_strategy_market_structure(raw_structure: Any) -> dict:
+    """Normalize support/resistance facts supplied from the trend tool."""
+    if raw_structure in (None, ""):
+        return {
+            "status": "unavailable",
+            "reason": "本轮评分未提交 analyze_trend 的结构化支撑/阻力数据",
+        }
+    try:
+        structure = (
+            json.loads(raw_structure)
+            if isinstance(raw_structure, str)
+            else raw_structure
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "status": "invalid",
+            "reason": f"market_structure_json 不是有效 JSON：{exc}",
+        }
+    if not isinstance(structure, dict):
+        return {
+            "status": "invalid",
+            "reason": "market_structure_json 必须是 JSON 对象",
+        }
+
+    def positive_number(value: Any) -> Optional[float]:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) and number > 0 else None
+
+    def levels(value: Any) -> list[float]:
+        if not isinstance(value, list):
+            return []
+        normalized = {
+            number
+            for item in value
+            for number in [positive_number(item)]
+            if number is not None
+        }
+        return sorted(normalized)
+
+    current_price = positive_number(structure.get("current_price"))
+    supports = levels(structure.get("support_levels"))
+    resistances = levels(structure.get("resistance_levels"))
+    if current_price is None and not supports and not resistances:
+        return {
+            "status": "unavailable",
+            "reason": "analyze_trend 未返回可用的当前价格、支撑位或阻力位",
+        }
+
+    below_support = [level for level in supports if level <= current_price] if current_price else []
+    above_resistance = [level for level in resistances if level >= current_price] if current_price else []
+    nearest_support = max(below_support) if below_support else (max(supports) if supports else None)
+    nearest_resistance = min(above_resistance) if above_resistance else (
+        min(resistances) if resistances else None
+    )
+
+    price_location = "unknown"
+    if current_price and resistances and current_price > max(resistances) * 1.01:
+        price_location = "breakout"
+    elif current_price and supports and current_price < min(supports) * 0.99:
+        price_location = "breakdown"
+    elif current_price and nearest_support and (
+        abs(current_price - nearest_support) / nearest_support <= 0.03
+    ):
+        price_location = "near_support"
+    elif current_price and nearest_resistance and (
+        abs(nearest_resistance - current_price) / nearest_resistance <= 0.03
+    ):
+        price_location = "near_resistance"
+    elif nearest_support or nearest_resistance:
+        price_location = "between_levels"
+
+    def distance_pct(level: Optional[float]) -> Optional[float]:
+        if level is None or current_price is None:
+            return None
+        return round((level - current_price) / current_price * 100, 2)
+
+    return {
+        "status": "available" if (supports or resistances) else "partial",
+        "source": "analyze_trend",
+        "current_price": current_price,
+        "support_levels": supports,
+        "resistance_levels": resistances,
+        "nearest_support": nearest_support,
+        "nearest_resistance": nearest_resistance,
+        "nearest_support_distance_pct": distance_pct(nearest_support),
+        "nearest_resistance_distance_pct": distance_pct(nearest_resistance),
+        "price_location": price_location,
+        "breakout_status": structure.get("breakout_status") or price_location,
+        "invalidation_level": positive_number(structure.get("invalidation_level")),
+        "evidence": structure.get("evidence") or "来自本轮 analyze_trend 支撑/阻力字段",
+    }
+
+
 def _multi_strategy_decision(score: Decimal, *, leveraged: bool) -> tuple[str, str]:
     """Map a deterministic score to a decision and risk-aware position guide."""
     if score >= Decimal("75"):
         return (
             "强烈买入",
-            "杠杆ETF上限20%，必须分批" if leveraged else "重仓50-80%",
+            "杠杆ETF仅小仓分批试仓并按止损距离定仓"
+            if leveraged
+            else "按止损距离和单笔风险预算定仓；缺少账户参数时仅分批试仓",
         )
     if score >= Decimal("60"):
         return (
             "偏多",
-            "杠杆ETF上限10-15%" if leveraged else "中仓30-50%",
+            "杠杆ETF等待确认后小仓试仓"
+            if leveraged
+            else "等待确认后小仓试仓，并按止损距离计算仓位",
         )
     if score >= Decimal("40"):
         return (
             "观望",
-            "杠杆ETF观察或不超过5%" if leveraged else "轻仓不超过20%",
+            "不新增仓位；已有仓位按失效位管理",
         )
     if score > Decimal("25"):
         return (
             "偏空",
-            "杠杆ETF减至不超过5%" if leveraged else "减仓至不超过10%",
+            "不新增仓位；已有仓位考虑减仓并收紧止损",
         )
-    return "卖出", "清仓"
+    return "卖出", "空仓回避；已有仓位按失效位退出"
 
 
 def _handle_calculate_multi_strategy_score(
     scores_json: str,
     instrument_type: str = "standard",
+    market_structure_json: Optional[str] = None,
 ) -> dict:
     """Validate 12 strategy rows and calculate their weighted score deterministically."""
     try:
@@ -230,6 +531,7 @@ def _handle_calculate_multi_strategy_score(
     complete_count = 0
     partial_count = 0
     missing_count = 0
+    quality_adjusted_weight = Decimal("0")
 
     for strategy_id, display_name, weight in MULTI_STRATEGY_SCORE_SPECS:
         item = entries_by_id.get(strategy_id)
@@ -263,11 +565,15 @@ def _handle_calculate_multi_strategy_score(
                 "display_name": display_name,
                 "dimension": MULTI_STRATEGY_DIMENSIONS[strategy_id],
                 "signal": "不可评估",
+                "signal_code": "unavailable",
                 "strength": "-",
+                "strength_code": "none",
                 "score": None,
                 "weight": float(weight),
                 "included": False,
                 "evidence_status": "缺失",
+                "evidence_status_code": "missing",
+                "evidence_quality": 0.0,
                 "reason": reason,
             })
             continue
@@ -318,17 +624,23 @@ def _handle_calculate_multi_strategy_score(
         weighted_value = score * weight
         weighted_numerator += weighted_value
         included_weight += weight
+        evidence_quality = _MULTI_STRATEGY_EVIDENCE_QUALITY[evidence_status]
+        quality_adjusted_weight += weight * evidence_quality
         normalized_rows.append({
             "strategy": strategy_id,
             "display_name": display_name,
             "dimension": MULTI_STRATEGY_DIMENSIONS[strategy_id],
             "signal": _SIGNAL_LABELS[signal],
+            "signal_code": signal,
             "strength": _STRENGTH_LABELS[strength],
+            "strength_code": strength,
             "score": float(score),
             "weight": float(weight),
             "included": True,
             "weighted_value": float(weighted_value),
             "evidence_status": _EVIDENCE_LABELS[evidence_status],
+            "evidence_status_code": evidence_status,
+            "evidence_quality": float(evidence_quality),
             "reason": reason,
         })
 
@@ -346,6 +658,13 @@ def _handle_calculate_multi_strategy_score(
             "error": "no strategy has evaluable evidence",
         }
 
+    market_structure = _normalize_multi_strategy_market_structure(market_structure_json)
+    if market_structure.get("status") == "invalid":
+        return {
+            "status": "invalid",
+            "error": "market structure validation failed",
+            "issues": [market_structure.get("reason") or "invalid market structure"],
+        }
     weighted_score = (weighted_numerator / included_weight).quantize(
         Decimal("0.1"),
         rounding=ROUND_HALF_UP,
@@ -353,31 +672,147 @@ def _handle_calculate_multi_strategy_score(
     evidence_coverage = (
         included_weight / _MULTI_STRATEGY_TOTAL_WEIGHT * Decimal("100")
     ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    quality_coverage = (
+        quality_adjusted_weight / _MULTI_STRATEGY_TOTAL_WEIGHT * Decimal("100")
+    ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    dimension_summaries = _summarize_multi_strategy_dimensions(normalized_rows)
+    available_dimension_count = sum(
+        bool(item.get("available")) for item in dimension_summaries
+    )
+    conflict_level = _multi_strategy_conflict_level(
+        dimension_summaries,
+        normalized_rows,
+    )
+    (
+        dimension_weighted_numerator,
+        included_dimension_weight,
+        dimension_weighted_score,
+    ) = _calculate_multi_strategy_dimension_score(dimension_summaries)
     leveraged = normalized_instrument_type == "leveraged_etf"
-    decision, position_guidance = _multi_strategy_decision(weighted_score, leveraged=leveraged)
+    decision, position_guidance = _multi_strategy_decision(
+        dimension_weighted_score,
+        leveraged=leveraged,
+    )
+    decision_blockers: list[dict[str, str]] = []
     if evidence_coverage < Decimal("70.0") or complete_count + partial_count < 8:
+        decision_blockers.append({
+            "code": "low_evaluation_coverage",
+            "message": "可评估策略或有效权重覆盖不足",
+        })
+    if quality_coverage < _MULTI_STRATEGY_MIN_QUALITY_COVERAGE:
+        decision_blockers.append({
+            "code": "low_evidence_quality",
+            "message": (
+                "完整证据不足；部分证据按 0.5 质量系数折算后低于 "
+                f"{_format_decimal(_MULTI_STRATEGY_MIN_QUALITY_COVERAGE)}%"
+            ),
+        })
+    if available_dimension_count < _MULTI_STRATEGY_MIN_DIMENSION_COUNT:
+        decision_blockers.append({
+            "code": "low_dimension_coverage",
+            "message": (
+                f"五维证据仅覆盖 {available_dimension_count} 维，"
+                f"至少需要 {_MULTI_STRATEGY_MIN_DIMENSION_COUNT} 维"
+            ),
+        })
+    if decision_blockers:
         decision = "证据不足（观望）"
         position_guidance = "不新增仓位，补齐证据后重评"
 
+    if decision_blockers:
+        confidence_level = "insufficient"
+        confidence_label = "证据不足"
+    elif quality_coverage >= Decimal("85.0") and conflict_level in {"none", "low"}:
+        confidence_level = "high"
+        confidence_label = "高"
+    elif quality_coverage >= _MULTI_STRATEGY_MIN_QUALITY_COVERAGE and conflict_level != "high":
+        confidence_level = "medium"
+        confidence_label = "中"
+    else:
+        confidence_level = "low"
+        confidence_label = "低"
+
+    supporting_factors = sorted(
+        (
+            {
+                "strategy": row["strategy"],
+                "display_name": row["display_name"],
+                "dimension": row["dimension"],
+                "score": row["score"],
+                "reason": row["reason"],
+            }
+            for row in normalized_rows
+            if row.get("included") is True and float(row.get("score") or 0) > 55
+        ),
+        key=lambda item: float(item["score"]),
+        reverse=True,
+    )[:3]
+    contradicting_factors = sorted(
+        (
+            {
+                "strategy": row["strategy"],
+                "display_name": row["display_name"],
+                "dimension": row["dimension"],
+                "score": row["score"],
+                "reason": row["reason"],
+            }
+            for row in normalized_rows
+            if row.get("included") is True and float(row.get("score") or 100) < 45
+        ),
+        key=lambda item: float(item["score"]),
+    )[:3]
+    bias_code, bias_label = _multi_strategy_bias(dimension_weighted_score)
+    actions = _multi_strategy_actions(decision)
+
     return {
         "status": "ok",
+        "schema_version": "2.0",
         "instrument_type": normalized_instrument_type,
+        "market_structure": market_structure,
         "rows": normalized_rows,
+        "dimensions": dimension_summaries,
         "weighted_numerator": float(weighted_numerator),
         "included_weight": float(included_weight),
         "configured_total_weight": float(_MULTI_STRATEGY_TOTAL_WEIGHT),
         "weighted_score": float(weighted_score),
+        "dimension_weighted_numerator": float(dimension_weighted_numerator),
+        "included_dimension_weight": float(included_dimension_weight),
+        "configured_dimension_weight": float(sum(_MULTI_STRATEGY_DIMENSION_WEIGHTS.values())),
+        "dimension_weighted_score": float(dimension_weighted_score),
+        "bias": {
+            "code": bias_code,
+            "label": bias_label,
+            "score": float(dimension_weighted_score),
+        },
         "decision": decision,
+        "actions": actions,
         "position_guidance": position_guidance,
+        "confidence": {
+            "level": confidence_level,
+            "label": confidence_label,
+            "conflict_level": conflict_level,
+        },
+        "supporting_factors": supporting_factors,
+        "contradicting_factors": contradicting_factors,
+        "decision_blockers": decision_blockers,
         "evidence": {
             "complete_count": complete_count,
             "partial_count": partial_count,
             "missing_count": missing_count,
+            "evaluated_count": complete_count + partial_count,
             "coverage_pct": float(evidence_coverage),
+            "quality_coverage_pct": float(quality_coverage),
+            "available_dimension_count": available_dimension_count,
+            "dimension_count": len(_MULTI_STRATEGY_DIMENSION_ORDER),
         },
         "formula": (
             f"{_format_decimal(weighted_numerator)} / {_format_decimal(included_weight)} "
             f"= {_format_decimal(weighted_score)}"
+        ),
+        "dimension_formula": (
+            f"{_format_decimal(dimension_weighted_numerator)} / "
+            f"{_format_decimal(included_dimension_weight)} = "
+            f"{_format_decimal(dimension_weighted_score)}"
         ),
     }
 
@@ -386,10 +821,13 @@ calculate_multi_strategy_score_tool = ToolDefinition(
     name="calculate_multi_strategy_score",
     description=(
         "Validate all 12 multi-strategy rows and calculate the weighted score, evidence coverage, "
-        "decision, and risk-aware position guidance deterministically. Pass scores_json as a JSON "
-        "array in canonical strategy order; each row needs strategy, signal, strength, score, "
+        "quality-adjusted decision gate, five-dimension summaries, separate flat/holding actions, "
+        "and risk-aware position guidance deterministically. Pass scores_json as a JSON array in "
+        "canonical strategy order; each row needs strategy, signal, strength, score, "
         "evidence_status, and reason. Missing evidence must use signal='不可评估', strength='-', "
-        "and score=null. Use instrument_type='leveraged_etf' for leveraged ETFs."
+        "and score=null. Pass market_structure_json from analyze_trend when available; it adds "
+        "support/resistance levels to the authoritative report. Use instrument_type='leveraged_etf' "
+        "for leveraged ETFs."
     ),
     parameters=[
         ToolParameter(
@@ -409,6 +847,17 @@ calculate_multi_strategy_score_tool = ToolDefinition(
                 "leveraged_etf for 2x/3x leveraged ETFs such as KORU."
             ),
             enum=["standard", "leveraged_etf"],
+        ),
+        ToolParameter(
+            name="market_structure_json",
+            type="string",
+            description=(
+                "Optional JSON object copied from analyze_trend, containing current_price, "
+                "support_levels, resistance_levels, and optional breakout_status/invalidation_level. "
+                "Do not invent levels when analyze_trend did not return them."
+            ),
+            required=False,
+            default=None,
         ),
     ],
     handler=_handle_calculate_multi_strategy_score,
