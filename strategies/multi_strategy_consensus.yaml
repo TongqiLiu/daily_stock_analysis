@@ -16,6 +16,7 @@ required_tools:
   - get_volume_analysis
   - get_fear_greed_index
   - analyze_pattern
+  - analyze_price_action
   - calculate_multi_strategy_score
 aliases: [多策略, 联合分析, 综合分析, 多策略联合]
 default_priority: 5
@@ -43,7 +44,17 @@ instructions: |
   6. `get_volume_analysis` — 量比、放量/缩量、近 30 日量价
   7. `get_fear_greed_index` — szdt.tech 贪恐分（-100~100），用于第 12 项情绪打分
   8. `analyze_pattern` — 形态识别；第 11 项只有工具或最近 4 根 OHLC 明确支持时才允许给方向分
-  9. 先形成 12 项候选结果，再调用 `calculate_multi_strategy_score` — 必须根据名称/代码显式传 `instrument_type=standard|leveraged_etf`，并把 `analyze_trend` 返回的 `current_price`、`support_levels`、`resistance_levels`、可用的 `breakout_status` / `invalidation_level` 组成 `market_structure_json` 一并传入；由程序校验评分区间、证据覆盖率、有效权重、五维综合得分、价格结构和仓位；工具返回 invalid 时必须修正 12 项或结构化价格字段并重新调用，禁止绕过
+  9. `analyze_price_action` — 用日线识别趋势/交易区间、HH/HL/LH/LL 摆动结构、突破/失败突破候选和信号 K 线；Brooks 相关概念只作为候选上下文，二次入场必须逐根 K 线确认，不能由单根 K 线直接宣称已确认
+  10. 将价格行为学结果作为 12 项候选的交叉证据，再调用 `calculate_multi_strategy_score` — 必须根据名称/代码显式传 `instrument_type=standard|leveraged_etf`，并把 `analyze_trend` 返回的 `current_price`、`support_levels`、`resistance_levels`、可用的 `breakout_status` / `invalidation_level` 组成 `market_structure_json` 一并传入；由程序校验评分区间、证据覆盖率、有效权重、五维综合得分、价格结构和仓位；工具返回 invalid 时必须修正 12 项或结构化价格字段并重新调用，禁止绕过
+
+  ### 价格行为学结果如何融合到 12 项候选
+  - `bull_trend`：使用 `context` 与 HH/HL、LH/LL 作为趋势结构的辅助证据；结构不一致时最多 `partial`，不得仅凭收盘站上 MA20 给强信号。
+  - `volume_breakout`：使用 `signal.type`、收盘位置和 `get_volume_analysis` 的量能共同判断；只有价格行为突破但没有量能时，写“突破候选/量能待确认”，不得写“放量突破”。
+  - `box_oscillation`：使用 `context.state=trading_range` 及前 20 日高低点作为区间证据；接近区间边界时，结合支撑/阻力决定观察、低吸或等待突破。
+  - `shrink_pullback`：使用 signal bar 和二次入场字段辅助判断回踩后的信号 K；`second_entry.status=not_determined` 时，不得声称二次入场已确认。
+  - `chan_theory`、`wave_theory`：只能把摆动结构作为辅助，不得用 HH/HL 或一次突破单独完成缠论笔段、中枢或波浪确认。
+  - 其余策略不得强行套用价格行为学结论；没有直接证据时仍按 `partial` 或 `missing` 处理。
+  - 每个受影响策略的 `reason` 必须写清“价格行为学支持什么、缺什么、是否需要后续确认”，但仍只提交原有 12 行。
 
   补充工具按需调用：`get_chip_distribution`（筹码）、`get_capital_flow`（主力资金）。
 
@@ -106,6 +117,12 @@ instructions: |
   - **强**：箱体下沿企稳（低吸点）
   - **中**：箱体中部震荡
   - **弱**：箱体上沿（高位）/ 跌破箱体
+
+  ### 价格行为学横向视角（不新增第 13 项评分）
+  - 先判断市场上下文是趋势、交易区间还是转换，再解释突破、失败突破和信号 K 线；不要脱离上下文孤立解读单根 K 线。
+  - HH/HL 支持多头结构候选，LH/LL 支持空头结构候选；结构不一致时标注转换或证据不足。
+  - 任何突破都要结合收盘位置、量能、后续跟随或失败确认；没有确认时只能写“候选”。
+  - 该视角只作为趋势、量价、结构和交易计划的交叉证据，不改变 12 项固定评分行、权重、分母或五维权重。
 
   ### 9. 龙头策略（dragon_head，权重 0.7）
   - **强**：板块强势 + 个股领涨 + 创新高
@@ -197,7 +214,7 @@ instructions: |
 
   ## 六、模型正文输出格式
 
-  > `calculate_multi_strategy_score` 成功后，后端会在模型正文前置“结论摘要 → 五维证据汇总 → 12 项评分明细 → 评分审计”四段式权威区块。表格、单项得分、权重、原始综合分和计算式都必须保留。模型不要重复输出该区块。用户要求 900 字以内或精简持仓报告时，字数限制只约束模型正文，不包括系统评分区块。
+  > `calculate_multi_strategy_score` 成功后，后端会在模型正文前置“结论摘要 → 价格结构 → 五维证据汇总 → 价格行为学视角 → 12 项评分明细 → 评分审计”权威区块。表格、单项得分、权重、原始综合分和计算式都必须保留。模型不要重复输出该区块。用户要求 900 字以内或精简持仓报告时，字数限制只约束模型正文，不包括系统评分区块。
 
   > 若同时启用 `options_strategy_analysis`，保留本多策略权威评分区块，并在其后追加独立的期权数据可信度与策略比较区块；期权数据不改写 12 项股票策略得分。
 

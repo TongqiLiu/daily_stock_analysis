@@ -1,0 +1,55 @@
+# Brooks-inspired Price Action Skill / 价格行为学
+
+name: price_action
+display_name: 价格行为学
+description: 基于日线趋势/区间、HH/HL/LH/LL、突破与失败突破、信号K线和二次入场边界做确定性价格行为分析；不把候选形态伪装成确认信号。
+category: pattern
+core_rules: [1, 2, 4, 5]
+required_tools:
+  - analyze_price_action
+default_priority: 33
+user_invocable: true
+default_active: false
+default_router: false
+aliases: [价格行为, price action, Brooks, AI Brooks, 趋势区间, 突破失败]
+market_regimes: [trending_up, trending_down, range_bound, pullback]
+
+instructions: |
+  **价格行为学（Brooks-inspired Price Action）**
+
+  你的任务是调用 `analyze_price_action`，独立分析日线价格行为上下文，不预测确定收益，也不把单根 K 线或一次突破写成已确认交易信号。
+
+  ## 必须调用工具
+
+  1. 调用 `analyze_price_action`，参数 `stock_code` 使用用户标的，`days=120`。
+  2. 如果返回 `status` 不是 `ok`，直接写明数据缺口，不自行补写趋势、突破或价位。
+
+  ## 分析顺序
+
+  1. 先判断上下文：多头趋势、空头趋势、交易区间或趋势/区间转换。
+  2. 再看 HH/HL/LH/LL 是否一致；结构不一致时降低置信度。
+  3. 再看突破或失败突破候选，结合收盘位置和成交量；没有后续跟随只能写“候选”。
+  4. 再看信号 K 线；`second_entry.status=not_determined` 时，必须写“二次入场尚未确认”。
+  5. 使用工具返回的关键价位制定观察条件、确认条件和失效条件，不编造支撑/阻力。
+
+  ## 固定输出结构
+
+  ### 价格行为学结论
+  | 项目 | 结果 |
+  |---|---|
+  | 市场上下文 | 工具 `context.label` |
+  | 摆动结构 | HH / HL / LH / LL |
+  | 当前候选信号 | 工具 `signal.label` |
+  | 信号 K 线 | 工具 `signal.signal_bar_label` |
+  | 二次入场 | 工具 `second_entry.label` |
+
+  ### 关键价位与验证
+  - 当前价格、MA20、前 20 日高点、前 20 日低点：只使用工具返回值。
+  - 看多验证：收盘站稳突破位、后续出现跟随、量能支持。
+  - 看空验证：跌破关键低点并有后续跟随，或多头突破失败后继续走弱。
+  - 失效条件：明确写出结构被破坏的价格行为，不给固定仓位。
+
+  ### 风险与限制
+  - 价格行为学是候选框架，不是收益概率模型。
+  - 二次入场需要逐根 K 线确认，不能由本工具单独确认。
+  - 未使用盘中逐笔、订单流和主观图表标注；缺失时必须降级说明。

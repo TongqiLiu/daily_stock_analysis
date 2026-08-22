@@ -263,6 +263,7 @@ def _try_repair_json(text: str, repair_fn: Callable) -> Optional[Dict[str, Any]]
 
 
 _MULTI_STRATEGY_SCORE_TOOL = "calculate_multi_strategy_score"
+_PRICE_ACTION_TOOL = "analyze_price_action"
 _WAVE_THREE_TERMS = (
     "第3浪候选",
     "第 3 浪候选",
@@ -329,6 +330,20 @@ def _latest_multi_strategy_score_payload(
     return None
 
 
+def _latest_price_action_payload(
+    messages: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    for message in reversed(messages):
+        if message.get("role") != "tool" or message.get("name") != _PRICE_ACTION_TOOL:
+            continue
+        try:
+            payload = json.loads(str(message.get("content") or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
 def _markdown_table_cell(value: Any) -> str:
     """Render an untrusted tool value safely inside one Markdown table cell."""
     if value is None:
@@ -348,7 +363,23 @@ def _format_multi_strategy_number(value: Any, *, decimals: Optional[int] = None)
     return format(number, ".10g")
 
 
-def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
+def _multi_strategy_score_marker(value: Any) -> str:
+    """Return a compact, text-preserving traffic-light marker for a score."""
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return "⚪"
+    if score >= 60:
+        return "🟢"
+    if score >= 40:
+        return "🟡"
+    return "🔴"
+
+
+def _render_multi_strategy_score_section(
+    payload: Dict[str, Any],
+    price_action_payload: Optional[Dict[str, Any]] = None,
+) -> str:
     """Render the authoritative user-facing score block from a valid tool payload."""
     if payload.get("status") != "ok":
         return ""
@@ -385,11 +416,18 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
     )
     available_dimensions = evidence.get("available_dimension_count", "—")
     dimension_count = evidence.get("dimension_count", "—")
+    primary_marker = _multi_strategy_score_marker(
+        payload.get("dimension_weighted_score", payload.get("weighted_score"))
+    )
+    direction_display = f"{primary_marker} {direction_label}"
+    decision_display = f"{primary_marker} {_markdown_table_cell(payload.get('decision'))}"
 
     lines = [
         "### 系统确定性多策略评分",
         "",
         "> 以下评分区块由系统根据 `calculate_multi_strategy_score` 的返回结果生成；如与正文中的手工复述冲突，以本区块为准。",
+        "",
+        "> 颜色标识：🟢 偏多（≥60） · 🟡 中性（40–59.9） · 🔴 偏空（<40） · ⚪ 数据缺失",
         "",
         "#### 1. 结论摘要",
         "",
@@ -398,8 +436,8 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
         "| "
         + " | ".join([
             f"{primary_score} / 100",
-            _markdown_table_cell(direction_label),
-            _markdown_table_cell(payload.get("decision")),
+            _markdown_table_cell(direction_display),
+            decision_display,
             _markdown_table_cell(confidence_label),
         ])
         + " |",
@@ -541,6 +579,41 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
                 + " |"
             )
 
+    if isinstance(price_action_payload, dict) and price_action_payload.get("status") == "ok":
+        context = price_action_payload.get("context") if isinstance(price_action_payload.get("context"), dict) else {}
+        signal = price_action_payload.get("signal") if isinstance(price_action_payload.get("signal"), dict) else {}
+        structure = price_action_payload.get("structure") if isinstance(price_action_payload.get("structure"), dict) else {}
+        levels = price_action_payload.get("levels") if isinstance(price_action_payload.get("levels"), dict) else {}
+        second_entry = price_action_payload.get("second_entry") if isinstance(price_action_payload.get("second_entry"), dict) else {}
+        lines.extend([
+            "",
+            "#### 3.1 价格行为学视角（Brooks-inspired）",
+            "",
+            "| 市场上下文 | 价格行为候选信号 | 信号 K 线 | 结构 |",
+            "|---|---|---|---|",
+            "| " + " | ".join([
+                _markdown_table_cell(context.get("label")),
+                _markdown_table_cell(signal.get("label")),
+                _markdown_table_cell(signal.get("signal_bar_label")),
+                _markdown_table_cell(
+                    f"HH={structure.get('higher_highs', False)} / "
+                    f"HL={structure.get('higher_lows', False)} / "
+                    f"LH={structure.get('lower_highs', False)} / "
+                    f"LL={structure.get('lower_lows', False)}"
+                ),
+            ]) + " |",
+            "",
+            f"- 上下文依据：{_markdown_table_cell(context.get('reason'))}",
+            f"- 信号依据：{_markdown_table_cell(signal.get('reason'))}",
+            f"- 关键价位：当前 {_format_multi_strategy_number(levels.get('current_price'))}；"
+            f"MA20 {_format_multi_strategy_number(levels.get('ma20'))}；"
+            f"前 20 日高点 {_format_multi_strategy_number(levels.get('prior_20d_high'))}；"
+            f"前 20 日低点 {_format_multi_strategy_number(levels.get('prior_20d_low'))}",
+            f"- 二次入场：{_markdown_table_cell(second_entry.get('label'))}。"
+            f"{_markdown_table_cell(second_entry.get('reason'))}",
+            "- 使用边界：突破/失败突破仅为候选，需后续跟随或失败确认；该视角不新增评分项、不改变 12 项权重。",
+        ])
+
     lines.extend([
         "",
         "#### 4. 12 项策略评分明细",
@@ -556,6 +629,7 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
             if row.get("included") is not False and row.get("score") is not None
             else "—"
         )
+        score_display = f"{_multi_strategy_score_marker(row.get('score'))} {score}"
         weight = _format_multi_strategy_number(row.get("weight"), decimals=1)
         lines.append(
             "| "
@@ -565,7 +639,7 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
                 _markdown_table_cell(row.get("dimension")),
                 _markdown_table_cell(row.get("signal")),
                 _markdown_table_cell(row.get("strength")),
-                score,
+                score_display,
                 weight,
                 _markdown_table_cell(row.get("evidence_status")),
                 _markdown_table_cell(row.get("reason")),
@@ -585,11 +659,11 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
         "",
         "#### 5. 评分审计",
         "",
-        f"- **五维综合得分：{primary_score} / 100**（最终方向与决策使用）",
+        f"- **五维综合得分：{primary_marker} {primary_score} / 100**（最终方向与决策使用）",
         f"- 五维计算过程：{dimension_numerator} / {dimension_weight} = {primary_score}",
-        f"- **12 项原始加权综合得分：{expected_score} / 100**（保留用于逐项审计）",
+        f"- **12 项原始加权综合得分：{_multi_strategy_score_marker(payload.get('weighted_score'))} {expected_score} / 100**（保留用于逐项审计）",
         f"- 12 项计算过程：{numerator} / {included_weight} = {expected_score}",
-        f"- 决策：{_markdown_table_cell(payload.get('decision'))}",
+        f"- 决策：{decision_display}",
         f"- 仓位建议：{_markdown_table_cell(payload.get('position_guidance'))}",
         "- 评分性质：最终方向使用五维综合得分，12 项原始加权分仅作审计；两者都不是收益概率。部分证据按 0.5 质量系数折算并用于限制决策强度。",
     ])
@@ -601,11 +675,12 @@ def _render_multi_strategy_score_section(payload: Dict[str, Any]) -> str:
 def _append_multi_strategy_score_section(
     content: str,
     payload: Optional[Dict[str, Any]],
+    price_action_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Replace model-authored blocks and place authoritative evidence before narrative."""
     if not isinstance(payload, dict):
         return content
-    section = _render_multi_strategy_score_section(payload)
+    section = _render_multi_strategy_score_section(payload, price_action_payload)
     if not section:
         return content
     start_marker = "<!-- multi-strategy-score:start -->"
@@ -708,7 +783,7 @@ def _validate_multi_strategy_final_answer(
     expected_position = str(payload.get("position_guidance") or "")
     missing: List[str] = []
     if not re.search(
-        rf"加权综合得分\s*[:：]\s*(?:\*\*)?{re.escape(expected_score)}\s*/\s*100",
+        rf"加权综合得分\s*[:：]\s*(?:\*\*)?(?:[🟢🟡🔴⚪]\s*)?{re.escape(expected_score)}\s*/\s*100",
         content,
     ):
         missing.append(f"工具得分 {expected_score}/100")

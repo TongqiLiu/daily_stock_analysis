@@ -1368,6 +1368,216 @@ analyze_pattern_tool = ToolDefinition(
 )
 
 
+def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
+    """Extract a conservative, Brooks-inspired price-action context from daily bars.
+
+    This is a deterministic evidence helper, not a claim that a discretionary
+    price-action setup has been confirmed.  In particular, second entries are
+    intentionally left for the model/user to confirm bar by bar.
+    """
+    from src.services.history_loader import load_history_df
+
+    if not (stock_code and str(stock_code).strip()):
+        return {"status": "error", "code": "missing_stock_code"}
+
+    try:
+        requested_days = min(max(int(days or 120), 60), 365)
+    except (TypeError, ValueError):
+        requested_days = 120
+
+    try:
+        df, source = load_history_df(stock_code, days=requested_days)
+    except Exception as exc:
+        logger.warning("Price action history load failed for %s: %s", stock_code, exc)
+        return {
+            "status": "unavailable",
+            "code": "history_load_failed",
+            "reason": str(exc),
+        }
+
+    if df is None or df.empty:
+        return {
+            "status": "unavailable",
+            "code": "history_unavailable",
+            "reason": f"No daily OHLCV history available for {stock_code}",
+        }
+
+    required_columns = {"open", "high", "low", "close"}
+    missing_columns = sorted(required_columns - set(df.columns))
+    if missing_columns:
+        return {
+            "status": "unavailable",
+            "code": "missing_ohlc_columns",
+            "missing_columns": missing_columns,
+        }
+
+    df = df.tail(requested_days).copy().reset_index(drop=True)
+    if len(df) < 30:
+        return {
+            "status": "partial",
+            "code": "insufficient_history",
+            "bars": len(df),
+            "reason": "价格行为学至少需要约 30 根日线，当前样本不足。",
+        }
+
+    try:
+        opens = [float(value) for value in df["open"]]
+        highs = [float(value) for value in df["high"]]
+        lows = [float(value) for value in df["low"]]
+        closes = [float(value) for value in df["close"]]
+    except (TypeError, ValueError):
+        return {"status": "unavailable", "code": "non_numeric_ohlc"}
+
+    current = closes[-1]
+    ma20 = sum(closes[-20:]) / 20
+    prior_high = max(highs[-21:-1])
+    prior_low = min(lows[-21:-1])
+    recent_high = max(highs[-20:])
+    recent_low = min(lows[-20:])
+    range_pct = (recent_high - recent_low) / current * 100 if current else 0.0
+    slope_pct = (closes[-1] - closes[-21]) / closes[-21] * 100 if closes[-21] else 0.0
+
+    # Use five-bar pivots as a compact, reproducible proxy for swing structure.
+    pivot_highs = [highs[i] for i in range(2, len(highs) - 2)
+                   if highs[i] >= max(highs[i - 2:i + 3])]
+    pivot_lows = [lows[i] for i in range(2, len(lows) - 2)
+                  if lows[i] <= min(lows[i - 2:i + 3])]
+    recent_pivot_highs = pivot_highs[-4:]
+    recent_pivot_lows = pivot_lows[-4:]
+    higher_highs = len(recent_pivot_highs) >= 2 and recent_pivot_highs[-1] > recent_pivot_highs[-2]
+    higher_lows = len(recent_pivot_lows) >= 2 and recent_pivot_lows[-1] > recent_pivot_lows[-2]
+    lower_highs = len(recent_pivot_highs) >= 2 and recent_pivot_highs[-1] < recent_pivot_highs[-2]
+    lower_lows = len(recent_pivot_lows) >= 2 and recent_pivot_lows[-1] < recent_pivot_lows[-2]
+
+    if higher_highs and higher_lows and current >= ma20:
+        context_state = "bull_trend"
+        context_label = "多头趋势候选"
+        context_reason = "近端摆动高点与低点同步抬高，且收盘位于 MA20 上方。"
+    elif lower_highs and lower_lows and current <= ma20:
+        context_state = "bear_trend"
+        context_label = "空头趋势候选"
+        context_reason = "近端摆动高点与低点同步降低，且收盘位于 MA20 下方。"
+    elif range_pct < 20 and abs(slope_pct) < 8:
+        context_state = "trading_range"
+        context_label = "交易区间候选"
+        context_reason = "近 20 日波动范围和方向斜率都有限，突破更需要后续跟随或失败确认。"
+    else:
+        context_state = "transition"
+        context_label = "趋势/区间转换候选"
+        context_reason = "摆动结构与方向条件未形成同向组合，暂不把单根 K 线当作趋势确认。"
+
+    last_range = max(highs[-1] - lows[-1], 0.0)
+    body_ratio = abs(closes[-1] - opens[-1]) / last_range if last_range else 0.0
+    close_position = (closes[-1] - lows[-1]) / last_range if last_range else 0.5
+    if body_ratio >= 0.6 and close_position >= 0.75:
+        signal_bar = "strong_bull_close"
+        signal_bar_label = "强势收盘阳线候选"
+    elif body_ratio >= 0.6 and close_position <= 0.25:
+        signal_bar = "strong_bear_close"
+        signal_bar_label = "强势收盘阴线候选"
+    elif body_ratio < 0.35:
+        signal_bar = "small_body"
+        signal_bar_label = "小实体/犹豫 K 线"
+    else:
+        signal_bar = "ordinary"
+        signal_bar_label = "普通信号 K 线"
+
+    if current > prior_high:
+        signal_type = "bull_breakout_candidate"
+        signal_label = "上破近 20 日高点候选"
+        signal_reason = "收盘高于前 20 个交易日高点；仍需量能与后续跟随确认。"
+    elif highs[-1] > prior_high and current <= prior_high:
+        signal_type = "failed_bull_breakout_candidate"
+        signal_label = "多头突破失败候选"
+        signal_reason = "盘中越过前 20 个交易日高点但收盘收回其下，需观察下一根 K 线。"
+    elif current < prior_low:
+        signal_type = "bear_breakdown_candidate"
+        signal_label = "下破近 20 日低点候选"
+        signal_reason = "收盘低于前 20 个交易日低点；仍需后续跟随确认。"
+    elif lows[-1] < prior_low and current >= prior_low:
+        signal_type = "failed_bear_breakdown_candidate"
+        signal_label = "空头破位失败候选"
+        signal_reason = "盘中跌破前 20 个交易日低点但收盘收回其上，需观察下一根 K 线。"
+    else:
+        signal_type = "inside_context"
+        signal_label = "区间内/未形成突破候选"
+        signal_reason = "当前收盘仍在前 20 个交易日高低点之间。"
+
+    return {
+        "status": "ok",
+        "code": stock_code,
+        "source": source,
+        "timeframe": "daily",
+        "bars": len(df),
+        "context": {
+            "state": context_state,
+            "label": context_label,
+            "reason": context_reason,
+            "slope_pct_20d": round(slope_pct, 2),
+            "range_pct_20d": round(range_pct, 2),
+        },
+        "signal": {
+            "type": signal_type,
+            "label": signal_label,
+            "reason": signal_reason,
+            "signal_bar": signal_bar,
+            "signal_bar_label": signal_bar_label,
+            "body_ratio": round(body_ratio, 3),
+        },
+        "structure": {
+            "higher_highs": higher_highs,
+            "higher_lows": higher_lows,
+            "lower_highs": lower_highs,
+            "lower_lows": lower_lows,
+        },
+        "levels": {
+            "current_price": round(current, 4),
+            "ma20": round(ma20, 4),
+            "prior_20d_high": round(prior_high, 4),
+            "prior_20d_low": round(prior_low, 4),
+            "recent_range_high": round(recent_high, 4),
+            "recent_range_low": round(recent_low, 4),
+        },
+        "second_entry": {
+            "status": "not_determined",
+            "label": "二次入场需逐根 K 线确认",
+            "reason": "本工具不凭单次形态确认 Brooks 二次入场；需要后续信号 K、入场 K 与失效位。",
+        },
+        "limitations": [
+            "这是 Brooks-inspired 的确定性候选识别，不是官方课程认证或收益概率。",
+            "突破/失败突破需要后续跟随或失败确认，不能仅凭一根 K 线追单。",
+            "未使用盘中逐笔、订单流或主观图表标注；样本不足时应降低证据等级。",
+        ],
+    }
+
+
+analyze_price_action_tool = ToolDefinition(
+    name="analyze_price_action",
+    description=(
+        "Analyze daily price action using a conservative Brooks-inspired lens: "
+        "trend versus trading range, swing structure, breakout/failure candidates, "
+        "signal-bar context, and explicit second-entry limitations."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., 'AAPL' or '600519'.",
+        ),
+        ToolParameter(
+            name="days",
+            type="integer",
+            description="Number of recent daily bars (60-365, default 120).",
+            required=False,
+            default=120,
+        ),
+    ],
+    handler=_handle_analyze_price_action,
+    category="analysis",
+    policy=_ANALYSIS_READ_POLICY,
+)
+
+
 def _handle_analyze_ema200_setup(
     stock_code: str,
     setup_id: str = "ema_200_highlow",
@@ -1707,6 +1917,7 @@ ALL_ANALYSIS_TOOLS = [
     calculate_ma_tool,
     get_volume_analysis_tool,
     analyze_pattern_tool,
+    analyze_price_action_tool,
     calculate_multi_strategy_score_tool,
     analyze_ema200_setup_tool,
     analyze_intraday_t_tool,

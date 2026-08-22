@@ -422,13 +422,13 @@ def test_runner_appends_authoritative_score_block_to_compact_holding_report() ->
     assert "<!-- multi-strategy-score:end -->" not in result.content
     for _, display_name, _ in MULTI_STRATEGY_SCORE_SPECS:
         assert display_name in result.content
-    assert "加权综合得分：40.4 / 100" in result.content
+    assert "加权综合得分：🟡 40.4 / 100" in result.content
     assert "343.6 / 8.5 = 40.4" in result.content
     assert "完整 7 / 部分 4 / 缺失 1" in result.content
     assert "有效权重覆盖 92.4%" in result.content
-    assert "五维综合得分：37.2 / 100" in result.content
-    assert "12 项原始加权综合得分：40.4 / 100" in result.content
-    assert "决策：偏空" in result.content
+    assert "五维综合得分：🔴 37.2 / 100" in result.content
+    assert "12 项原始加权综合得分：🟡 40.4 / 100" in result.content
+    assert "决策：🔴 偏空" in result.content
     assert "仓位建议：不新增仓位；已有仓位考虑减仓并收紧止损" in result.content
     assert "#### 1. 结论摘要" in result.content
     assert "#### 2. 价格结构（支撑/阻力）" in result.content
@@ -438,6 +438,10 @@ def test_runner_appends_authoritative_score_block_to_compact_holding_report() ->
     assert "近端支撑：100" in result.content
     assert "近端阻力：106.5" in result.content
     assert "质量折算覆盖 75.5%" in result.content
+    assert "颜色标识：🟢 偏多（≥60） · 🟡 中性（40–59.9） · 🔴 偏空（<40） · ⚪ 数据缺失" in result.content
+    assert "🟡 37.2 / 100" not in result.content
+    assert "🔴 37.2 / 100" in result.content
+    assert "🔴 偏空" in result.content
 
 
 def test_runner_appends_exact_bearish_position_guidance_without_model_copy() -> None:
@@ -484,8 +488,9 @@ def test_runner_appends_exact_bearish_position_guidance_without_model_copy() -> 
 
     assert result.success is True
     assert adapter.call_with_tools.call_count == 2
-    assert "加权综合得分：30.0 / 100" in result.content
-    assert "决策：偏空" in result.content
+    assert "加权综合得分：🔴 30.0 / 100" in result.content
+    assert "决策：🔴 偏空" in result.content
+    assert "🔴 偏空" in result.content
     assert "仓位建议：不新增仓位；已有仓位考虑减仓并收紧止损" in result.content
 
 
@@ -574,7 +579,7 @@ def test_runner_replaces_model_authored_authoritative_score_marker() -> None:
     assert "<!-- multi-strategy-score:start -->" not in result.content
     assert "<!-- multi-strategy-score:end -->" not in result.content
     assert "伪造得分" not in result.content
-    assert "加权综合得分：70.0 / 100" in result.content
+    assert "加权综合得分：🟢 70.0 / 100" in result.content
 
 
 def test_runner_rejects_wave_three_claim_without_required_chart_explanation() -> None:
