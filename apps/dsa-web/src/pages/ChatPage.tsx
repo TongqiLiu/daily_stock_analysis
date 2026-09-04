@@ -27,7 +27,12 @@ import {
 import { isNearBottom } from '../utils/chatScroll';
 import { getReportText } from '../utils/reportLanguage';
 import { extractStockCodesFromMessage } from '../utils/chatStockCode';
-import { findMatchingStockCode, includesStockCode, normalizeStockCode } from '../utils/stockCode';
+import {
+  findMatchingStockCode,
+  includesStockCode,
+  normalizeStockCode,
+  resolveRegisteredIndexCanonical,
+} from '../utils/stockCode';
 import { useStockIndex } from '../hooks/useStockIndex';
 import type { StockIndexItem } from '../types/stockIndex';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
@@ -241,11 +246,21 @@ const resolveUniqueStockNameContext = (
     if (!terms.some((term) => normalizedMessage.includes(term.toLocaleLowerCase()))) {
       continue;
     }
-    const stockCode = normalizeStockCode(item.canonicalCode);
+    const stockCode = item.assetType === 'index'
+      ? item.canonicalCode
+      : normalizeStockCode(item.canonicalCode);
     matches.set(stockCode, { stock_code: stockCode, stock_name: item.nameZh || null });
   }
 
   return matches.size === 1 ? [...matches.values()][0] : null;
+};
+
+const isRegisteredIndexCanonicalCode = (
+  code: string | null,
+  index: StockIndexItem[],
+): boolean => {
+  if (!code) return false;
+  return resolveRegisteredIndexCanonical(index, code) !== null;
 };
 
 const getMessageSkillNames = (msg: Message): string[] => {
@@ -397,9 +412,7 @@ const ChatPage: React.FC = () => {
   const [agentStatus, setAgentStatus] = useState<AgentStatusResponse | null>(null);
   const [agentStatusError, setAgentStatusError] = useState<string | null>(null);
   const [agentStatusChecking, setAgentStatusChecking] = useState(true);
-  const { index: stockIndex } = useStockIndex(
-    agentStatus?.backend === 'codex_app_server',
-  );
+  const { index: stockIndex, loading: stockIndexLoading } = useStockIndex();
   const watchlistMessageTimerRef = useRef<number | null>(null);
   const copyResetTimerRef = useRef<Partial<Record<string, number>>>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1014,7 +1027,7 @@ const ChatPage: React.FC = () => {
       overrideStockContext?: ActiveStockContext,
     ) => {
       const msgText = (overrideMessage ?? input).trim();
-      if (!msgText || loading || !agentAvailable || !agentStatus) return;
+      if (!msgText || loading || stockIndexLoading || !agentAvailable || !agentStatus) return;
       lastSubmittedInputRef.current = msgText;
       if (overrideMessage !== undefined) {
         setInput(msgText);
@@ -1077,7 +1090,7 @@ const ChatPage: React.FC = () => {
         },
       });
     },
-    [activeStockContext, agentAvailable, agentStatus, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, resetInputHeightToAuto, selectedSkillIds, sessionId, sessionSelectedSkillIds, startStream, stockIndex],
+    [activeStockContext, agentAvailable, agentStatus, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, resetInputHeightToAuto, selectedSkillIds, sessionId, sessionSelectedSkillIds, startStream, stockIndex, stockIndexLoading],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2026,7 +2039,7 @@ const ChatPage: React.FC = () => {
                 </div>
               ) : null}
 
-              {activeStockCode && (
+              {activeStockCode && !isRegisteredIndexCanonicalCode(activeStockCode, stockIndex) && (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-text font-mono">{activeStockCode}</span>
                   <Button
@@ -2113,8 +2126,8 @@ const ChatPage: React.FC = () => {
                   <Button
                     variant="primary"
                     onClick={() => handleSend()}
-                    disabled={!input.trim() || loading || !agentAvailable}
-                    isLoading={loading}
+                    disabled={!input.trim() || loading || stockIndexLoading || !agentAvailable}
+                    isLoading={loading || stockIndexLoading}
                     className="btn-primary flex-shrink-0"
                   >
                     发送
