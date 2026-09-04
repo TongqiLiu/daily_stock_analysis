@@ -293,6 +293,115 @@ class FutuFetcher(BaseFetcher):
             logger.debug("[Futu] request_weekly_kline(%s) 失败: %s", futu_code, exc)
             raise
 
+    def get_intraday_data(
+        self,
+        stock_code: str,
+        timeframe: str = "15m",
+        bars: int = 300,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> pd.DataFrame:
+        """Fetch provider-native intraday OHLCV bars from Futu OpenD.
+
+        The returned ``date`` column preserves Futu's full ``time_key`` so
+        callers can isolate the latest trading session before calculating
+        session VWAP.  Daily bars must never be used as a VWAP substitute.
+        """
+        if not self.is_available_for_request("intraday_data"):
+            raise RuntimeError("Futu temporarily unavailable")
+
+        futu_code = _to_futu_code(stock_code)
+        if futu_code is None:
+            raise ValueError(f"Cannot convert {stock_code} to Futu code")
+
+        timeframe_map = {
+            "1m": "K_1M",
+            "3m": "K_3M",
+            "5m": "K_5M",
+            "15m": "K_15M",
+            "30m": "K_30M",
+            "1H": "K_60M",
+        }
+        enum_name = timeframe_map.get(timeframe)
+        if enum_name is None:
+            raise ValueError(
+                f"Unsupported Futu intraday timeframe: {timeframe}. "
+                f"Supported: {list(timeframe_map)}"
+            )
+
+        try:
+            bars = max(1, min(int(bars), 1000))
+        except (TypeError, ValueError):
+            bars = 300
+
+        end = end_date or date.today()
+        start = start_date or (end - timedelta(days=30))
+        ctx = self._get_ctx()
+        if ctx is None:
+            raise RuntimeError("Futu OpenQuoteContext not available")
+
+        try:
+            from futu import RET_OK, KLType, AuType
+
+            ktype = getattr(KLType, enum_name, None)
+            if ktype is None:
+                raise RuntimeError(f"Installed Futu SDK does not support {enum_name}")
+
+            frames = []
+            page_req_key = None
+            for _ in range(20):
+                request_kwargs = {
+                    "code": futu_code,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "ktype": ktype,
+                    "autype": AuType.QFQ,
+                    "max_count": 1000,
+                }
+                if page_req_key is not None:
+                    request_kwargs["page_req_key"] = page_req_key
+
+                result = ctx.request_history_kline(**request_kwargs)
+                if not isinstance(result, tuple) or len(result) < 2:
+                    raise RuntimeError(
+                        f"Unexpected Futu response: {type(result).__name__}"
+                    )
+                ret, page_data = result[0], result[1]
+                if ret != RET_OK or page_data is None:
+                    raise RuntimeError(str(page_data))
+                if not page_data.empty:
+                    frames.append(page_data.copy())
+
+                page_req_key = result[2] if len(result) >= 3 else None
+                if page_req_key is None:
+                    break
+            else:
+                raise RuntimeError("Futu intraday pagination exceeded 20 pages")
+
+            if not frames:
+                return pd.DataFrame()
+
+            normalized = pd.concat(frames, ignore_index=True)
+            if "time_key" in normalized.columns:
+                normalized = normalized.rename(columns={"time_key": "date"})
+            elif "date" not in normalized.columns:
+                raise RuntimeError("Futu intraday response missing time_key")
+
+            required = ["date", "open", "high", "low", "close", "volume"]
+            missing = [column for column in required if column not in normalized.columns]
+            if missing:
+                raise RuntimeError(f"Futu intraday response missing columns: {missing}")
+
+            for column in ("open", "high", "low", "close", "volume"):
+                normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+            normalized = normalized.dropna(subset=required)
+            normalized = normalized.drop_duplicates(subset=["date"], keep="last")
+            normalized = normalized.sort_values("date").tail(bars).reset_index(drop=True)
+            return normalized[required]
+        except Exception as exc:
+            logger.debug("[Futu] request_intraday_kline(%s) 失败: %s", futu_code, exc)
+            raise
+
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         if df.empty:
             return pd.DataFrame(columns=STANDARD_COLUMNS)

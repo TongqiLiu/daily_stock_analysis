@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Intraday K-line history loader for EMA200 setup analysis.
+"""Intraday K-line history loader for intraday technical analysis.
 
 Provides minute-level (5m, 15m, 30m, etc.) and hourly-level (1H, 4H) data
-loading from supported data providers (primarily Longbridge).
+loading from supported data providers (Longbridge with Futu OpenD fallback).
 """
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Optional, Tuple
 
 import pandas as pd
@@ -69,7 +69,7 @@ def load_intraday_history(
     bars: int = 300,
     end_date: Optional[date] = None,
 ) -> Tuple[Optional[pd.DataFrame], str]:
-    """Load intraday K-line history from Longbridge.
+    """Load provider-native intraday K-line history.
 
     Args:
         stock_code: Stock code (e.g., '600519', 'AAPL', 'HK00700')
@@ -79,7 +79,7 @@ def load_intraday_history(
 
     Returns:
         (df, source) where df has columns [date, open, high, low, close, volume]
-        and source is 'longbridge' or 'none' on failure.
+        and source is 'longbridge', 'futu', or 'none' on failure.
     """
     from data_provider.longbridge_fetcher import LongbridgeFetcher
     from data_provider.base import normalize_stock_code
@@ -91,41 +91,65 @@ def load_intraday_history(
 
     try:
         fetcher = LongbridgeFetcher()
-        if not fetcher.is_available_for_request("intraday_data"):
-            logger.warning(
-                "load_intraday_history(%s, %s): Longbridge unavailable",
-                stock_code, timeframe
+        if fetcher.is_available_for_request("intraday_data"):
+            period = _map_timeframe_to_longbridge_period(timeframe)
+            df = fetcher.fetch_intraday_candlesticks(
+                normalized_code,
+                start,
+                end,
+                period,
             )
-            return None, "none"
-
-        period = _map_timeframe_to_longbridge_period(timeframe)
-        df = fetcher.fetch_intraday_candlesticks(
-            normalized_code,
-            start,
-            end,
-            period,
+            if df is not None and not df.empty:
+                if len(df) > bars:
+                    df = df.tail(bars).reset_index(drop=True)
+                logger.debug(
+                    "load_intraday_history(%s, %s): %d bars from Longbridge",
+                    stock_code,
+                    timeframe,
+                    len(df),
+                )
+                return df, "longbridge"
+    except Exception as exc:
+        logger.warning(
+            "load_intraday_history(%s, %s): Longbridge failed: %s",
+            stock_code,
+            timeframe,
+            exc,
         )
 
-        if df is None or df.empty:
-            logger.warning(
-                "load_intraday_history(%s, %s): No data returned",
-                stock_code, timeframe
+    from data_provider.futu_fetcher import FutuFetcher
+
+    futu_fetcher = FutuFetcher()
+    try:
+        if futu_fetcher.is_available_for_request("intraday_data"):
+            df = futu_fetcher.get_intraday_data(
+                stock_code,
+                timeframe=timeframe,
+                bars=bars,
+                start_date=start,
+                end_date=end,
             )
-            return None, "none"
-
-        # Take most recent N bars
-        if len(df) > bars:
-            df = df.tail(bars).reset_index(drop=True)
-
-        logger.debug(
-            "load_intraday_history(%s, %s): %d bars from Longbridge",
-            stock_code, timeframe, len(df)
+            if df is not None and not df.empty:
+                logger.debug(
+                    "load_intraday_history(%s, %s): %d bars from Futu",
+                    stock_code,
+                    timeframe,
+                    len(df),
+                )
+                return df, "futu"
+    except Exception as exc:
+        logger.warning(
+            "load_intraday_history(%s, %s): Futu failed: %s",
+            stock_code,
+            timeframe,
+            exc,
         )
-        return df, "longbridge"
+    finally:
+        futu_fetcher.close()
 
-    except Exception as e:
-        logger.error(
-            "load_intraday_history(%s, %s) failed: %s",
-            stock_code, timeframe, e
-        )
-        return None, "none"
+    logger.warning(
+        "load_intraday_history(%s, %s): No provider returned data",
+        stock_code,
+        timeframe,
+    )
+    return None, "none"

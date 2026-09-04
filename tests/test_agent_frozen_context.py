@@ -119,11 +119,12 @@ class DesktopBackendPackagingAssetsTestCase(unittest.TestCase):
         strategies_dir = self.repo_root / "strategies"
         strategy_names = sorted(path.stem for path in strategies_dir.glob("*.yaml"))
 
-        self.assertEqual(len(strategy_names), 29)
+        self.assertEqual(len(strategy_names), 31)
         self.assertIn("bottom_volume", strategy_names)
         self.assertIn("chan_theory", strategy_names)
         self.assertIn("intraday_t_trading", strategy_names)
         self.assertIn("ma_golden_cross", strategy_names)
+        self.assertIn("price_action", strategy_names)
         self.assertIn("serenity_research", strategy_names)
         self.assertIn("vcp_breakout_trader", strategy_names)
         self.assertIn("wave_theory", strategy_names)

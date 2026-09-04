@@ -120,42 +120,45 @@ CLI 全部参数见 `main.py:222-358`，重点：
 
 ---
 
-## 四、Skills（策略）清单 — 28 个定义 / 26 个用户可见
+## 四、Skills（策略）清单 — 31 个定义 / 29 个用户可见
 
 YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自动加载 `user_invocable: true` 的技能。目前 `ema5_200_setup` 作为用户可见的 `EMA200回踩` 入口，底层使用 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势逻辑；`vcp_h1_h2_buy` 对应 VCP_H1_H2_BUY 日线指标；`vcp_breakout_trader` 对应 VCP_BREAKOUT_TRADER 日线突破交易员指标；`ema_200_highlow` 和 `nunu_wave` 保留定义和底层能力，但暂不在问股 / 策略选择中展示。
 
-选择规则：`multi_strategy_consensus` 是自带 12 项子策略和严格汇总格式的元 skill，因此与其他专项 skill 互斥。Web 默认勾选它时，改选 Serenity 投研、价值投资等专项框架会自动取消元 skill；反向选择元 skill 会清空已有专项组合。专项 skill 仍可最多组合 3 个，后端会按用户选择顺序生成执行计划、去重汇总必要工具，并要求每个 skill 分别产出结果后再综合。API/旧客户端若同时传入元 skill 与专项 skill，后端保留专项 skill 并丢弃元 skill，避免严格输出格式互相覆盖。元 skill 的 12 项固定总权重为 9.2，最终得分、有效分母、决策和仓位由 `calculate_multi_strategy_score` 确定性计算并在返回前校验；关键证据缺失的策略会从分子、分母同时排除并报告覆盖率。若报告判断第 3 浪候选/启动，则强制附带日期和价位浪型图、替代数浪、确认位、弱化位、硬证伪位及置信度。
+选择规则：`multi_strategy_consensus` 是自带 13 项子策略和严格汇总格式的元 skill，因此与其他专项 skill 互斥。Web 默认勾选它时，改选 Serenity 投研、价值投资等专项框架会自动取消元 skill；反向选择元 skill 会清空已有专项组合。专项 skill 仍可最多组合 3 个，后端会按用户选择顺序生成执行计划、去重汇总必要工具，并要求每个 skill 分别产出结果后再综合。API/旧客户端若同时传入元 skill 与专项 skill，后端保留专项 skill 并丢弃元 skill，避免严格输出格式互相覆盖。元 skill 的 13 项固定总权重为 10.0，最终得分、有效分母、决策和仓位由 `calculate_multi_strategy_score` 确定性计算并在返回前校验；第 13 项价格行为学以权重 0.8 归入结构维度，并展示重要低点、ATR 缓冲止损、强阳 K 与真实日内 VWAP 移动止盈。关键证据缺失的策略会从分子、分母同时排除并报告覆盖率。若报告判断第 3 浪候选/启动，则强制附带日期和价位浪型图、替代数浪、确认位、弱化位、硬证伪位及置信度。
 
 | # | id | 显示名 | 默认优先级 | 类别 | 用途简介 |
 |---|---|---|---|---|---|
 | 1 | `five_dimension_analysis` | 五维分析 | 4 | framework | 基本面、技术面、消息面、情绪面、期权结构五维共振；缺少期权/情绪数据时显式降级 |
-| 2 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：12 项证据分级并确定性计分；三浪候选强制输出浪型图与主备计数（前端默认勾选） |
-| 3 | `bull_trend` | 默认多头趋势 | 10 | trend | 后端 `default_skill_id`：MA5>MA10>MA20 + MACD 金叉，关注 7 条核心交易基线 |
-| 4 | `ma_golden_cross` | 均线金叉 | 20 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
-| 5 | `serenity_research` | Serenity投研 | 24 | framework | 读取公开研报/评级更新并套用 Serenity 买方 memo、增长概率、TAM-Adj-PEG、GF-DMA 和 news-to-financial-statement 交叉验证 |
-| 6 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河三重检验 + 价值选股加分项 + 退出纪律 |
-| 7 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP |
-| 8 | `volume_breakout` | 放量突破 | 30 | trend | 突破 20 日新高 + 量比确认 |
-| 9 | `valuation_model` | 📐 估值模型 | 30 | framework | PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级 |
-| 10 | `fear_greed_sentiment` | 😱 贪恐情绪 | 30 | sentiment | 基于 szdt.tech 贪恐分（-100~100）的逆向情绪分析 |
-| 11 | `ema5_200_setup` | EMA200回踩 | 32 | pattern | 基于 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势信号，输出多/空信号、自适应过伸过滤、ORB 区间和手动防守纪律 |
-| 12 | `ema_200_highlow` | ema_200_highlow | 33 | pattern | 暂隐藏；EMA200 reclaim 后检查 higher low / 双底、结构止损与 1R 空间，输出 0-3 结构等级 |
-| 13 | `vcp_h1_h2_buy` | VCP H1/H2 | 34 | pattern | 基于 VCP_H1_H2_BUY 日线指标，输出 VCP 准备区、枢轴突破、H1/H2 和 BUY 去重判断 |
-| 14 | `vcp_breakout_trader` | VCP突破交易员 | 35 | pattern | 基于 VCP_BREAKOUT_TRADER 最终优化版日线指标，输出 VCP/牛旗准备区、LC、突破 BUY、过度延展、10%风险过滤与结构失败判断 |
-| 15 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
-| 16 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
-| 17 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
-| 18 | `event_driven` | 事件驱动 | 45 | framework | 业绩、政策、并购、订单、产品发布等事件催化评估 |
-| 19 | `box_oscillation` | 箱体震荡 | 50 | framework | 区间震荡：下沿低吸、上沿减仓 |
-| 20 | `growth_quality` | 成长质量 | 55 | framework | 收入利润增长、ROE、现金流和行业空间的成长质量判断 |
-| 21 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
-| 22 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
-| 23 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
-| 24 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别；三浪候选强制输出带日期价位的浪型图、替代计数与证伪条件 |
-| 25 | `nunu_wave` | nunu波浪 | 81 | framework | 暂隐藏；保留级别优先的进阶波浪框架：阶段四问、复杂调整、跨级别楔形、截尾五浪、序列日/共振日、主备计数切换与失效位优先 |
-| 26 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
-| 27 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
-| 28 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
+| 2 | `multi_strategy_consensus` | ⚡ 多策略联合 | 5 | framework | **元 skill**：13 项证据分级并确定性计分，含价格行为学；三浪候选强制输出浪型图与主备计数（前端默认勾选） |
+| 3 | `options_strategy_analysis` | 期权策略分析 | 5 | framework | 真实期权链、报价、IV/OI/Greeks 与组合风险；缺失字段不估算 |
+| 4 | `bull_trend` | 默认多头趋势 | 10 | trend | 后端 `default_skill_id`：MA5>MA10>MA20 + MACD 金叉，关注 7 条核心交易基线 |
+| 5 | `ma_golden_cross` | 均线金叉 | 20 | trend | MA5 上穿 MA10 + 量能放大 / DIF 上穿 DEA |
+| 6 | `serenity_research` | Serenity投研 | 24 | framework | 读取公开研报/评级更新并套用 Serenity 买方 memo、增长概率、TAM-Adj-PEG、GF-DMA 和 news-to-financial-statement 交叉验证 |
+| 7 | `value_investing` | 💎 价值投资 | 25 | framework | 巴菲特式长期视角：PE/PB 历史分位 + 护城河三重检验 + 价值选股加分项 + 退出纪律 |
+| 8 | `quality_compounder` | 🚀 高质量复利 | 28 | framework | Peter Lynch / Terry Smith 风格：ROE 持续性 + 营收 CAGR + 毛利率 + GARP |
+| 9 | `volume_breakout` | 放量突破 | 30 | trend | 突破 20 日新高 + 量比确认 |
+| 10 | `valuation_model` | 📐 估值模型 | 30 | framework | PE/PS 历史分位 + 成长质量 + 产业链景气三因子综合定级 |
+| 11 | `fear_greed_sentiment` | 😱 贪恐情绪 | 30 | sentiment | 基于 szdt.tech 贪恐分（-100~100）的逆向情绪分析 |
+| 12 | `intraday_t_trading` | 日内做T | 31 | pattern | 3m EMA20/50、HH/HL/LH/LL、ATR14 与价差空间判断日内高卖低接 |
+| 13 | `ema5_200_setup` | EMA200回踩 | 32 | pattern | 基于 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势信号，输出多/空信号、自适应过伸过滤、ORB 区间和手动防守纪律 |
+| 14 | `ema_200_highlow` | ema_200_highlow | 33 | pattern | 暂隐藏；EMA200 reclaim 后检查 higher low / 双底、结构止损与 1R 空间，输出 0-3 结构等级 |
+| 15 | `price_action` | 价格行为学 | 33 | pattern | 趋势/区间、HH/HL/LH/LL、重要低点、ATR 缓冲止损、强阳 K 与真实日内 VWAP 移动止盈 |
+| 16 | `vcp_h1_h2_buy` | VCP H1/H2 | 34 | pattern | 基于 VCP_H1_H2_BUY 日线指标，输出 VCP 准备区、枢轴突破、H1/H2 和 BUY 去重判断 |
+| 17 | `vcp_breakout_trader` | VCP突破交易员 | 35 | pattern | 基于 VCP_BREAKOUT_TRADER 最终优化版日线指标，输出 VCP/牛旗准备区、LC、突破 BUY、过度延展、10%风险过滤与结构失败判断 |
+| 18 | `hot_theme` | 热点题材 | 35 | framework | 政策、产业和市场热点强度、扩散阶段与个股相对强弱判断 |
+| 19 | `dividend_growth` | 💵 股息成长 | 35 | income | 股息率 + payout 健康度 + 连续增息年数 + FCF 覆盖 |
+| 20 | `shrink_pullback` | 缩量回踩 | 40 | trend | 回踩 MA5/10 不破 + 缩量企稳 |
+| 21 | `event_driven` | 事件驱动 | 45 | framework | 业绩、政策、并购、订单、产品发布等事件催化评估 |
+| 22 | `box_oscillation` | 箱体震荡 | 50 | framework | 区间震荡：下沿低吸、上沿减仓 |
+| 23 | `growth_quality` | 成长质量 | 55 | framework | 收入利润增长、ROE、现金流和行业空间的成长质量判断 |
+| 24 | `bottom_volume` | 底部放量 | 60 | reversal | 周线底部 + 日线放量 + 长下影 |
+| 25 | `expectation_repricing` | 预期重估 | 65 | framework | 业绩、政策和估值预期变化下的预期差修复或过热风险 |
+| 26 | `chan_theory` | 缠论 | 70 | framework | 中枢 / 背驰 / 三买信号 |
+| 27 | `wave_theory` | 波浪理论 | 80 | framework | 5 浪推进 + ABC 调整识别；三浪候选强制输出带日期价位的浪型图、替代计数与证伪条件 |
+| 28 | `nunu_wave` | nunu波浪 | 81 | framework | 暂隐藏；保留级别优先的进阶波浪框架：阶段四问、复杂调整、跨级别楔形、截尾五浪、序列日/共振日、主备计数切换与失效位优先 |
+| 29 | `dragon_head` | 龙头策略 | 90 | trend | 板块强势 + 个股领涨 |
+| 30 | `emotion_cycle` | 情绪周期 | 100 | framework | 市场情绪冷热周期，逆向布局 |
+| 31 | `one_yang_three_yin` | 一阳夹三阴 | 110 | pattern | K 线形态识别 |
 
 **新增 skill 的最简流程**：
 1. 在 `strategies/` 下加一个 yaml（参考已有 yaml 字段）
@@ -183,7 +186,7 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `get_valuation_percentile` | stock_code, metric?, lookback_years? | PE/PB/PS 历史分位（A 股完整 5 年，美股仅当前值 status='partial'，港股 unavailable）|
 | `get_dcf_valuation` | stock_code, forecast_years? | 轻量 DCF 三情景估值（Bull/Base/Bear），返回内在价值区间与相对现价偏离 |
 
-### 5.2 分析类（`analysis_tools.py` + `value_analysis_tools.py`，9 个）
+### 5.2 分析类（`analysis_tools.py` + `value_analysis_tools.py`，12 个）
 
 | 工具名 | 用途 |
 |---|---|
@@ -191,8 +194,11 @@ YAML 路径：`strategies/*.yaml`，前端通过 `GET /api/v1/agent/skills` 自�
 | `calculate_ma` | 多周期均线计算（MA5/10/20/30/60/120/250）+ 乖离率 |
 | `get_volume_analysis` | 量比、放量/缩量、量价配合/背离 |
 | `analyze_pattern` | K 线 / 图表形态识别：Doji / Hammer / 双底 / 突破 等 |
-| `calculate_multi_strategy_score` | 校验多策略 12 项信号/强度/证据并确定性计算有效分母、综合得分、覆盖率、决策和仓位 |
+| `calculate_multi_strategy_score` | 校验多策略 13 项信号/强度/证据并确定性计算有效分母、综合得分、覆盖率、决策和仓位 |
+| `analyze_price_action` | 价格行为学：趋势/区间、摆动结构、突破/失败突破、重要低点、ATR 保护区、强阳 K 和真实日内 VWAP Bands；分钟线为 Longbridge，失败时降级 Futu OpenD，并返回来源与 as-of 时间 |
+| `analyze_relative_strength` | 将个股与市场默认基准（美股 SPY、港股 HK02800、A 股 510300）按共同交易日对齐，计算 5/20/60 日超额收益；行业基准仅接受显式可信代码，缺失或过期时降级且不猜测 |
 | `analyze_ema200_setup` | EMA200 setup 结构判断：基础 reclaim candidate、HL/双底、SPY_ORB_EMA200_v2 5m ORB + EMA200 顺势信号、结构止损与 1R 空间 |
+| `analyze_intraday_t` | 日内做 T：3m EMA20/50、HH/HL/LH/LL、ATR14 与价差空间的确定性评估 |
 | `analyze_vcp_h1_h2_buy` | VCP_H1_H2_BUY 日线判断：趋势模板、波动/量能收缩、枢轴突破、H1/H2 和 BUY 去重 |
 | `analyze_vcp_breakout_trader` | VCP_BREAKOUT_TRADER 日线判断：VCP/牛旗准备区、higher lows、突破前 Low-Cheat、放量突破、10%风险过滤、过度延展与结构失败 |
 | `run_value_analysis` | 系统化价值投资分析：行业、公司、估值、护城河三重检验、价值选股加分项、退出纪律、逆向投资和定价权综合评估 |

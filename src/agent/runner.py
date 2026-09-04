@@ -264,6 +264,7 @@ def _try_repair_json(text: str, repair_fn: Callable) -> Optional[Dict[str, Any]]
 
 _MULTI_STRATEGY_SCORE_TOOL = "calculate_multi_strategy_score"
 _PRICE_ACTION_TOOL = "analyze_price_action"
+_RELATIVE_STRENGTH_TOOL = "analyze_relative_strength"
 _WAVE_THREE_TERMS = (
     "第3浪候选",
     "第 3 浪候选",
@@ -297,7 +298,7 @@ def _requires_deterministic_multi_strategy_score(messages: List[Dict[str, Any]])
     return any(
         message.get("role") == "system"
         and _MULTI_STRATEGY_SCORE_TOOL in str(message.get("content") or "")
-        and "12 项固定总权重" in str(message.get("content") or "")
+        and "项固定总权重" in str(message.get("content") or "")
         for message in messages
     )
 
@@ -344,6 +345,23 @@ def _latest_price_action_payload(
     return None
 
 
+def _latest_relative_strength_payload(
+    messages: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    for message in reversed(messages):
+        if (
+            message.get("role") != "tool"
+            or message.get("name") != _RELATIVE_STRENGTH_TOOL
+        ):
+            continue
+        try:
+            payload = json.loads(str(message.get("content") or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
 def _markdown_table_cell(value: Any) -> str:
     """Render an untrusted tool value safely inside one Markdown table cell."""
     if value is None:
@@ -379,6 +397,7 @@ def _multi_strategy_score_marker(value: Any) -> str:
 def _render_multi_strategy_score_section(
     payload: Dict[str, Any],
     price_action_payload: Optional[Dict[str, Any]] = None,
+    relative_strength_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Render the authoritative user-facing score block from a valid tool payload."""
     if payload.get("status") != "ok":
@@ -387,6 +406,7 @@ def _render_multi_strategy_score_section(
     evidence = payload.get("evidence")
     if not isinstance(rows, list) or not isinstance(evidence, dict):
         return ""
+    strategy_count = len(rows)
 
     expected_score = _format_multi_strategy_number(payload.get("weighted_score"), decimals=1)
     primary_score = _format_multi_strategy_number(
@@ -395,6 +415,7 @@ def _render_multi_strategy_score_section(
     )
     bias = payload.get("bias") if isinstance(payload.get("bias"), dict) else {}
     actions = payload.get("actions") if isinstance(payload.get("actions"), dict) else {}
+    execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
     confidence = (
         payload.get("confidence") if isinstance(payload.get("confidence"), dict) else {}
     )
@@ -441,6 +462,13 @@ def _render_multi_strategy_score_section(
             _markdown_table_cell(confidence_label),
         ])
         + " |",
+        "",
+        "- 执行门控："
+        + _markdown_table_cell(execution.get("reason") or "未提供")
+        + "；状态 "
+        + _markdown_table_cell(execution.get("status") or "—")
+        + "；盈亏比 "
+        + _format_multi_strategy_number(execution.get("reward_risk_ratio"), decimals=2),
         "",
         "| 空仓动作 | 持仓动作 | 仓位原则 |",
         "|---|---|---|",
@@ -585,6 +613,24 @@ def _render_multi_strategy_score_section(
         structure = price_action_payload.get("structure") if isinstance(price_action_payload.get("structure"), dict) else {}
         levels = price_action_payload.get("levels") if isinstance(price_action_payload.get("levels"), dict) else {}
         second_entry = price_action_payload.get("second_entry") if isinstance(price_action_payload.get("second_entry"), dict) else {}
+        risk_management = price_action_payload.get("risk_management") if isinstance(price_action_payload.get("risk_management"), dict) else {}
+        long_invalidation = risk_management.get("long_invalidation") if isinstance(risk_management.get("long_invalidation"), dict) else {}
+        trend_bar_trailing = risk_management.get("trend_bar_trailing") if isinstance(risk_management.get("trend_bar_trailing"), dict) else {}
+        intraday_vwap = risk_management.get("intraday_vwap") if isinstance(risk_management.get("intraday_vwap"), dict) else {}
+        key_low = (
+            long_invalidation.get("key_low")
+            if isinstance(long_invalidation.get("key_low"), dict)
+            else {}
+        )
+        vwap_source_session = " / ".join(
+            str(value)
+            for value in (
+                intraday_vwap.get("source"),
+                intraday_vwap.get("timeframe"),
+                intraday_vwap.get("as_of") or intraday_vwap.get("session"),
+            )
+            if value not in (None, "")
+        )
         lines.extend([
             "",
             "#### 3.1 价格行为学视角（Brooks-inspired）",
@@ -611,12 +657,133 @@ def _render_multi_strategy_score_section(
             f"前 20 日低点 {_format_multi_strategy_number(levels.get('prior_20d_low'))}",
             f"- 二次入场：{_markdown_table_cell(second_entry.get('label'))}。"
             f"{_markdown_table_cell(second_entry.get('reason'))}",
-            "- 使用边界：突破/失败突破仅为候选，需后续跟随或失败确认；该视角不新增评分项、不改变 12 项权重。",
+            "",
+            "| 风控模块 | 状态 | 数据源 / 时段 | 参考位 | 执行规则 |",
+            "|---|---|---|---:|---|",
+            "| 重要低点 / ATR 止损 | "
+            + _markdown_table_cell(long_invalidation.get("status"))
+            + " | "
+            + _markdown_table_cell(f"日线 / {key_low.get('date') or '—'}")
+            + " | "
+            + _format_multi_strategy_number(key_low.get("price"))
+            + " | "
+            + _markdown_table_cell(long_invalidation.get("rule") or long_invalidation.get("reason"))
+            + " |",
+            "| 强阳 K 移动止盈 | "
+            + _markdown_table_cell(trend_bar_trailing.get("status"))
+            + " | "
+            + _markdown_table_cell(f"日线 / {trend_bar_trailing.get('date') or '—'}")
+            + " | "
+            + _format_multi_strategy_number(trend_bar_trailing.get("close"))
+            + " | "
+            + _markdown_table_cell(trend_bar_trailing.get("rule") or trend_bar_trailing.get("reason"))
+            + " |",
+            "| 日内 VWAP 移动止盈 | "
+            + _markdown_table_cell(intraday_vwap.get("status"))
+            + " | "
+            + _markdown_table_cell(vwap_source_session or "不可用")
+            + " | "
+            + _format_multi_strategy_number(intraday_vwap.get("vwap"))
+            + " | "
+            + _markdown_table_cell(intraday_vwap.get("trigger_rule") or intraday_vwap.get("reason"))
+            + " |",
+            f"- ATR 缓冲保护区：0.5 ATR {_format_multi_strategy_number(long_invalidation.get('buffer_0_5_atr'))}；"
+            f"1.0 ATR {_format_multi_strategy_number(long_invalidation.get('buffer_1_0_atr'))}。",
+            f"- VWAP Bands：+2σ {_format_multi_strategy_number(intraday_vwap.get('upper_2sigma'))}；"
+            f"+3σ {_format_multi_strategy_number(intraday_vwap.get('upper_3sigma'))}。",
+            f"- VWAP 当前状态：价格 {_format_multi_strategy_number(intraday_vwap.get('current_price'))}；"
+            f"位置 {_markdown_table_cell(intraday_vwap.get('price_position'))}；"
+            f"移动止盈候选触发={intraday_vwap.get('trailing_trigger', '—')}。",
+            f"- 使用边界：价格行为学已作为第 {strategy_count} 项进入正式评分；突破、止损和移动止盈仍需按对应周期收盘确认。",
         ])
+
+    if isinstance(relative_strength_payload, dict):
+        benchmark = (
+            relative_strength_payload.get("benchmark")
+            if isinstance(relative_strength_payload.get("benchmark"), dict)
+            else {}
+        )
+        sector_benchmark = (
+            relative_strength_payload.get("sector_benchmark")
+            if isinstance(relative_strength_payload.get("sector_benchmark"), dict)
+            else {}
+        )
+        sources = (
+            relative_strength_payload.get("sources")
+            if isinstance(relative_strength_payload.get("sources"), dict)
+            else {}
+        )
+        lines.extend([
+            "",
+            "#### 3.2 基准 / 板块相对强弱",
+            "",
+            "| 数据状态 | 大盘基准 | 截止日期 | 建议证据等级 | 数据源 |",
+            "|---|---|---|---|---|",
+            "| "
+            + " | ".join([
+                _markdown_table_cell(relative_strength_payload.get("status")),
+                _markdown_table_cell(
+                    f"{benchmark.get('code') or '—'} / {benchmark.get('label') or '—'}"
+                ),
+                _markdown_table_cell(relative_strength_payload.get("as_of")),
+                _markdown_table_cell(
+                    relative_strength_payload.get("recommended_evidence_status")
+                ),
+                _markdown_table_cell(
+                    f"个股={sources.get('stock') or '—'}；"
+                    f"基准={sources.get('benchmark') or '—'}"
+                ),
+            ])
+            + " |",
+            "",
+            "| 比较对象 | 窗口 | 个股收益 | 基准收益 | 超额收益 |",
+            "|---|---|---:|---:|---:|",
+        ])
+        for comparison_label, comparison in (
+            (f"大盘 {benchmark.get('code') or '—'}", benchmark),
+            (f"行业 {sector_benchmark.get('code') or '—'}", sector_benchmark),
+        ):
+            windows = comparison.get("windows")
+            if not isinstance(windows, dict):
+                continue
+            for window in ("5d", "20d", "60d"):
+                values = windows.get(window)
+                if not isinstance(values, dict):
+                    continue
+                lines.append(
+                    "| "
+                    + " | ".join([
+                        _markdown_table_cell(comparison_label),
+                        window,
+                        _format_multi_strategy_number(values.get("stock_return_pct"), decimals=2)
+                        + "%",
+                        _format_multi_strategy_number(
+                            values.get("benchmark_return_pct"), decimals=2
+                        )
+                        + "%",
+                        _format_multi_strategy_number(values.get("excess_return_pct"), decimals=2)
+                        + "%",
+                    ])
+                    + " |"
+                )
+        if sector_benchmark.get("status") in {"missing", "unavailable"}:
+            lines.append(
+                "- 行业基准："
+                + _markdown_table_cell(sector_benchmark.get("reason") or "不可用")
+                + "；龙头策略最多按部分证据评估。"
+            )
+        if relative_strength_payload.get("status") not in {"ok", "partial"}:
+            lines.append(
+                "- 相对强弱数据缺口："
+                + _markdown_table_cell(
+                    relative_strength_payload.get("reason") or "数据不可用"
+                )
+                + "；相关策略必须标记为不可评估。"
+            )
 
     lines.extend([
         "",
-        "#### 4. 12 项策略评分明细",
+        f"#### 4. {strategy_count} 项策略评分明细",
         "",
         "| # | 策略 | 维度 | 信号 | 强度 | 评分 | 权重 | 证据 | 关键依据 |",
         "|---|---|---|---|---|---:|---:|---|---|",
@@ -661,11 +828,11 @@ def _render_multi_strategy_score_section(
         "",
         f"- **五维综合得分：{primary_marker} {primary_score} / 100**（最终方向与决策使用）",
         f"- 五维计算过程：{dimension_numerator} / {dimension_weight} = {primary_score}",
-        f"- **12 项原始加权综合得分：{_multi_strategy_score_marker(payload.get('weighted_score'))} {expected_score} / 100**（保留用于逐项审计）",
-        f"- 12 项计算过程：{numerator} / {included_weight} = {expected_score}",
+        f"- **{strategy_count} 项原始加权综合得分：{_multi_strategy_score_marker(payload.get('weighted_score'))} {expected_score} / 100**（保留用于逐项审计）",
+        f"- {strategy_count} 项计算过程：{numerator} / {included_weight} = {expected_score}",
         f"- 决策：{decision_display}",
         f"- 仓位建议：{_markdown_table_cell(payload.get('position_guidance'))}",
-        "- 评分性质：最终方向使用五维综合得分，12 项原始加权分仅作审计；两者都不是收益概率。部分证据按 0.5 质量系数折算并用于限制决策强度。",
+        f"- 评分性质：最终方向使用五维综合得分，{strategy_count} 项原始加权分仅作审计；两者都不是收益概率。部分证据按 0.5 质量系数折算并用于限制决策强度。",
     ])
     if payload.get("instrument_type") == "leveraged_etf":
         lines.append("- 杠杆 ETF 风险：日内复位、波动损耗、隔夜跳空。")
@@ -676,11 +843,16 @@ def _append_multi_strategy_score_section(
     content: str,
     payload: Optional[Dict[str, Any]],
     price_action_payload: Optional[Dict[str, Any]] = None,
+    relative_strength_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Replace model-authored blocks and place authoritative evidence before narrative."""
     if not isinstance(payload, dict):
         return content
-    section = _render_multi_strategy_score_section(payload, price_action_payload)
+    section = _render_multi_strategy_score_section(
+        payload,
+        price_action_payload,
+        relative_strength_payload,
+    )
     if not section:
         return content
     start_marker = "<!-- multi-strategy-score:start -->"
@@ -767,12 +939,12 @@ def _validate_multi_strategy_final_answer(
         issue = "未调用 calculate_multi_strategy_score，或工具结果无法解析"
         return False, issue, (
             "[系统校验] 多策略联合报告不能直接输出。请先调用 "
-            "calculate_multi_strategy_score；工具返回 invalid 时修正全部 12 项并重试。"
+            "calculate_multi_strategy_score；工具返回 invalid 时修正全部策略项并重试。"
         )
     if payload.get("status") != "ok":
         issue = f"评分工具未通过校验：{payload.get('issues') or payload.get('error')}"
         return False, issue, (
-            "[系统校验] 确定性评分工具返回 invalid。请按工具给出的 issues 修正 12 项，"
+            "[系统校验] 确定性评分工具返回 invalid。请按工具给出的 issues 修正全部策略项，"
             "重新调用 calculate_multi_strategy_score 后再输出报告。"
         )
 
@@ -798,6 +970,7 @@ def _validate_multi_strategy_final_answer(
     if expected_position and expected_position not in content:
         missing.append(f"仓位建议 {expected_position}")
     rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    strategy_count = len(rows)
     absent_strategy_names = [
         str(row.get("display_name") or "")
         for row in rows
@@ -806,7 +979,9 @@ def _validate_multi_strategy_final_answer(
         and str(row["display_name"]) not in content
     ]
     if absent_strategy_names:
-        missing.append("12项策略行（缺：" + "、".join(absent_strategy_names) + "）")
+        missing.append(
+            f"{strategy_count}项策略行（缺：" + "、".join(absent_strategy_names) + "）"
+        )
     evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
     evidence_expectations = (
         ("完整", evidence.get("complete_count")),
@@ -1280,12 +1455,13 @@ def run_agent_loop(
                     continue
 
             if require_multi_strategy_score and not is_error:
-                score_payload = _latest_multi_strategy_score_payload(
-                    messages[initial_message_count:]
-                )
+                turn_messages = messages[initial_message_count:]
+                score_payload = _latest_multi_strategy_score_payload(turn_messages)
                 final_content = _append_multi_strategy_score_section(
                     final_content,
                     score_payload,
+                    _latest_price_action_payload(turn_messages),
+                    _latest_relative_strength_payload(turn_messages),
                 )
                 score_ok, score_issue, retry_message = _validate_multi_strategy_final_answer(
                     final_content,

@@ -403,6 +403,7 @@ const ChatPage: React.FC = () => {
   const watchlistMessageTimerRef = useRef<number | null>(null);
   const copyResetTimerRef = useRef<Partial<Record<string, number>>>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const lastSubmittedInputRef = useRef<string | null>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
@@ -815,7 +816,10 @@ const ChatPage: React.FC = () => {
     const textarea = inputRef.current;
     if (!textarea || manualInputHeightRef.current !== null) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, INPUT_AUTO_GROW_MAX_HEIGHT)}px`;
+    textarea.style.height = `${Math.max(
+      INPUT_MIN_HEIGHT,
+      Math.min(textarea.scrollHeight, INPUT_AUTO_GROW_MAX_HEIGHT),
+    )}px`;
   }, []);
 
   const getInputManualMaxHeight = useCallback(() => (
@@ -1011,6 +1015,7 @@ const ChatPage: React.FC = () => {
     ) => {
       const msgText = (overrideMessage ?? input).trim();
       if (!msgText || loading || !agentAvailable || !agentStatus) return;
+      lastSubmittedInputRef.current = msgText;
       if (overrideMessage !== undefined) {
         setInput(msgText);
       }
@@ -1066,15 +1071,33 @@ const ChatPage: React.FC = () => {
             setActiveStockCode(nextActiveStockContext.stock_code);
           }
           setInput('');
+          resetInputHeightToAuto();
           setMobileSkillPickerOpen(false);
           requestScrollToBottom('smooth');
         },
       });
     },
-    [activeStockContext, agentAvailable, agentStatus, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, selectedSkillIds, sessionId, sessionSelectedSkillIds, startStream, stockIndex],
+    [activeStockContext, agentAvailable, agentStatus, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, resetInputHeightToAuto, selectedSkillIds, sessionId, sessionSelectedSkillIds, startStream, stockIndex],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      e.key === 'ArrowUp'
+      && !e.nativeEvent.isComposing
+      && !input.trim()
+      && lastSubmittedInputRef.current
+    ) {
+      e.preventDefault();
+      setInput(lastSubmittedInputRef.current);
+      window.requestAnimationFrame(() => {
+        const textarea = inputRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        resizeInputToContent();
+      });
+      return;
+    }
     if (
       e.key === 'Enter'
       && !e.shiftKey
@@ -2041,7 +2064,7 @@ const ChatPage: React.FC = () => {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="例如：分析 600519 / 茅台现在适合买入吗？ (Enter 发送, Shift+Enter 换行)"
+                    placeholder="例如：分析 600519 / 茅台现在适合买入吗？ (Enter 发送, Shift+Enter 换行, ↑ 回填上次输入)"
                     rows={1}
                     className="input-surface input-focus-glow block min-h-[44px] w-full resize-none overflow-y-auto rounded-xl border bg-transparent px-4 py-2.5 text-sm transition-[border-color,box-shadow] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                     style={{

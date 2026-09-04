@@ -4,12 +4,13 @@ Analysis tools — wraps StockTrendAnalyzer as an agent-callable tool.
 
 Tools:
 - analyze_trend: comprehensive technical trend analysis
-- calculate_multi_strategy_score: deterministic 12-strategy evidence and score validation
+- calculate_multi_strategy_score: deterministic 13-strategy evidence and score validation
 """
 
 import json
 import logging
 import math
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
 
@@ -44,6 +45,7 @@ MULTI_STRATEGY_SCORE_SPECS = (
     ("emotion_cycle", "情绪周期", Decimal("0.6")),
     ("one_yang_three_yin", "一阳夹三阴", Decimal("0.6")),
     ("fear_greed_sentiment", "贪恐情绪极值", Decimal("0.5")),
+    ("price_action", "价格行为学", Decimal("0.8")),
 )
 
 MULTI_STRATEGY_DIMENSIONS = {
@@ -56,6 +58,7 @@ MULTI_STRATEGY_DIMENSIONS = {
     "wave_theory": "结构",
     "box_oscillation": "结构",
     "one_yang_three_yin": "结构",
+    "price_action": "结构",
     "emotion_cycle": "情绪",
     "fear_greed_sentiment": "情绪",
     "dragon_head": "相对强弱",
@@ -441,6 +444,86 @@ def _normalize_multi_strategy_market_structure(raw_structure: Any) -> dict:
     }
 
 
+def _multi_strategy_execution_gate(market_structure: dict) -> dict:
+    """Keep direction evidence separate from whether a new trade is executable now."""
+    current = market_structure.get("current_price")
+    invalidation = market_structure.get("invalidation_level")
+    resistance = market_structure.get("nearest_resistance")
+    location = market_structure.get("price_location")
+    if not isinstance(current, (int, float)) or current <= 0:
+        return {
+            "status": "unavailable",
+            "new_position_action": None,
+            "has_position_action": None,
+            "reason": "缺少当前价格，无法评估执行条件",
+        }
+    if isinstance(invalidation, (int, float)) and current <= invalidation:
+        return {
+            "status": "blocked",
+            "new_position_action": "avoid",
+            "has_position_action": "sell",
+            "reason": "当前价格已跌破硬失效位，原多头交易计划失效",
+            "invalidation_level": invalidation,
+        }
+
+    risk = (
+        current - invalidation
+        if isinstance(invalidation, (int, float)) and current > invalidation
+        else None
+    )
+    reward = (
+        resistance - current
+        if isinstance(resistance, (int, float))
+        else None
+    )
+    reward_risk = reward / risk if risk and risk > 0 and reward is not None else None
+    if location == "near_resistance" or (reward is not None and reward <= 0):
+        return {
+            "status": "wait",
+            "new_position_action": "watch",
+            "has_position_action": None,
+            "reason": "价格接近或已触及近端阻力，等待有效突破或回踩确认",
+            "reward_risk_ratio": round(reward_risk, 2) if reward_risk is not None else None,
+        }
+    if reward_risk is not None and reward_risk < 1.5:
+        return {
+            "status": "wait",
+            "new_position_action": "watch",
+            "has_position_action": None,
+            "reason": "到近端阻力的预期收益不足以覆盖至硬失效位的风险（盈亏比低于 1.5）",
+            "reward_risk_ratio": round(reward_risk, 2),
+        }
+    if risk is None or reward is None:
+        return {
+            "status": "partial",
+            "new_position_action": None,
+            "has_position_action": None,
+            "reason": "缺少硬失效位或近端阻力，无法计算当前交易的盈亏比",
+        }
+    return {
+        "status": "ready",
+        "new_position_action": None,
+        "has_position_action": None,
+        "reason": "当前价格、硬失效位与近端阻力支持计算执行盈亏比",
+        "reward_risk_ratio": round(reward_risk, 2),
+    }
+
+
+def _apply_multi_strategy_execution_gate(actions: dict[str, str], execution: dict) -> dict[str, str]:
+    """Override actions only when structure makes the direction non-executable."""
+    adjusted = dict(actions)
+    if execution.get("new_position_action") == "avoid":
+        adjusted["no_position"] = "avoid"
+        adjusted["no_position_label"] = "当前结构失效，回避并等待重建"
+    elif execution.get("new_position_action") == "watch":
+        adjusted["no_position"] = "watch"
+        adjusted["no_position_label"] = "等待突破/回踩确认，当前不追入"
+    if execution.get("has_position_action") == "sell":
+        adjusted["has_position"] = "sell"
+        adjusted["has_position_label"] = "已跌破硬失效位，按计划退出"
+    return adjusted
+
+
 def _multi_strategy_decision(score: Decimal, *, leveraged: bool) -> tuple[str, str]:
     """Map a deterministic score to a decision and risk-aware position guide."""
     if score >= Decimal("75"):
@@ -475,7 +558,7 @@ def _handle_calculate_multi_strategy_score(
     instrument_type: str = "standard",
     market_structure_json: Optional[str] = None,
 ) -> dict:
-    """Validate 12 strategy rows and calculate their weighted score deterministically."""
+    """Validate 13 strategy rows and calculate their weighted score deterministically."""
     try:
         raw_scores: Any = json.loads(scores_json) if isinstance(scores_json, str) else scores_json
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -523,7 +606,7 @@ def _handle_calculate_multi_strategy_score(
     if missing_ids:
         issues.append(f"missing strategies: {', '.join(missing_ids)}")
     if len(raw_scores) != len(expected_ids):
-        issues.append(f"expected 12 rows, received {len(raw_scores)}")
+        issues.append(f"expected {len(expected_ids)} rows, received {len(raw_scores)}")
 
     normalized_rows: list[dict] = []
     weighted_numerator = Decimal("0")
@@ -715,13 +798,25 @@ def _handle_calculate_multi_strategy_score(
                 f"至少需要 {_MULTI_STRATEGY_MIN_DIMENSION_COUNT} 维"
             ),
         })
+    if conflict_level == "high":
+        decision_blockers.append({
+            "code": "high_dimension_conflict",
+            "message": "五维方向存在高冲突，禁止输出强方向交易结论",
+        })
     if decision_blockers:
-        decision = "证据不足（观望）"
-        position_guidance = "不新增仓位，补齐证据后重评"
+        if any(
+            blocker.get("code") == "high_dimension_conflict"
+            for blocker in decision_blockers
+        ):
+            decision = "证据冲突（观望）"
+            position_guidance = "不新增仓位，等待冲突维度收敛后重评"
+        else:
+            decision = "证据不足（观望）"
+            position_guidance = "不新增仓位，补齐证据后重评"
 
     if decision_blockers:
         confidence_level = "insufficient"
-        confidence_label = "证据不足"
+        confidence_label = "证据冲突" if conflict_level == "high" else "证据不足"
     elif quality_coverage >= Decimal("85.0") and conflict_level in {"none", "low"}:
         confidence_level = "high"
         confidence_label = "高"
@@ -762,7 +857,11 @@ def _handle_calculate_multi_strategy_score(
         key=lambda item: float(item["score"]),
     )[:3]
     bias_code, bias_label = _multi_strategy_bias(dimension_weighted_score)
-    actions = _multi_strategy_actions(decision)
+    execution = _multi_strategy_execution_gate(market_structure)
+    actions = _apply_multi_strategy_execution_gate(
+        _multi_strategy_actions(decision),
+        execution,
+    )
 
     return {
         "status": "ok",
@@ -786,6 +885,7 @@ def _handle_calculate_multi_strategy_score(
         },
         "decision": decision,
         "actions": actions,
+        "execution": execution,
         "position_guidance": position_guidance,
         "confidence": {
             "level": confidence_level,
@@ -820,7 +920,7 @@ def _handle_calculate_multi_strategy_score(
 calculate_multi_strategy_score_tool = ToolDefinition(
     name="calculate_multi_strategy_score",
     description=(
-        "Validate all 12 multi-strategy rows and calculate the weighted score, evidence coverage, "
+        "Validate all 13 multi-strategy rows and calculate the weighted score, evidence coverage, "
         "quality-adjusted decision gate, five-dimension summaries, separate flat/holding actions, "
         "and risk-aware position guidance deterministically. Pass scores_json as a JSON array in "
         "canonical strategy order; each row needs strategy, signal, strength, score, "
@@ -834,7 +934,7 @@ calculate_multi_strategy_score_tool = ToolDefinition(
             name="scores_json",
             type="string",
             description=(
-                "JSON array of exactly 12 rows. Example row: "
+                "JSON array of exactly 13 rows. Example row: "
                 "{\"strategy\":\"bull_trend\",\"signal\":\"买入\",\"strength\":\"中\","
                 "\"score\":72,\"evidence_status\":\"complete\",\"reason\":\"MA5>MA10\"}."
             ),
@@ -1368,7 +1468,163 @@ analyze_pattern_tool = ToolDefinition(
 )
 
 
-def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
+def _price_action_bar_date(df: Any, index: int) -> Optional[str]:
+    """Return a stable date/time label without assuming one provider schema."""
+    for column in ("date", "datetime", "time", "timestamp"):
+        if column not in df.columns:
+            continue
+        value = df.iloc[index][column]
+        if value is None:
+            continue
+        rendered = str(value)
+        if rendered and rendered.lower() not in {"nan", "nat", "none"}:
+            return rendered
+    return None
+
+
+def _calculate_price_action_vwap(stock_code: str, timeframe: str = "15m") -> dict:
+    """Calculate provider-backed latest-session VWAP and bands, or expose the gap."""
+    try:
+        from src.services.intraday_history_loader import load_intraday_history
+
+        intraday_df, source = load_intraday_history(
+            stock_code,
+            timeframe=timeframe,
+            bars=160,
+        )
+    except Exception as exc:
+        logger.warning("Price action VWAP load failed for %s: %s", stock_code, exc)
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "reason": str(exc),
+        }
+
+    if intraday_df is None or intraday_df.empty:
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "source": source,
+            "reason": "未取得日内 K 线，不能计算真实 VWAP。",
+        }
+
+    required = {"high", "low", "close", "volume"}
+    missing = sorted(required - set(intraday_df.columns))
+    if missing:
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "source": source,
+            "reason": "日内数据缺少 VWAP 必需字段。",
+            "missing_columns": missing,
+        }
+
+    session_df = intraday_df.copy().reset_index(drop=True)
+    time_column = next(
+        (column for column in ("date", "datetime", "time", "timestamp") if column in session_df.columns),
+        None,
+    )
+    if not time_column:
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "source": source,
+            "reason": "日内数据缺少交易时间，不能隔离单一交易日计算 VWAP。",
+        }
+
+    session_keys = session_df[time_column].map(lambda value: str(value)[:10])
+    latest_session = str(session_keys.iloc[-1])
+    try:
+        session_age_days = (date.today() - date.fromisoformat(latest_session)).days
+    except ValueError:
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "source": source,
+            "reason": "日内数据交易日期无法解析，不能验证 VWAP 新鲜度。",
+        }
+    if session_age_days < 0 or session_age_days > 7:
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "source": source,
+            "session": latest_session,
+            "session_age_days": session_age_days,
+            "reason": "日内数据交易日已过期或异常，不能用于当前 VWAP。",
+        }
+    session_df = session_df.loc[session_keys == latest_session].reset_index(drop=True)
+    as_of = str(session_df.iloc[-1][time_column])
+
+    try:
+        highs = [float(value) for value in session_df["high"]]
+        lows = [float(value) for value in session_df["low"]]
+        closes = [float(value) for value in session_df["close"]]
+        volumes = [float(value) for value in session_df["volume"]]
+    except (TypeError, ValueError):
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "source": source,
+            "reason": "日内 OHLCV 包含非数值字段。",
+        }
+
+    valid_rows = [
+        ((high + low + close) / 3, volume)
+        for high, low, close, volume in zip(highs, lows, closes, volumes)
+        if all(math.isfinite(value) for value in (high, low, close, volume)) and volume > 0
+    ]
+    total_volume = sum(volume for _, volume in valid_rows)
+    if len(valid_rows) < 5 or total_volume <= 0:
+        return {
+            "status": "unavailable",
+            "available": False,
+            "timeframe": timeframe,
+            "source": source,
+            "session": latest_session,
+            "as_of": as_of,
+            "bars": len(valid_rows),
+            "reason": "最新交易时段有效量价样本不足，不能计算 VWAP。",
+        }
+
+    vwap = sum(price * volume for price, volume in valid_rows) / total_volume
+    variance = sum(
+        volume * ((price - vwap) ** 2) for price, volume in valid_rows
+    ) / total_volume
+    sigma = math.sqrt(max(variance, 0.0))
+    current_price = closes[-1]
+    return {
+        "status": "ok",
+        "available": True,
+        "timeframe": timeframe,
+        "source": source,
+        "session": latest_session,
+        "as_of": as_of,
+        "session_age_days": session_age_days,
+        "bars": len(valid_rows),
+        "vwap": round(vwap, 4),
+        "sigma": round(sigma, 4),
+        "upper_2sigma": round(vwap + 2 * sigma, 4),
+        "upper_3sigma": round(vwap + 3 * sigma, 4),
+        "lower_2sigma": round(vwap - 2 * sigma, 4),
+        "current_price": round(current_price, 4),
+        "price_position": "above_vwap" if current_price >= vwap else "below_vwap",
+        "trailing_trigger": current_price < vwap,
+        "trigger_rule": f"{timeframe} K 线收盘跌破当日 VWAP 才视为移动止盈候选。",
+    }
+
+
+def _handle_analyze_price_action(
+    stock_code: str,
+    days: int = 120,
+    intraday_timeframe: str = "15m",
+) -> dict:
     """Extract a conservative, Brooks-inspired price-action context from daily bars.
 
     This is a deterministic evidence helper, not a claim that a discretionary
@@ -1379,6 +1635,14 @@ def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
 
     if not (stock_code and str(stock_code).strip()):
         return {"status": "error", "code": "missing_stock_code"}
+
+    normalized_intraday_timeframe = str(intraday_timeframe or "15m").strip()
+    if normalized_intraday_timeframe not in {"5m", "15m"}:
+        return {
+            "status": "error",
+            "code": "invalid_intraday_timeframe",
+            "reason": "intraday_timeframe must be 5m or 15m",
+        }
 
     try:
         requested_days = min(max(int(days or 120), 60), 365)
@@ -1437,11 +1701,26 @@ def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
     range_pct = (recent_high - recent_low) / current * 100 if current else 0.0
     slope_pct = (closes[-1] - closes[-21]) / closes[-21] * 100 if closes[-21] else 0.0
 
-    # Use five-bar pivots as a compact, reproducible proxy for swing structure.
-    pivot_highs = [highs[i] for i in range(2, len(highs) - 2)
-                   if highs[i] >= max(highs[i - 2:i + 3])]
-    pivot_lows = [lows[i] for i in range(2, len(lows) - 2)
-                  if lows[i] <= min(lows[i - 2:i + 3])]
+    true_ranges = [highs[0] - lows[0]]
+    for index in range(1, len(closes)):
+        true_ranges.append(max(
+            highs[index] - lows[index],
+            abs(highs[index] - closes[index - 1]),
+            abs(lows[index] - closes[index - 1]),
+        ))
+    atr14 = sum(true_ranges[-14:]) / min(len(true_ranges), 14)
+
+    # Use confirmed five-bar pivots as a reproducible proxy for swing structure.
+    pivot_high_indices = [
+        i for i in range(2, len(highs) - 2)
+        if highs[i] >= max(highs[i - 2:i + 3])
+    ]
+    pivot_low_indices = [
+        i for i in range(2, len(lows) - 2)
+        if lows[i] <= min(lows[i - 2:i + 3])
+    ]
+    pivot_highs = [highs[i] for i in pivot_high_indices]
+    pivot_lows = [lows[i] for i in pivot_low_indices]
     recent_pivot_highs = pivot_highs[-4:]
     recent_pivot_lows = pivot_lows[-4:]
     higher_highs = len(recent_pivot_highs) >= 2 and recent_pivot_highs[-1] > recent_pivot_highs[-2]
@@ -1503,6 +1782,127 @@ def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
         signal_label = "区间内/未形成突破候选"
         signal_reason = "当前收盘仍在前 20 个交易日高低点之间。"
 
+    important_low_candidates: list[dict] = []
+    if pivot_low_indices:
+        pivot_index = pivot_low_indices[-1]
+        prior_swing_high = max(highs[max(0, pivot_index - 20):pivot_index], default=None)
+        subsequent_high = max(highs[pivot_index + 1:], default=None)
+        created_higher_high = bool(
+            prior_swing_high is not None
+            and subsequent_high is not None
+            and subsequent_high > prior_swing_high
+        )
+        important_low_candidates.append({
+            "type": "structural_swing_low",
+            "label": "结构性低点",
+            "index": pivot_index,
+            "date": _price_action_bar_date(df, pivot_index),
+            "price": round(lows[pivot_index], 4),
+            "created_higher_high": created_higher_high,
+            "confirmed": created_higher_high,
+        })
+
+    strong_bull_indices = []
+    for index in range(max(0, len(closes) - 20), len(closes)):
+        bar_range = highs[index] - lows[index]
+        if bar_range <= 0:
+            continue
+        bar_body_ratio = abs(closes[index] - opens[index]) / bar_range
+        bar_close_position = (closes[index] - lows[index]) / bar_range
+        if (
+            closes[index] > opens[index]
+            and bar_body_ratio >= 0.6
+            and bar_close_position >= 0.75
+            and bar_range >= atr14 * 1.2
+        ):
+            strong_bull_indices.append(index)
+    if strong_bull_indices:
+        impulse_index = strong_bull_indices[-1]
+        important_low_candidates.append({
+            "type": "impulse_origin",
+            "label": "强势突破起点",
+            "index": impulse_index,
+            "date": _price_action_bar_date(df, impulse_index),
+            "price": round(lows[impulse_index], 4),
+            "confirmed": True,
+        })
+
+    sweep_indices = []
+    for index in range(max(10, len(closes) - 20), len(closes)):
+        prior_support = min(lows[max(0, index - 10):index])
+        bar_range = highs[index] - lows[index]
+        if lows[index] < prior_support and closes[index] > prior_support and bar_range > 0:
+            lower_wick = min(opens[index], closes[index]) - lows[index]
+            if lower_wick / bar_range >= 0.35:
+                sweep_indices.append(index)
+    if sweep_indices:
+        sweep_index = sweep_indices[-1]
+        important_low_candidates.append({
+            "type": "liquidity_sweep_low",
+            "label": "流动性扫单低点",
+            "index": sweep_index,
+            "date": _price_action_bar_date(df, sweep_index),
+            "price": round(lows[sweep_index], 4),
+            "confirmed": True,
+        })
+
+    selected_low = max(
+        [candidate for candidate in important_low_candidates if candidate.get("confirmed")],
+        key=lambda item: int(item["index"]),
+        default=None,
+    )
+    if selected_low:
+        key_low_price = float(selected_low["price"])
+        stop_buffer_half_atr = key_low_price - atr14 * 0.5
+        stop_buffer_one_atr = key_low_price - atr14
+        long_invalidation = {
+            "status": "available",
+            "key_low": {
+                key: value for key, value in selected_low.items() if key != "index"
+            },
+            "atr14": round(atr14, 4),
+            "buffer_0_5_atr": round(stop_buffer_half_atr, 4),
+            "buffer_1_0_atr": round(stop_buffer_one_atr, 4),
+            "rule": "做多结构收盘有效跌破关键低点即失效；实际保护位可按风险预算放在低点下方 0.5-1.0 ATR。",
+        }
+    else:
+        long_invalidation = {
+            "status": "partial",
+            "atr14": round(atr14, 4),
+            "reason": "未识别到已确认的重要低点，不能给出结构化保护位。",
+        }
+
+    if strong_bull_indices:
+        trend_bar_index = strong_bull_indices[-1]
+        trend_bar_close = closes[trend_bar_index]
+        trend_bar_open = opens[trend_bar_index]
+        trend_bar_low = lows[trend_bar_index]
+        trend_bar_trailing = {
+            "status": "available",
+            "date": _price_action_bar_date(df, trend_bar_index),
+            "close": round(trend_bar_close, 4),
+            "body_midpoint": round((trend_bar_open + trend_bar_close) / 2, 4),
+            "open": round(trend_bar_open, 4),
+            "low": round(trend_bar_low, 4),
+            "close_below_reference": current < trend_bar_close,
+            "rule": "后续 K 线收盘跌破关键强阳 K 收盘价为激进移动止盈候选；实体中点、开盘价或最低价依次提供更宽容的保护。",
+        }
+    else:
+        trend_bar_trailing = {
+            "status": "unavailable",
+            "reason": "近 20 日未识别到实体、收盘位置和波幅同时满足条件的强阳趋势 K。",
+        }
+
+    intraday_vwap = _calculate_price_action_vwap(
+        stock_code,
+        timeframe=normalized_intraday_timeframe,
+    )
+    data_gaps = []
+    if intraday_vwap.get("status") != "ok":
+        data_gaps.append("日内 VWAP 不可用，不能使用 VWAP 或 VWAP Bands 作为移动止盈依据。")
+    if long_invalidation.get("status") != "available":
+        data_gaps.append("重要低点未确认，结构止损只能标记为部分证据。")
+
     return {
         "status": "ok",
         "code": stock_code,
@@ -1533,6 +1933,7 @@ def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
         "levels": {
             "current_price": round(current, 4),
             "ma20": round(ma20, 4),
+            "atr14": round(atr14, 4),
             "prior_20d_high": round(prior_high, 4),
             "prior_20d_low": round(prior_low, 4),
             "recent_range_high": round(recent_high, 4),
@@ -1543,9 +1944,28 @@ def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
             "label": "二次入场需逐根 K 线确认",
             "reason": "本工具不凭单次形态确认 Brooks 二次入场；需要后续信号 K、入场 K 与失效位。",
         },
+        "risk_management": {
+            "important_low_candidates": [
+                {key: value for key, value in candidate.items() if key != "index"}
+                for candidate in important_low_candidates
+            ],
+            "long_invalidation": long_invalidation,
+            "trend_bar_trailing": trend_bar_trailing,
+            "intraday_vwap": intraday_vwap,
+            "trailing_mode": (
+                "trend_bar_close"
+                if trend_bar_trailing.get("status") == "available"
+                and signal_type in {"bull_breakout_candidate", "failed_bear_breakdown_candidate"}
+                else "vwap"
+                if intraday_vwap.get("status") == "ok" and context_state == "bull_trend"
+                else "structure_only"
+            ),
+        },
+        "data_gaps": data_gaps,
         "limitations": [
             "这是 Brooks-inspired 的确定性候选识别，不是官方课程认证或收益概率。",
             "突破/失败突破需要后续跟随或失败确认，不能仅凭一根 K 线追单。",
+            "VWAP 仅在取得 5m/15m 日内 OHLCV 后计算；缺失时不会用日线均价替代。",
             "未使用盘中逐笔、订单流或主观图表标注；样本不足时应降低证据等级。",
         ],
     }
@@ -1554,9 +1974,10 @@ def _handle_analyze_price_action(stock_code: str, days: int = 120) -> dict:
 analyze_price_action_tool = ToolDefinition(
     name="analyze_price_action",
     description=(
-        "Analyze daily price action using a conservative Brooks-inspired lens: "
-        "trend versus trading range, swing structure, breakout/failure candidates, "
-        "signal-bar context, and explicit second-entry limitations."
+        "Analyze price action using a conservative Brooks-inspired lens: trend versus "
+        "trading range, swing structure, breakout/failure candidates, key-low invalidation "
+        "with ATR buffers, strong-bull-bar trailing references, provider-backed intraday "
+        "VWAP bands, and explicit second-entry limitations."
     ),
     parameters=[
         ToolParameter(
@@ -1571,8 +1992,290 @@ analyze_price_action_tool = ToolDefinition(
             required=False,
             default=120,
         ),
+        ToolParameter(
+            name="intraday_timeframe",
+            type="string",
+            description="Intraday timeframe for provider-backed VWAP: 5m or 15m (default: 15m).",
+            required=False,
+            default="15m",
+            enum=["5m", "15m"],
+        ),
     ],
     handler=_handle_analyze_price_action,
+    category="analysis",
+    policy=_ANALYSIS_READ_POLICY,
+)
+
+
+def _default_relative_strength_benchmark(stock_code: str) -> tuple[str, str]:
+    """Choose a liquid broad-market proxy without relying on model inference."""
+    normalized = str(stock_code or "").strip().upper()
+    if (
+        normalized.startswith("HK")
+        or normalized.endswith(".HK")
+        or (normalized.isdigit() and 1 <= len(normalized) <= 5)
+    ):
+        return "HK02800", "盈富基金（恒生指数代理）"
+    if (
+        normalized.startswith(("SH", "SZ", "BJ"))
+        or normalized.endswith((".SH", ".SZ", ".BJ"))
+        or (normalized.isdigit() and len(normalized) == 6)
+    ):
+        return "510300", "沪深300ETF（A股大盘代理）"
+    return "SPY", "SPDR S&P 500 ETF（美股大盘代理）"
+
+
+def _relative_strength_pair(stock_df: Any, benchmark_df: Any) -> dict:
+    """Align two daily-close series and calculate matched-window excess returns."""
+    import pandas as pd
+
+    required = {"date", "close"}
+    if stock_df is None or benchmark_df is None:
+        return {"status": "unavailable", "reason": "个股或基准日线为空"}
+    if required - set(stock_df.columns) or required - set(benchmark_df.columns):
+        return {"status": "unavailable", "reason": "个股或基准日线缺少 date/close 字段"}
+
+    def close_series(frame: Any, name: str):
+        work = frame[["date", "close"]].copy()
+        work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
+        work[name] = pd.to_numeric(work["close"], errors="coerce")
+        work = work.dropna(subset=["date", name])
+        work = work.loc[work[name] > 0]
+        work = work.drop_duplicates(subset=["date"], keep="last")
+        return work.set_index("date")[name].sort_index()
+
+    stock_close = close_series(stock_df, "stock_close")
+    benchmark_close = close_series(benchmark_df, "benchmark_close")
+    aligned = pd.concat([stock_close, benchmark_close], axis=1, join="inner").dropna()
+    if len(aligned) < 6:
+        return {
+            "status": "unavailable",
+            "common_sessions": len(aligned),
+            "reason": "个股与基准共同交易日不足 6 个",
+        }
+
+    windows = {}
+    for window in (5, 20, 60):
+        if len(aligned) < window + 1:
+            continue
+        stock_return = (
+            float(aligned["stock_close"].iloc[-1])
+            / float(aligned["stock_close"].iloc[-window - 1])
+            - 1
+        ) * 100
+        benchmark_return = (
+            float(aligned["benchmark_close"].iloc[-1])
+            / float(aligned["benchmark_close"].iloc[-window - 1])
+            - 1
+        ) * 100
+        windows[f"{window}d"] = {
+            "stock_return_pct": round(stock_return, 2),
+            "benchmark_return_pct": round(benchmark_return, 2),
+            "excess_return_pct": round(stock_return - benchmark_return, 2),
+        }
+
+    if not windows:
+        return {
+            "status": "unavailable",
+            "common_sessions": len(aligned),
+            "reason": "没有足够共同交易日计算相对强弱窗口",
+        }
+
+    excess_values = [item["excess_return_pct"] for item in windows.values()]
+    if all(value > 0 for value in excess_values):
+        direction = "outperforming"
+        direction_label = "持续跑赢基准"
+    elif all(value < 0 for value in excess_values):
+        direction = "underperforming"
+        direction_label = "持续跑输基准"
+    else:
+        direction = "mixed"
+        direction_label = "相对强弱分化"
+
+    return {
+        "status": "complete" if "60d" in windows else "partial",
+        "common_sessions": len(aligned),
+        "first_common_date": aligned.index[0].date().isoformat(),
+        "latest_common_date": aligned.index[-1].date().isoformat(),
+        "windows": windows,
+        "direction": direction,
+        "direction_label": direction_label,
+    }
+
+
+def _handle_analyze_relative_strength(
+    stock_code: str,
+    benchmark_code: Optional[str] = None,
+    sector_benchmark_code: Optional[str] = None,
+    days: int = 120,
+) -> dict:
+    """Compare matched-session stock returns with broad and optional sector proxies."""
+    from src.agent.freshness import is_fresh_market_data_required
+    from src.services.history_loader import get_frozen_target_date, load_history_df
+
+    if not (stock_code and str(stock_code).strip()):
+        return {"status": "error", "code": "missing_stock_code"}
+    try:
+        requested_days = min(max(int(days or 120), 61), 365)
+    except (TypeError, ValueError):
+        requested_days = 120
+
+    default_benchmark, default_label = _default_relative_strength_benchmark(stock_code)
+    effective_benchmark = str(benchmark_code or default_benchmark).strip()
+    if effective_benchmark.upper() == str(stock_code).strip().upper():
+        return {
+            "status": "error",
+            "code": "benchmark_matches_stock",
+            "reason": "基准代码不能与个股代码相同",
+        }
+
+    force_refresh = is_fresh_market_data_required()
+    stock_df, stock_source = load_history_df(
+        stock_code,
+        days=requested_days,
+        force_refresh=force_refresh,
+    )
+    benchmark_df, benchmark_source = load_history_df(
+        effective_benchmark,
+        days=requested_days,
+        force_refresh=force_refresh,
+    )
+    broad_result = _relative_strength_pair(stock_df, benchmark_df)
+    if broad_result.get("status") == "unavailable":
+        return {
+            "status": "unavailable",
+            "stock_code": stock_code,
+            "benchmark": {
+                "code": effective_benchmark,
+                "label": default_label if not benchmark_code else "用户指定基准",
+            },
+            "sources": {"stock": stock_source, "benchmark": benchmark_source},
+            "reason": broad_result.get("reason"),
+            "details": broad_result,
+        }
+
+    latest_common_date = str(broad_result.get("latest_common_date") or "")
+    target_date = get_frozen_target_date() or date.today()
+    try:
+        stale_days = (target_date - date.fromisoformat(latest_common_date)).days
+    except (TypeError, ValueError):
+        stale_days = 9999
+    if stale_days < 0 or stale_days > 7:
+        return {
+            "status": "unavailable",
+            "stock_code": stock_code,
+            "benchmark": {"code": effective_benchmark},
+            "latest_common_date": latest_common_date,
+            "stale_days": stale_days,
+            "reason": "个股与基准的共同交易日已过期或异常",
+        }
+
+    sector_result = {
+        "status": "missing",
+        "reason": "未提供可验证的行业/板块基准代码",
+    }
+    sector_source = None
+    if sector_benchmark_code:
+        effective_sector_code = str(sector_benchmark_code).strip()
+        if effective_sector_code.upper() == str(stock_code).strip().upper():
+            sector_result = {
+                "status": "unavailable",
+                "reason": "行业基准代码不能与个股代码相同",
+            }
+        else:
+            sector_df, sector_source = load_history_df(
+                effective_sector_code,
+                days=requested_days,
+                force_refresh=force_refresh,
+            )
+            sector_result = _relative_strength_pair(stock_df, sector_df)
+            sector_result["code"] = effective_sector_code
+            sector_latest_date = str(sector_result.get("latest_common_date") or "")
+            if sector_result.get("status") in {"complete", "partial"}:
+                try:
+                    sector_stale_days = (
+                        target_date - date.fromisoformat(sector_latest_date)
+                    ).days
+                except (TypeError, ValueError):
+                    sector_stale_days = 9999
+                sector_result["stale_days"] = sector_stale_days
+                if sector_stale_days < 0 or sector_stale_days > 7:
+                    sector_result = {
+                        "status": "unavailable",
+                        "code": effective_sector_code,
+                        "latest_common_date": sector_latest_date,
+                        "stale_days": sector_stale_days,
+                        "reason": "个股与行业基准的共同交易日已过期或异常",
+                    }
+
+    broad_complete = broad_result.get("status") == "complete"
+    sector_complete = sector_result.get("status") == "complete"
+    recommended_evidence_status = (
+        "complete" if broad_complete and sector_complete else "partial"
+    )
+    return {
+        "status": "ok" if recommended_evidence_status == "complete" else "partial",
+        "stock_code": stock_code,
+        "benchmark": {
+            "code": effective_benchmark,
+            "label": default_label if not benchmark_code else "用户指定基准",
+            **broad_result,
+        },
+        "sector_benchmark": sector_result,
+        "sources": {
+            "stock": stock_source,
+            "benchmark": benchmark_source,
+            "sector_benchmark": sector_source,
+        },
+        "as_of": latest_common_date,
+        "stale_days": stale_days,
+        "recommended_evidence_status": recommended_evidence_status,
+        "limitations": [
+            "相对收益按共同交易日对齐，避免不同休市日造成窗口错位。",
+            "默认基准是可交易 ETF 代理，不等同于指数现货本身。",
+            "行业基准缺失时只能形成部分证据，不得据此确认龙头地位。",
+        ],
+    }
+
+
+analyze_relative_strength_tool = ToolDefinition(
+    name="analyze_relative_strength",
+    description=(
+        "Compare a stock with a deterministic broad-market benchmark over matched "
+        "5/20/60-session windows. Uses SPY for US stocks, HK02800 for HK stocks, "
+        "and 510300 for A-shares by default. An optional sector_benchmark_code adds "
+        "same-window sector-relative evidence. Returns sources, as-of date, excess "
+        "returns, evidence quality, and explicit data gaps without inventing sector data."
+    ),
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., 'AAPL', 'HK00700', or '600519'.",
+        ),
+        ToolParameter(
+            name="benchmark_code",
+            type="string",
+            description="Optional broad benchmark override; defaults by market.",
+            required=False,
+            default=None,
+        ),
+        ToolParameter(
+            name="sector_benchmark_code",
+            type="string",
+            description="Optional verified sector ETF/index code for same-window comparison.",
+            required=False,
+            default=None,
+        ),
+        ToolParameter(
+            name="days",
+            type="integer",
+            description="Daily bars to request (61-365; default 120).",
+            required=False,
+            default=120,
+        ),
+    ],
+    handler=_handle_analyze_relative_strength,
     category="analysis",
     policy=_ANALYSIS_READ_POLICY,
 )
@@ -1918,6 +2621,7 @@ ALL_ANALYSIS_TOOLS = [
     get_volume_analysis_tool,
     analyze_pattern_tool,
     analyze_price_action_tool,
+    analyze_relative_strength_tool,
     calculate_multi_strategy_score_tool,
     analyze_ema200_setup_tool,
     analyze_intraday_t_tool,

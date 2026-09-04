@@ -533,6 +533,80 @@ describe('ChatPage', () => {
     });
   });
 
+  it('returns a manually expanded composer to its compact default after a turn is accepted', async () => {
+    let onAccepted: ((event: {
+      type: 'accepted';
+      backend: 'litellm' | 'codex_app_server';
+      request_id: string;
+      session_id: string;
+    }) => void) | undefined;
+    mockStartStream.mockImplementationOnce(async (_payload, meta) => {
+      onAccepted = meta?.onAccepted;
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByPlaceholderText(/例如/);
+    const resizeHandle = screen.getByRole('button', { name: '调整输入框高度' });
+    vi.spyOn(textarea, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, width: 600, height: 80, top: 0, right: 600, bottom: 80, left: 0,
+      toJSON: () => ({}),
+    });
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowUp' });
+    expect(textarea).toHaveStyle({ height: '104px' });
+
+    fireEvent.change(textarea, { target: { value: '分析 AAPL' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(onAccepted).toBeTypeOf('function'));
+    act(() => {
+      onAccepted?.({
+        type: 'accepted', backend: 'litellm', request_id: 'request-accepted', session_id: 'session-1',
+      });
+    });
+
+    await waitFor(() => expect(textarea).toHaveStyle({ height: '44px' }));
+  });
+
+  it('restores the last submitted message when pressing ArrowUp in an empty composer', async () => {
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/分析 600519/);
+    fireEvent.change(input, { target: { value: '分析 META 的价格行为和期权风险' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => expect(input).toHaveValue(''));
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+
+    expect(input).toHaveValue('分析 META 的价格行为和期权风险');
+    expect(mockStartStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not overwrite a non-empty draft when pressing ArrowUp', async () => {
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText(/分析 600519/);
+    fireEvent.change(input, { target: { value: '第一次发送' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(input).toHaveValue(''));
+
+    fireEvent.change(input, { target: { value: '正在编辑的新问题' } });
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+
+    expect(input).toHaveValue('正在编辑的新问题');
+  });
+
   it('renders the new Codex status copy in English when the UI language is English', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
     mockGetStatus.mockResolvedValueOnce({
