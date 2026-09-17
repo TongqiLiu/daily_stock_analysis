@@ -18,6 +18,7 @@ import type {
   DecisionSignalOutcomeStatsParams,
   DecisionSignalOutcomeStatsResponse,
   DecisionSignalProfileCalibrationBucket,
+  DecisionSignalPostReviewResponse,
   DecisionSignalReassessRequest,
   DecisionSignalReassessBlockedError,
   DecisionSignalReassessResponse,
@@ -264,10 +265,12 @@ function toListParams(params: DecisionSignalListParams = {}): Record<string, str
 function toOutcomeListParams(params: DecisionSignalOutcomeListParams = {}): Record<string, string | number> {
   return omitUndefined({
     signal_id: params.signalId,
+    stock_code: params.stockCode,
     horizon: params.horizon,
     engine_version: params.engineVersion,
     eval_status: params.evalStatus,
     outcome: params.outcome,
+    source_type: params.sourceType,
     page: params.page,
     page_size: params.pageSize,
   }) as Record<string, string | number>;
@@ -278,6 +281,7 @@ function toOutcomeStatsParams(params: DecisionSignalOutcomeStatsParams = {}): Re
     horizons: params.horizons,
     engine_version: params.engineVersion,
     statuses: params.statuses,
+    source_type: params.sourceType,
   }) as Record<string, string | string[]>;
 }
 
@@ -389,6 +393,17 @@ export const decisionSignalsApi = {
       },
     });
     return toDecisionSignalOutcomeStatsResponse(response.data);
+  },
+
+  async generatePostReview(
+    horizons: Array<'1d' | '3d' | '5d' | '10d'>,
+    sourceType?: 'agent',
+  ): Promise<DecisionSignalPostReviewResponse> {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/decision-signals/outcomes/ai-review',
+      { horizons, source_type: sourceType },
+    );
+    return toCamelCase<DecisionSignalPostReviewResponse>(response.data);
   },
 
   async getSignalOutcomes(signalId: number): Promise<DecisionSignalOutcomeListResponse> {

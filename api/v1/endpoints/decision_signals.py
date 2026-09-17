@@ -21,6 +21,8 @@ from api.v1.schemas.decision_signals import (
     DecisionSignalOutcomeRunRequest,
     DecisionSignalOutcomeRunResponse,
     DecisionSignalOutcomeStatsResponse,
+    DecisionSignalPostReviewRequest,
+    DecisionSignalPostReviewResponse,
     DecisionSignalReassessRequest,
     DecisionSignalReassessErrorResponse,
     DecisionSignalReassessResponse,
@@ -33,6 +35,7 @@ from src.services.decision_signal_service import (
     DecisionSignalStorageError,
 )
 from src.services.decision_signal_outcome_service import DecisionSignalOutcomeService
+from src.services.decision_signal_post_review_service import DecisionSignalPostReviewService
 from src.services.decision_signal_reassess_service import (
     DecisionSignalReassessGuardrailBlockedError,
     DecisionSignalReassessService,
@@ -264,10 +267,12 @@ def run_outcomes(request: DecisionSignalOutcomeRunRequest) -> DecisionSignalOutc
 )
 def list_outcomes(
     signal_id: Optional[int] = Query(None, gt=0),
+    stock_code: Optional[str] = Query(None, max_length=32),
     horizon: Optional[str] = Query(None),
     engine_version: Optional[str] = Query(None),
     eval_status: Optional[str] = Query(None),
     outcome: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> DecisionSignalOutcomeListResponse:
@@ -276,10 +281,12 @@ def list_outcomes(
         return DecisionSignalOutcomeListResponse(
             **service.list_outcomes(
                 signal_id=signal_id,
+                stock_code=stock_code,
                 horizon=horizon,
                 engine_version=engine_version,
                 eval_status=eval_status,
                 outcome=outcome,
+                source_type=source_type,
                 page=page,
                 page_size=page_size,
             )
@@ -307,6 +314,7 @@ def get_outcome_stats(
     horizons: Optional[List[str]] = Query(None),
     engine_version: Optional[str] = Query(None),
     statuses: Optional[List[str]] = Query(None),
+    source_type: Optional[str] = Query(None),
 ) -> DecisionSignalOutcomeStatsResponse:
     service = DecisionSignalOutcomeService()
     try:
@@ -315,12 +323,42 @@ def get_outcome_stats(
                 horizons=horizons,
                 engine_version=engine_version,
                 statuses=statuses,
+                source_type=source_type,
             )
         )
     except ValueError as exc:
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Get decision signal outcome stats failed", exc)
+
+
+@router.post(
+    "/outcomes/ai-review",
+    response_model=DecisionSignalPostReviewResponse,
+    responses={
+        **AUTH_RESPONSE,
+        400: {"model": ErrorResponse, "description": "已完成样本不足"},
+        503: {"model": ErrorResponse, "description": "当前 AI 后端不可用"},
+        500: {"model": ErrorResponse, "description": "AI 复盘生成失败"},
+    },
+    summary="生成决策信号 AI 后置复盘",
+    description="基于确定性 outcome 聚合结果生成只读归因；不会重算 hit/miss 或修改策略权重。",
+    operation_id="generateDecisionSignalPostReview",
+)
+def generate_post_review(request: DecisionSignalPostReviewRequest) -> DecisionSignalPostReviewResponse:
+    try:
+        return DecisionSignalPostReviewResponse(
+            **DecisionSignalPostReviewService().generate(
+                horizons=request.horizons,
+                source_type=request.source_type,
+            )
+        )
+    except ValueError as exc:
+        raise _bad_request(exc, error="insufficient_samples")
+    except RuntimeError as exc:
+        raise _error(503, exc, error="ai_backend_unavailable")
+    except Exception as exc:
+        raise _internal_error("Generate decision signal post-review failed", exc)
 
 
 @router.post(

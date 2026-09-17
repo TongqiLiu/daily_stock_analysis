@@ -161,6 +161,17 @@ class AgentChatExecutor:
             return result
         if result.success:
             assistant_message_id = conversation_manager.add_message(turn.session_id, "assistant", result.content)
+            from src.services.agent_chat_decision_signal_service import AgentChatDecisionSignalService
+
+            result.decision_signal = AgentChatDecisionSignalService().persist_completed_turn(
+                content=result.content,
+                stock_scope=turn.prepared.stock_scope,
+                session_id=turn.session_id,
+                user_message_id=turn.user_message_id,
+                assistant_message_id=assistant_message_id,
+                backend=result.backend,
+                model=result.model,
+            )
             if not self.backend.runtime_owns_loop:
                 persist_provider_trace_turns(
                     session_id=turn.session_id,

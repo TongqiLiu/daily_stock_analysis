@@ -394,6 +394,112 @@ def _multi_strategy_score_marker(value: Any) -> str:
     return "🔴"
 
 
+def _render_multi_strategy_position_section(payload: Dict[str, Any]) -> list[str]:
+    """Render the deterministic position plan without treating plan ratios as NAV weights."""
+    plan = payload.get("position_plan")
+    if not isinstance(plan, dict):
+        return []
+
+    lines = [
+        "",
+        "#### 2.1 仓位与分批执行（独立计划）",
+        "",
+        "> **🟣 仓位口径：以下百分比均为本次“计划仓位”的拆分，不是账户净值占比；必须先按账户净值、单笔最大亏损和止损距离换算实际金额/股数。**",
+        "> **🔴 利弗莫尔纪律：只对已盈利且结构确认的仓位加仓；亏损、失败突破、跌破硬失效位时禁止摊平。**",
+        "",
+        "- 计划状态：**"
+        + _markdown_table_cell(plan.get("status") or "—")
+        + "**；"
+        + _markdown_table_cell(plan.get("reason") or "未提供"),
+        "- **🟣 定仓公式：**" + _markdown_table_cell(plan.get("account_sizing_formula")),
+    ]
+    if not plan.get("new_position_allowed"):
+        lines.extend([
+            "- **🔴 新增仓位：0%**。当前只允许保护已有仓位或等待结构重建；不能因为价格回落而机械采用斐波那契加仓。",
+        ])
+        return lines
+
+    lines.extend([
+        "",
+        "| 关键风险价位 | 价格 | 含义 |",
+        "|---|---:|---|",
+        "| **🟣 入场参考** | "
+        + _format_multi_strategy_number(plan.get("entry_reference"))
+        + " | 仅在计划周期收盘确认后执行 |",
+        "| **🔴 硬止损 / 失效位** | "
+        + _format_multi_strategy_number(plan.get("hard_stop"))
+        + " | 跌破即原做多假设失效，不等待摊平 |",
+        "| 单股风险 | "
+        + _format_multi_strategy_number(plan.get("risk_per_share"))
+        + " ("
+        + _format_multi_strategy_number(plan.get("risk_distance_pct"), decimals=2)
+        + "%) | 用于按单笔风险预算定仓 |",
+        "",
+        "| 阶段 | 计划仓位 | 关键点位 | 执行条件 |",
+        "|---|---:|---:|---|",
+    ])
+    for tranche in plan.get("tranches") or []:
+        if not isinstance(tranche, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join([
+                _markdown_table_cell(tranche.get("stage")),
+                _format_multi_strategy_number(tranche.get("allocation_pct"), decimals=0) + "%",
+                _format_multi_strategy_number(tranche.get("price")),
+                _markdown_table_cell(tranche.get("trigger")),
+            ])
+            + " |"
+        )
+
+    lines.extend([
+        "",
+        "| 分批止盈 | 参考价 | 减仓比例 | 执行规则 |",
+        "|---|---:|---:|---|",
+    ])
+    for target in plan.get("take_profit_tranches") or []:
+        if not isinstance(target, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join([
+                "**🟡 " + _markdown_table_cell(target.get("stage")) + "**",
+                _format_multi_strategy_number(target.get("price")),
+                _format_multi_strategy_number(target.get("reduce_pct"), decimals=0) + "%",
+                _markdown_table_cell(target.get("rule")),
+            ])
+            + " |"
+        )
+
+    fib_levels = plan.get("fibonacci_retracement")
+    if isinstance(fib_levels, list) and fib_levels:
+        lines.extend([
+            "",
+            "| 斐波那契回踩参考 | 价格 | 使用边界 |",
+            "|---|---:|---|",
+        ])
+        for level in fib_levels:
+            if not isinstance(level, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join([
+                    _markdown_table_cell(level.get("ratio")),
+                    _format_multi_strategy_number(level.get("price")),
+                    _markdown_table_cell(level.get("rule")),
+                ])
+                + " |"
+            )
+        lines.append(
+            "- 斐波那契区间由本轮近端支撑—阻力推导，仅作回踩观察，不等同于完整波段高低点或自动买点。"
+        )
+    else:
+        lines.append(
+            "- 斐波那契回踩区：缺少可验证的支撑—阻力区间，本轮不生成价格，避免伪精确。"
+        )
+    return lines
+
+
 def _render_multi_strategy_score_section(
     payload: Dict[str, Any],
     price_action_payload: Optional[Dict[str, Any]] = None,
@@ -564,6 +670,8 @@ def _render_multi_strategy_score_section(
         lines.append(
             "- 本轮未获得结构化支撑/阻力数据；不得根据缺失数据自行补写价格位。"
         )
+
+    lines.extend(_render_multi_strategy_position_section(payload))
 
     if dimensions:
         lines.extend([

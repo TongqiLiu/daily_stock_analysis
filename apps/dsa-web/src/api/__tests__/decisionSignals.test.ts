@@ -626,10 +626,11 @@ describe('decisionSignalsApi', () => {
     const stats = await decisionSignalsApi.getOutcomeStats({
       horizons: ['3d'],
       statuses: ['active', 'closed'],
+      sourceType: 'agent',
     });
 
     expect(get).toHaveBeenCalledWith('/api/v1/decision-signals/outcomes/stats', {
-      params: { horizons: ['3d'], statuses: ['active', 'closed'] },
+      params: { horizons: ['3d'], statuses: ['active', 'closed'], source_type: 'agent' },
       paramsSerializer: {
         serialize: expect.any(Function),
       },
@@ -639,7 +640,7 @@ describe('decisionSignalsApi', () => {
       paramsSerializer: { serialize: (params: Record<string, unknown>) => string };
     };
     expect(statsConfig.paramsSerializer.serialize(statsConfig.params)).toBe(
-      'horizons=3d&statuses=active&statuses=closed',
+      'horizons=3d&statuses=active&statuses=closed&source_type=agent',
     );
     expect(stats.engineVersion).toBe('decision-signal-v1');
     expect(stats.hitRatePct).toBe(50);

@@ -187,6 +187,71 @@ def test_execution_gate_waits_when_a_bullish_score_has_insufficient_reward_to_ri
     assert result["actions"]["has_position"] == "add"
 
 
+def test_position_plan_uses_pyramiding_only_after_a_valid_risk_gate() -> None:
+    market_structure = _market_structure()
+    market_structure["resistance_levels"] = [111.0]
+    result = _handle_calculate_multi_strategy_score(
+        json.dumps(_score_rows(75.0)),
+        market_structure_json=json.dumps(market_structure),
+    )
+
+    plan = result["position_plan"]
+    assert plan["status"] == "ready"
+    assert plan["new_position_allowed"] is True
+    assert [item["allocation_pct"] for item in plan["tranches"]] == [50, 30, 20]
+    assert plan["hard_stop"] == 97.8
+    assert plan["take_profit_tranches"][0]["reduce_pct"] == 25
+    assert "禁止向亏损仓摊平" in plan["livermore_rule"]
+    assert [item["ratio"] for item in plan["fibonacci_retracement"]] == [
+        "38.2%", "50.0%", "61.8%"
+    ]
+
+    rendered = _render_multi_strategy_score_section(result)
+
+    assert "#### 2.1 仓位与分批执行（独立计划）" in rendered
+    assert "| 首仓 | 50% | 102 |" in rendered
+    assert "| **🟡 1R** | 106.2 | 25% |" in rendered
+    assert "斐波那契区间由本轮近端支撑—阻力推导" in rendered
+
+
+def test_position_plan_blocks_new_allocation_when_evidence_is_insufficient() -> None:
+    rows = _score_rows()
+    for row in rows[7:]:
+        row.update({
+            "signal": "不可评估",
+            "strength": "-",
+            "score": None,
+            "evidence_status": "missing",
+            "reason": "关键输入缺失",
+        })
+    result = _handle_calculate_multi_strategy_score(
+        json.dumps(rows, ensure_ascii=False),
+        market_structure_json=json.dumps(_market_structure()),
+    )
+
+    assert result["position_plan"]["new_position_allowed"] is False
+    assert result["position_plan"]["tranches"] == []
+    rendered = _render_multi_strategy_score_section(result)
+    assert "**🔴 新增仓位：0%**" in rendered
+
+
+def test_position_plan_requires_a_bullish_multi_strategy_decision() -> None:
+    market_structure = _market_structure()
+    market_structure["resistance_levels"] = [111.0]
+    rows = _score_rows(50.0)
+    for row in rows:
+        row.update({"signal": "观望", "strength": "中"})
+    result = _handle_calculate_multi_strategy_score(
+        json.dumps(rows),
+        market_structure_json=json.dumps(market_structure),
+    )
+
+    assert result["execution"]["status"] == "ready"
+    assert result["decision"] == "观望"
+    assert result["position_plan"]["new_position_allowed"] is False
+    assert result["position_plan"]["reason"] == "多策略最终方向尚未确认偏多，禁止新增仓位。"
+
+
 def test_execution_gate_exits_when_price_breaks_hard_invalidation() -> None:
     structure = _market_structure() | {"current_price": 97.0}
     result = _handle_calculate_multi_strategy_score(

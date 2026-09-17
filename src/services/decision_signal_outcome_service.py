@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from src.core.backtest_engine import BacktestEngine, EvaluationConfig
 from src.repositories.decision_signal_outcome_repo import (
     DecisionSignalOutcomeRepository,
+    OutcomeListRow,
     OutcomeStatsRow,
 )
 from src.repositories.decision_signal_repo import DecisionSignalRepository
@@ -280,31 +281,39 @@ class DecisionSignalOutcomeService:
         self,
         *,
         signal_id: Optional[int] = None,
+        stock_code: Optional[str] = None,
         horizon: Optional[str] = None,
         engine_version: Optional[str] = None,
         eval_status: Optional[str] = None,
         outcome: Optional[str] = None,
+        source_type: Optional[str] = None,
         page: int = 1,
         page_size: int = 20,
     ) -> Dict[str, Any]:
         signal_id_norm = self._optional_positive_int(signal_id, "signal_id")
+        stock_code_norm = self._optional_public_text(stock_code, "stock_code", max_length=32)
+        if stock_code_norm:
+            stock_code_norm = stock_code_norm.upper()
         horizon_norm = self._normalize_optional_enum(horizon, HORIZONS, "horizon")
         engine_version_norm = str(engine_version or DECISION_SIGNAL_OUTCOME_ENGINE_VERSION).strip()
         eval_status_norm = self._normalize_optional_enum(eval_status, EVAL_STATUSES, "eval_status")
         outcome_norm = self._normalize_optional_enum(outcome, OUTCOME_VALUES, "outcome")
+        source_type_norm = self._normalize_optional_enum(source_type, SOURCE_TYPES, "source_type")
         safe_page = max(1, int(page))
         safe_page_size = max(1, min(int(page_size), 100))
         rows, total = self.repo.list_outcomes(
             signal_id=signal_id_norm,
+            stock_code=stock_code_norm,
             horizon=horizon_norm,
             engine_version=engine_version_norm,
             eval_status=eval_status_norm,
             outcome=outcome_norm,
+            source_type=source_type_norm,
             page=safe_page,
             page_size=safe_page_size,
         )
         return {
-            "items": [self._serialize_outcome(row) for row in rows],
+            "items": [self._serialize_outcome(row.outcome, audit=row) for row in rows],
             "total": total,
             "page": safe_page,
             "page_size": safe_page_size,
@@ -325,6 +334,7 @@ class DecisionSignalOutcomeService:
         horizons: Optional[List[str]] = None,
         engine_version: Optional[str] = None,
         statuses: Optional[List[str]] = None,
+        source_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         engine_version_norm = str(engine_version or DECISION_SIGNAL_OUTCOME_ENGINE_VERSION).strip()
         horizons_norm = self._normalize_horizons(horizons)
@@ -333,13 +343,16 @@ class DecisionSignalOutcomeService:
             if statuses
             else list(DEFAULT_STATS_STATUSES)
         )
+        source_type_norm = self._normalize_optional_enum(source_type, SOURCE_TYPES, "source_type")
         stats_rows = self.repo.list_stats_rows(
             engine_version=engine_version_norm,
             horizons=horizons_norm,
             statuses=statuses_norm,
+            source_type=source_type_norm,
         )
         rows = [stats_row.outcome for stats_row in stats_rows]
         dimensions = (
+            "horizon",
             "action",
             "market",
             "market_phase",
@@ -358,6 +371,7 @@ class DecisionSignalOutcomeService:
             "engine_version": engine_version_norm,
             "horizons": horizons_norm,
             "statuses": statuses_norm,
+            "source_type": source_type_norm,
             "breakdowns": breakdowns,
             "profile_calibration": self._profile_calibration(stats_rows),
         }
@@ -521,9 +535,10 @@ class DecisionSignalOutcomeService:
         if isinstance(metadata, dict):
             summary = metadata.get("market_phase_summary")
             if isinstance(summary, dict):
-                parsed = self._parse_date(summary.get("session_date"))
-                if parsed is not None:
-                    return parsed
+                for key in ("effective_daily_bar_date", "session_date"):
+                    parsed = self._parse_date(summary.get(key))
+                    if parsed is not None:
+                        return parsed
         return self._parse_date(signal.created_at)
 
     def _data_quality_level(self, signal: DecisionSignalRecord) -> str:
@@ -670,8 +685,12 @@ class DecisionSignalOutcomeService:
         return text
 
     @staticmethod
-    def _serialize_outcome(row: DecisionSignalOutcomeRecord) -> Dict[str, Any]:
-        return {
+    def _serialize_outcome(
+        row: DecisionSignalOutcomeRecord,
+        *,
+        audit: Optional[OutcomeListRow] = None,
+    ) -> Dict[str, Any]:
+        payload = {
             "id": row.id,
             "signal_id": row.signal_id,
             "horizon": row.horizon,
@@ -699,6 +718,19 @@ class DecisionSignalOutcomeService:
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
+        if audit is not None:
+            payload.update({
+                "stock_code": audit.stock_code,
+                "stock_name": audit.stock_name,
+                "signal_created_at": audit.signal_created_at.isoformat() if audit.signal_created_at else None,
+                "trace_id": audit.trace_id,
+                "reason": audit.reason,
+                "entry_low": audit.entry_low,
+                "entry_high": audit.entry_high,
+                "stop_loss": audit.stop_loss,
+                "target_price": audit.target_price,
+            })
+        return payload
 
     @staticmethod
     def _serialize_feedback(row: DecisionSignalFeedbackRecord) -> Dict[str, Any]:
@@ -844,8 +876,7 @@ class DecisionSignalOutcomeService:
         ]
         return sorted(buckets, key=lambda item: (-int(item["total"]), str(item["value"])))
 
-    @staticmethod
-    def _aggregate(rows: List[DecisionSignalOutcomeRecord]) -> Dict[str, Any]:
+    def _aggregate(self, rows: List[DecisionSignalOutcomeRecord]) -> Dict[str, Any]:
         total = len(rows)
         completed = [row for row in rows if row.eval_status == "completed"]
         unable = [row for row in rows if row.eval_status == "unable"]
@@ -859,6 +890,11 @@ class DecisionSignalOutcomeService:
             if row.stock_return_pct is not None
         ]
         unable_reasons = Counter(row.unable_reason or "unknown" for row in unable)
+        adverse_excursions = [
+            value
+            for row in completed
+            if (value := self._row_max_adverse_excursion_pct(row)) is not None
+        ]
         return {
             "total": total,
             "completed": len(completed),
@@ -868,5 +904,15 @@ class DecisionSignalOutcomeService:
             "neutral": neutral,
             "hit_rate_pct": round(hit / denominator * 100, 2) if denominator else None,
             "avg_stock_return_pct": round(sum(returns) / len(returns), 4) if returns else None,
+            "avg_adverse_excursion_pct": (
+                round(sum(adverse_excursions) / len(adverse_excursions), 4)
+                if adverse_excursions
+                else None
+            ),
+            "max_adverse_excursion_pct": (
+                round(max(adverse_excursions), 4)
+                if adverse_excursions
+                else None
+            ),
             "unable_reasons": dict(sorted(unable_reasons.items())),
         }

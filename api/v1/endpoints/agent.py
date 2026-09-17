@@ -619,6 +619,7 @@ async def agent_chat_stream(
                 "error": result.error,
                 "total_steps": result.total_steps,
                 "session_id": session_id,
+                "decision_signal": getattr(result, "decision_signal", None),
             }
             event.update({
                 "backend": getattr(result, "backend", "") or backend_id,

@@ -73,13 +73,18 @@ Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标
 - `PATCH /api/v1/decision-signals/{signal_id}/status`：更新状态和可选 metadata。
 - `GET /api/v1/decision-signals/latest/{stock_code}`：查询股票最新 active 信号。
 - `POST /api/v1/decision-signals/outcomes/run`：显式触发后验评估。
-- `GET /api/v1/decision-signals/outcomes`、`GET /api/v1/decision-signals/outcomes/stats`、`GET /api/v1/decision-signals/{signal_id}/outcomes`：查询后验结果与统计。
+- `GET /api/v1/decision-signals/outcomes`、`GET /api/v1/decision-signals/outcomes/stats`、`GET /api/v1/decision-signals/{signal_id}/outcomes`：查询后验结果与统计；outcomes 支持 `stock_code`、`source_type`、周期、结算状态和结果筛选，并附带原始信号的标的、分析时点、结论与计划价格作为审计上下文；stats 可用 `source_type=agent` 隔离问股对话样本。
+- `POST /api/v1/decision-signals/outcomes/ai-review`：通过当前分析生成后端对确定性统计生成只读 AI 后置复盘；不重算 hit/miss，不修改信号或权重，至少需要 10 条 completed outcome。配置的 AI 后端不可用时返回明确的 HTTP 503，不阻断结算与统计查看。
 - `GET/PUT /api/v1/decision-signals/{signal_id}/feedback`：查询或写入 useful / not useful 反馈。
 - `POST /api/v1/decision-signals/reassess`：基于来源历史报告快照重新计算不同决策风格下的信号；`persist=false` 只预览，`persist=true` 由服务端重算并保存通过 guardrail 的结果。
 
 这些接口继承现有 `/api/v1/*` 管理员鉴权；`ADMIN_AUTH_ENABLED=true` 时需要有效管理员会话 Cookie。
 
 ## 决策风格历史表现
+
+问股对话在单股票范围明确、最终动作可唯一归一为 `buy/add/hold/reduce/sell/avoid` 时，会以 best-effort 方式写入 `source_type=agent` 的结构化信号。写入失败不影响对话返回；比较模式、标的范围不明确或结论含糊时不写入。问股信号保存运行时市场阶段及 `effective_daily_bar_date`，后验评估优先用该已完成日线作为锚点，避免盘前、盘中和非交易日引用未来收盘数据。
+
+独立 Web 入口 `/decision-performance` 提供“全部结构化信号 / 仅问股对话”范围切换、T+1/T+3/T+5/T+10 显式结算、方向胜率、平均/最大不利波动及按周期、动作、阶段、来源、数据质量拆分。下方“逐笔回测明细”按一条 `(signal_id, horizon, engine_version)` 记录展示分析时点、标的、原始结论、计划价格、锚点、日线区间、结果和无法结算原因，可按代码、周期、结算状态和结果筛选。方向胜率分母固定为 `hit + miss`；neutral 和 unable 不进入分母。平均/最大不利波动是按建议方向计算的 MAE，不是账户净值最大回撤。
 
 #1758 在现有 `GET /api/v1/decision-signals/outcomes/stats` 响应中追加 `profile_calibration`，没有新增 endpoint、数据库表、配置项或行情请求。旧的全局统计字段和八类单维 breakdown 保持原口径；一条样本仍是一条 `(signal_id, horizon, engine_version)` outcome 记录，同一信号的不同复盘周期会分别计数，不能理解成独立信号数量。
 

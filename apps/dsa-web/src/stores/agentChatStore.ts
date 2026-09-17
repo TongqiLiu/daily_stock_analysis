@@ -39,6 +39,10 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** Message creation time from the persisted conversation, or local send time while streaming. */
+  createdAt?: string;
+  /** Set only after a streamed assistant response has completed successfully. */
+  completedAt?: string;
   skills?: string[];
   skill?: string;
   skillNames?: string[];
@@ -363,6 +367,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
             id: m.id,
             role: m.role,
             content: m.content,
+            createdAt: m.created_at ?? undefined,
           }));
           set((s) => ({
             messages: mapped,
@@ -438,6 +443,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         id: m.id,
         role: m.role,
         content: m.content,
+        createdAt: m.created_at ?? undefined,
       }));
       // Prefer fresher in-memory cache when it has more turns than the API snapshot
       // (e.g. a just-finished background stream that hasn't been re-fetched yet).
@@ -611,6 +617,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       id: Date.now().toString(),
       role: 'user',
       content: payload.message,
+      createdAt: new Date().toISOString(),
       skills: payload.skills,
       skill: payload.skills?.[0],
       skillNames,
@@ -766,6 +773,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
             id: (Date.now() + 1).toString(),
             role: 'assistant',
             content: finalContent || '（无内容）',
+            completedAt: new Date().toISOString(),
             skills: payload.skills,
             skill: payload.skills?.[0],
             skillNames,

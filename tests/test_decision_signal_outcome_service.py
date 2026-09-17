@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -46,6 +46,8 @@ def _add_signal(
     profile_source: str | None = None,
     metadata_data_quality: str | None = None,
     data_quality_summary_json: str | None = '{"level": "good"}',
+    source_type: str = "analysis",
+    effective_daily_bar_date: str | None = None,
 ) -> int:
     metadata = {
         "market_phase_summary": {"session_date": session_date},
@@ -55,12 +57,14 @@ def _add_signal(
         metadata["profile_source"] = profile_source
     if metadata_data_quality is not None:
         metadata["data_quality_level"] = metadata_data_quality
+    if effective_daily_bar_date is not None:
+        metadata["market_phase_summary"]["effective_daily_bar_date"] = effective_daily_bar_date
     with db.session_scope() as session:
         row = DecisionSignalRecord(
             stock_code=code,
             stock_name="贵州茅台",
             market=market,
-            source_type="analysis",
+            source_type=source_type,
             source_report_id=1001,
             trace_id=f"trace-{market}-{code}-{action}-{horizon}-{session_date}",
             decision_profile=decision_profile,
@@ -157,7 +161,7 @@ def _seed_bars(
             session.add(
                 StockDaily(
                     code=code,
-                    date=date(2024, 1, 2 + index),
+                    date=anchor + timedelta(days=index),
                     open=close,
                     high=close + 1,
                     low=close - 1,
@@ -204,7 +208,48 @@ def test_run_outcomes_evaluates_supported_horizons_and_stats(isolated_db) -> Non
     assert stats["total"] == 4
     assert stats["hit"] == 4
     assert stats["breakdowns"]["action"][0]["value"] == "buy"
+    assert {item["value"] for item in stats["breakdowns"]["horizon"]} == {"1d", "3d", "5d", "10d"}
     assert stats["breakdowns"]["holding_state"][0]["value"] == "holding"
+    assert stats["avg_adverse_excursion_pct"] == 0.0
+    assert stats["max_adverse_excursion_pct"] == 0.0
+
+
+def test_stats_can_filter_agent_chat_outcomes(isolated_db) -> None:
+    analysis_id = _add_signal(isolated_db, code="AAA", source_type="analysis")
+    agent_id = _add_signal(isolated_db, code="BBB", source_type="agent")
+    _seed_bars(isolated_db, code="AAA", closes=[103, 104, 105])
+    _seed_bars(isolated_db, code="BBB", closes=[97, 96, 95])
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    service.run_outcomes(signal_id=analysis_id, horizons=["3d"])
+    service.run_outcomes(signal_id=agent_id, horizons=["3d"])
+
+    stats = service.get_stats(horizons=["3d"], source_type="agent")
+
+    assert stats["source_type"] == "agent"
+    assert stats["total"] == 1
+    assert stats["miss"] == 1
+
+
+def test_outcome_prefers_completed_effective_daily_bar_date(isolated_db) -> None:
+    signal_id = _add_signal(
+        isolated_db,
+        action="buy",
+        session_date="2024-01-06",
+        effective_daily_bar_date="2024-01-05",
+    )
+    _seed_bars(
+        isolated_db,
+        anchor=date(2024, 1, 5),
+        closes=[103, 104, 105],
+    )
+
+    result = DecisionSignalOutcomeService(db_manager=isolated_db).run_outcomes(
+        signal_id=signal_id,
+        horizons=["3d"],
+    )
+
+    assert result["items"][0]["anchor_date"] == "2024-01-05"
+    assert result["items"][0]["outcome"] == "hit"
 
 
 def test_profile_calibration_groups_six_dimensions_and_gates_each_bucket(isolated_db) -> None:

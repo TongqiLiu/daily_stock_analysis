@@ -152,6 +152,15 @@ class DecisionSignalOutcomeItem(BaseModel):
     plan_quality: Optional[str] = None
     data_quality_level: Optional[str] = None
     holding_state: str
+    stock_code: Optional[str] = None
+    stock_name: Optional[str] = None
+    signal_created_at: Optional[str] = None
+    trace_id: Optional[str] = None
+    reason: Optional[str] = None
+    entry_low: Optional[float] = None
+    entry_high: Optional[float] = None
+    stop_loss: Optional[float] = None
+    target_price: Optional[float] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -183,6 +192,8 @@ class DecisionSignalOutcomeStatsBucket(BaseModel):
     neutral: int
     hit_rate_pct: Optional[float] = None
     avg_stock_return_pct: Optional[float] = None
+    avg_adverse_excursion_pct: Optional[float] = None
+    max_adverse_excursion_pct: Optional[float] = None
     unable_reasons: Dict[str, int] = Field(default_factory=dict)
 
 
@@ -220,6 +231,7 @@ class DecisionSignalOutcomeStatsResponse(BaseModel):
     engine_version: str
     horizons: Optional[List[str]] = None
     statuses: List[str] = Field(default_factory=list)
+    source_type: Optional[DecisionSignalSourceType] = None
     total: int
     completed: int
     unable: int
@@ -228,9 +240,25 @@ class DecisionSignalOutcomeStatsResponse(BaseModel):
     neutral: int
     hit_rate_pct: Optional[float] = None
     avg_stock_return_pct: Optional[float] = None
+    avg_adverse_excursion_pct: Optional[float] = None
+    max_adverse_excursion_pct: Optional[float] = None
     unable_reasons: Dict[str, int] = Field(default_factory=dict)
     breakdowns: Dict[str, List[DecisionSignalOutcomeStatsBucket]] = Field(default_factory=dict)
     profile_calibration: DecisionSignalProfileCalibration
+
+
+class DecisionSignalPostReviewRequest(BaseModel):
+    horizons: Optional[List[DecisionSignalHorizon]] = None
+    source_type: Optional[DecisionSignalSourceType] = None
+
+
+class DecisionSignalPostReviewResponse(BaseModel):
+    content: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    prompt_version: str
+    completed_samples: int
+    generated_at: str
 
 
 class DecisionSignalFeedbackRequest(BaseModel):

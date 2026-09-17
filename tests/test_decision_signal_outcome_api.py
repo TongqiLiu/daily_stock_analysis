@@ -146,6 +146,19 @@ def test_outcome_run_list_stats_signal_outcomes_and_feedback(client_and_db) -> N
     )
     assert list_resp.status_code == 200, list_resp.text
     assert list_resp.json()["total"] == 1
+    audit_item = list_resp.json()["items"][0]
+    assert audit_item["stock_code"] == "600519"
+    assert audit_item["stock_name"] == "贵州茅台"
+    assert audit_item["reason"] == "突破平台"
+    assert audit_item["entry_low"] == 100
+    assert audit_item["stop_loss"] == 95
+
+    scoped_list_resp = client.get(
+        "/api/v1/decision-signals/outcomes",
+        params={"stock_code": "600519", "source_type": "analysis"},
+    )
+    assert scoped_list_resp.status_code == 200, scoped_list_resp.text
+    assert scoped_list_resp.json()["total"] == 1
 
     stats_resp = client.get("/api/v1/decision-signals/outcomes/stats")
     assert stats_resp.status_code == 200, stats_resp.text
@@ -248,6 +261,78 @@ def test_outcome_api_rejects_invalid_params_and_returns_404(client_and_db) -> No
     empty_calibration = empty_stats_resp.json()["profile_calibration"]
     assert empty_calibration["minimum_completed_sample_size"] == 30
     assert all(not buckets for buckets in empty_calibration["breakdowns"].values())
+
+
+def test_outcome_stats_filters_agent_source(client_and_db) -> None:
+    client, db = client_and_db
+    analysis = client.post("/api/v1/decision-signals", json=_payload())
+    agent = client.post(
+        "/api/v1/decision-signals",
+        json=_payload(source_type="agent", source_report_id=4302, trace_id="trace-agent-outcome-api"),
+    )
+    assert analysis.status_code == 200
+    assert agent.status_code == 200
+    _seed_bars(db)
+    run = client.post(
+        "/api/v1/decision-signals/outcomes/run",
+        json={"horizons": ["3d"], "limit": 10},
+    )
+    assert run.status_code == 200, run.text
+
+    stats = client.get(
+        "/api/v1/decision-signals/outcomes/stats",
+        params={"source_type": "agent"},
+    )
+
+    assert stats.status_code == 200, stats.text
+    assert stats.json()["source_type"] == "agent"
+    assert stats.json()["total"] == 1
+
+
+def test_ai_post_review_endpoint_is_read_only_and_scoped(client_and_db, monkeypatch) -> None:
+    from src.services.decision_signal_post_review_service import DecisionSignalPostReviewService
+
+    captured = {}
+
+    def fake_generate(self, *, horizons=None, source_type=None):
+        captured.update(horizons=horizons, source_type=source_type)
+        return {
+            "content": "## 结论\n仅描述统计。",
+            "provider": "fixture",
+            "model": "fixture-model",
+            "prompt_version": "decision-signal-post-review-v1",
+            "completed_samples": 12,
+            "generated_at": "2026-09-05T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(DecisionSignalPostReviewService, "generate", fake_generate)
+    client, _db = client_and_db
+
+    response = client.post(
+        "/api/v1/decision-signals/outcomes/ai-review",
+        json={"horizons": ["1d", "3d"], "source_type": "agent"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["completed_samples"] == 12
+    assert captured == {"horizons": ["1d", "3d"], "source_type": "agent"}
+
+
+def test_ai_post_review_endpoint_reports_backend_unavailable(client_and_db, monkeypatch) -> None:
+    from src.services.decision_signal_post_review_service import DecisionSignalPostReviewService
+
+    def fail_generate(self, *, horizons=None, source_type=None):
+        raise RuntimeError("provider timeout")
+
+    monkeypatch.setattr(DecisionSignalPostReviewService, "generate", fail_generate)
+    client, _db = client_and_db
+    response = client.post(
+        "/api/v1/decision-signals/outcomes/ai-review",
+        json={"horizons": ["3d"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "ai_backend_unavailable"
 
 
 def test_outcome_run_retries_transient_unable_by_default(client_and_db) -> None:

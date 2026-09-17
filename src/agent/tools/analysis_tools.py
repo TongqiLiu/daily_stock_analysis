@@ -524,6 +524,113 @@ def _apply_multi_strategy_execution_gate(actions: dict[str, str], execution: dic
     return adjusted
 
 
+def _build_multi_strategy_position_plan(
+    market_structure: dict,
+    execution: dict,
+    *,
+    decision: str,
+    has_decision_blockers: bool,
+) -> dict:
+    """Return an auditable long-only execution plan without inventing account size.
+
+    Allocation percentages always refer to the *intended trade position*, never to
+    account equity.  The monetary size remains unavailable until an account risk
+    budget is supplied by the portfolio layer.
+    """
+    current = market_structure.get("current_price")
+    stop = market_structure.get("invalidation_level")
+    support = market_structure.get("nearest_support")
+    resistance = market_structure.get("nearest_resistance")
+    execution_status = str(execution.get("status") or "unavailable")
+    long_direction_confirmed = decision in {"偏多", "强烈买入"}
+    can_open = (
+        not has_decision_blockers
+        and long_direction_confirmed
+        and execution_status == "ready"
+        and isinstance(current, (int, float))
+        and isinstance(stop, (int, float))
+        and current > stop > 0
+    )
+    common = {
+        "allocation_basis": "计划仓位，不是账户净值占比",
+        "account_sizing_formula": "计划仓位金额 = 账户净值 × 单笔风险预算 ÷ 止损距离比例；未读取账户净值/风险预算时不得换算股数或账户占比。",
+        "livermore_rule": "仅在首仓已盈利且结构确认后加仓；禁止向亏损仓摊平。",
+        "pyramid_rule": "50% / 30% / 20% 是计划仓位的分段，不是账户资金比例。",
+    }
+    if not can_open:
+        reason = (
+            "存在证据或方向阻断，禁止新增仓位。"
+            if has_decision_blockers
+            else "多策略最终方向尚未确认偏多，禁止新增仓位。"
+            if not long_direction_confirmed
+            else str(execution.get("reason") or "缺少可执行的当前价与硬失效位")
+        )
+        return {
+            "status": "blocked" if has_decision_blockers or execution_status == "blocked" else "wait",
+            "new_position_allowed": False,
+            "reason": reason,
+            "tranches": [],
+            "take_profit_tranches": [],
+            "fibonacci_retracement": [],
+            **common,
+        }
+
+    risk_per_share = float(current - stop)
+    one_r = float(current + risk_per_share)
+    two_r = float(current + risk_per_share * 2)
+    fib_levels: list[dict] = []
+    if (
+        isinstance(support, (int, float))
+        and isinstance(resistance, (int, float))
+        and resistance > support
+    ):
+        span = float(resistance - support)
+        for ratio, label in ((0.382, "38.2%"), (0.5, "50.0%"), (0.618, "61.8%")):
+            fib_levels.append({
+                "ratio": label,
+                "price": round(float(resistance - span * ratio), 4),
+                "rule": "只作为回踩确认区；未出现止跌/收盘确认时不因触及而加仓。",
+            })
+
+    add_trigger = float(resistance) if isinstance(resistance, (int, float)) else None
+    return {
+        "status": "ready",
+        "new_position_allowed": True,
+        "reason": "执行门控通过；以下为计划仓位分段，仍须以当日收盘确认和账户风险预算换算。",
+        "entry_reference": round(float(current), 4),
+        "hard_stop": round(float(stop), 4),
+        "risk_per_share": round(risk_per_share, 4),
+        "risk_distance_pct": round(risk_per_share / float(current) * 100, 2),
+        "tranches": [
+            {
+                "stage": "首仓",
+                "allocation_pct": 50,
+                "trigger": "当前价附近仅在当日/计划周期收盘确认有效时建立。",
+                "price": round(float(current), 4),
+            },
+            {
+                "stage": "加仓一",
+                "allocation_pct": 30,
+                "trigger": "首仓盈利后，放量突破并收盘站稳近端阻力；不得在失败突破或亏损状态加仓。",
+                "price": round(add_trigger, 4) if add_trigger is not None else None,
+            },
+            {
+                "stage": "加仓二",
+                "allocation_pct": 20,
+                "trigger": "突破后形成紧凑平台/回踩不破突破位，或出现新的有效二次入场；仍需保持首仓盈利。",
+                "price": round(add_trigger, 4) if add_trigger is not None else None,
+            },
+        ],
+        "take_profit_tranches": [
+            {"stage": "1R", "price": round(one_r, 4), "reduce_pct": 25, "rule": "先兑现一部分并把剩余仓的风险收紧。"},
+            {"stage": "2R", "price": round(two_r, 4), "reduce_pct": 25, "rule": "第二次分批止盈；余仓跟随趋势。"},
+            {"stage": "余仓", "price": None, "reduce_pct": 50, "rule": "按重要低点、强阳K收盘或已验证的 VWAP 规则移动止盈。"},
+        ],
+        "fibonacci_retracement": fib_levels,
+        **common,
+    }
+
+
 def _multi_strategy_decision(score: Decimal, *, leveraged: bool) -> tuple[str, str]:
     """Map a deterministic score to a decision and risk-aware position guide."""
     if score >= Decimal("75"):
@@ -862,6 +969,12 @@ def _handle_calculate_multi_strategy_score(
         _multi_strategy_actions(decision),
         execution,
     )
+    position_plan = _build_multi_strategy_position_plan(
+        market_structure,
+        execution,
+        decision=decision,
+        has_decision_blockers=bool(decision_blockers),
+    )
 
     return {
         "status": "ok",
@@ -887,6 +1000,7 @@ def _handle_calculate_multi_strategy_score(
         "actions": actions,
         "execution": execution,
         "position_guidance": position_guidance,
+        "position_plan": position_plan,
         "confidence": {
             "level": confidence_level,
             "label": confidence_label,

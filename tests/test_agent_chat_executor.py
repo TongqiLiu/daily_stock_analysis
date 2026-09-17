@@ -100,7 +100,8 @@ def test_dsa_owned_backend_keeps_provider_trace_roundtrip() -> None:
          patch("src.agent.chat_executor.conversation_manager.get_or_create"), \
          patch("src.agent.chat_executor.conversation_manager.add_user_message", return_value=11), \
          patch("src.agent.chat_executor.conversation_manager.add_message", return_value=12), \
-         patch("src.agent.chat_executor.persist_provider_trace_turns") as persist_trace:
+         patch("src.agent.chat_executor.persist_provider_trace_turns") as persist_trace, \
+         patch("src.services.agent_chat_decision_signal_service.AgentChatDecisionSignalService.persist_completed_turn", return_value={"id": 91}) as persist_signal:
         result = _executor(backend).chat("question", "session")
 
     assert result.backend == "litellm"
@@ -110,6 +111,8 @@ def test_dsa_owned_backend_keeps_provider_trace_roundtrip() -> None:
     assert persist_trace.call_args.kwargs["baseline_len"] == 3
     assert persist_trace.call_args.kwargs["user_message_id"] == 11
     assert persist_trace.call_args.kwargs["assistant_message_id"] == 12
+    assert result.decision_signal == {"id": 91}
+    persist_signal.assert_called_once()
 
 
 def test_cancelled_codex_turn_is_not_persisted_as_analysis_failure() -> None:

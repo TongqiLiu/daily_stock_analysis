@@ -793,6 +793,56 @@ describe('ChatPage', () => {
     expect(screen.getByRole('button', { name: '复制当前对话' })).toBeDisabled();
   });
 
+  it('shows sent and completed timestamps at the top of chat messages', async () => {
+    mockStoreState.messages = [
+      {
+        id: 'user-timestamp',
+        role: 'user',
+        content: '请分析 NVDA',
+        createdAt: '2026-03-16T09:00:00Z',
+      },
+      {
+        id: 'assistant-timestamp',
+        role: 'assistant',
+        content: '等待突破确认。',
+        completedAt: '2026-03-16T09:01:00Z',
+      },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByTestId('chat-message-time-user-timestamp'))
+      .toHaveTextContent('发送于 2026');
+    expect(screen.getByTestId('chat-message-time-assistant-timestamp'))
+      .toHaveTextContent('完成于 2026');
+  });
+
+  it('highlights bold execution fields by their risk-management meaning', async () => {
+    mockStoreState.messages = [
+      {
+        id: 'assistant-execution-plan',
+        role: 'assistant',
+        content: '**建议动作：等待回踩**\n\n**仓位：单笔风险 0.5%**\n\n**止损位：100**\n\n**止盈位：120**\n\n**🟡 1R**',
+      },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('建议动作：等待回踩')).toHaveClass('chat-key-emphasis--positive');
+    expect(screen.getByText('仓位：单笔风险 0.5%')).toHaveClass('chat-key-emphasis--position');
+    expect(screen.getByText('止损位：100')).toHaveClass('chat-key-emphasis--risk');
+    expect(screen.getByText('止盈位：120')).toHaveClass('chat-key-emphasis--caution');
+    expect(screen.getByText('🟡 1R')).toHaveClass('chat-key-emphasis--caution');
+  });
+
   it('copies the current conversation from the input toolbar', async () => {
     mockStoreState.messages = [
       { id: 'user-1', role: 'user', content: '请分析 600519' },

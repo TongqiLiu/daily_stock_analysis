@@ -1836,6 +1836,23 @@
             }
           },
           {
+            "name": "stock_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stock Code"
+            }
+          },
+          {
             "name": "horizon",
             "in": "query",
             "required": false,
@@ -1897,6 +1914,22 @@
                 }
               ],
               "title": "Outcome"
+            }
+          },
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
             }
           },
           {
@@ -2044,6 +2077,22 @@
               ],
               "title": "Statuses"
             }
+          },
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            }
           }
         ],
         "responses": {
@@ -2093,6 +2142,93 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/decision-signals/outcomes/ai-review": {
+      "post": {
+        "tags": [
+          "DecisionSignals"
+        ],
+        "summary": "生成决策信号 AI 后置复盘",
+        "description": "基于确定性 outcome 聚合结果生成只读归因；不会重算 hit/miss 或修改策略权重。",
+        "operationId": "generateDecisionSignalPostReview",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionSignalPostReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionSignalPostReviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或管理员会话无效（ADMIN_AUTH_ENABLED=true 时）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "已完成样本不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "当前 AI 后端不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "AI 复盘生成失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -6189,6 +6325,50 @@
             "type": "integer",
             "title": "Signal Id"
           },
+          "stock_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          },
+          "signal_created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Created At"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          },
           "horizon": {
             "type": "string",
             "title": "Horizon"
@@ -6402,6 +6582,61 @@
           "holding_state": {
             "type": "string",
             "title": "Holding State"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "entry_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Low"
+          },
+          "entry_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry High"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss"
+          },
+          "target_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Price"
           },
           "created_at": {
             "anyOf": [
@@ -6704,6 +6939,28 @@
             ],
             "title": "Avg Stock Return Pct"
           },
+          "avg_adverse_excursion_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Adverse Excursion Pct"
+          },
+          "max_adverse_excursion_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Adverse Excursion Pct"
+          },
           "unable_reasons": {
             "additionalProperties": {
               "type": "integer"
@@ -6752,6 +7009,24 @@
             "type": "array",
             "title": "Statuses"
           },
+          "source_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "analysis",
+                  "agent",
+                  "alert",
+                  "market_review",
+                  "manual"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Type"
+          },
           "total": {
             "type": "integer",
             "title": "Total"
@@ -6798,6 +7073,28 @@
             ],
             "title": "Avg Stock Return Pct"
           },
+          "avg_adverse_excursion_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Adverse Excursion Pct"
+          },
+          "max_adverse_excursion_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Adverse Excursion Pct"
+          },
           "unable_reasons": {
             "additionalProperties": {
               "type": "integer"
@@ -6831,6 +7128,103 @@
           "profile_calibration"
         ],
         "title": "DecisionSignalOutcomeStatsResponse"
+      },
+      "DecisionSignalPostReviewRequest": {
+        "properties": {
+          "horizons": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "intraday",
+                    "1d",
+                    "3d",
+                    "5d",
+                    "10d",
+                    "swing",
+                    "long"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Horizons"
+          },
+          "source_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "analysis",
+                  "agent",
+                  "alert",
+                  "market_review",
+                  "manual"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Type"
+          }
+        },
+        "type": "object",
+        "title": "DecisionSignalPostReviewRequest"
+      },
+      "DecisionSignalPostReviewResponse": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          },
+          "completed_samples": {
+            "type": "integer",
+            "title": "Completed Samples"
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "prompt_version",
+          "completed_samples",
+          "generated_at"
+        ],
+        "title": "DecisionSignalPostReviewResponse"
       },
       "DecisionSignalProfileCalibration": {
         "properties": {

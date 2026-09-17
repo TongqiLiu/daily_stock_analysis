@@ -202,6 +202,15 @@ export interface DecisionSignalOutcomeItem {
   planQuality?: DecisionSignalPlanQuality | null;
   dataQualityLevel?: string | null;
   holdingState: 'holding' | 'empty' | 'unknown';
+  stockCode?: string | null;
+  stockName?: string | null;
+  signalCreatedAt?: string | null;
+  traceId?: string | null;
+  reason?: string | null;
+  entryLow?: number | null;
+  entryHigh?: number | null;
+  stopLoss?: number | null;
+  targetPrice?: number | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -229,10 +238,12 @@ export interface DecisionSignalOutcomeRunResponse {
 
 export interface DecisionSignalOutcomeListParams {
   signalId?: number;
+  stockCode?: string;
   horizon?: DecisionSignalHorizon;
   engineVersion?: string;
   evalStatus?: DecisionSignalOutcomeEvalStatus;
   outcome?: DecisionSignalOutcomeValue;
+  sourceType?: DecisionSignalSourceType;
   page?: number;
   pageSize?: number;
 }
@@ -255,6 +266,8 @@ export interface DecisionSignalOutcomeStatsBucket {
   neutral: number;
   hitRatePct?: number | null;
   avgStockReturnPct?: number | null;
+  avgAdverseExcursionPct?: number | null;
+  maxAdverseExcursionPct?: number | null;
   unableReasons: Record<string, number>;
 }
 
@@ -292,6 +305,7 @@ export interface DecisionSignalOutcomeStatsResponse {
   engineVersion: string;
   horizons?: DecisionSignalHorizon[] | null;
   statuses: DecisionSignalStatus[];
+  sourceType?: DecisionSignalSourceType | null;
   total: number;
   completed: number;
   unable: number;
@@ -300,6 +314,8 @@ export interface DecisionSignalOutcomeStatsResponse {
   neutral: number;
   hitRatePct?: number | null;
   avgStockReturnPct?: number | null;
+  avgAdverseExcursionPct?: number | null;
+  maxAdverseExcursionPct?: number | null;
   unableReasons: Record<string, number>;
   breakdowns: Record<string, DecisionSignalOutcomeStatsBucket[]>;
   profileCalibration?: DecisionSignalProfileCalibration;
@@ -309,6 +325,16 @@ export interface DecisionSignalOutcomeStatsParams {
   horizons?: DecisionSignalHorizon[];
   engineVersion?: string;
   statuses?: DecisionSignalStatus[];
+  sourceType?: DecisionSignalSourceType;
+}
+
+export interface DecisionSignalPostReviewResponse {
+  content: string;
+  provider?: string | null;
+  model?: string | null;
+  promptVersion: string;
+  completedSamples: number;
+  generatedAt: string;
 }
 
 export interface DecisionSignalFeedbackItem {

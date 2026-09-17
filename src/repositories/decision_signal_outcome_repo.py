@@ -26,6 +26,22 @@ class OutcomeStatsRow:
     metadata_json: Optional[str]
 
 
+@dataclass(frozen=True)
+class OutcomeListRow:
+    """Outcome row plus the originating DecisionSignal audit context."""
+
+    outcome: DecisionSignalOutcomeRecord
+    stock_code: str
+    stock_name: Optional[str]
+    signal_created_at: Optional[Any]
+    trace_id: Optional[str]
+    reason: Optional[str]
+    entry_low: Optional[float]
+    entry_high: Optional[float]
+    stop_loss: Optional[float]
+    target_price: Optional[float]
+
+
 class DecisionSignalOutcomeRepository:
     """DB access for signal-level outcome and feedback sidecar tables."""
 
@@ -138,18 +154,22 @@ class DecisionSignalOutcomeRepository:
         self,
         *,
         signal_id: Optional[int] = None,
+        stock_code: Optional[str] = None,
         horizon: Optional[str] = None,
         engine_version: Optional[str] = None,
         eval_status: Optional[str] = None,
         outcome: Optional[str] = None,
+        source_type: Optional[str] = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> Tuple[List[DecisionSignalOutcomeRecord], int]:
+    ) -> Tuple[List[OutcomeListRow], int]:
         safe_page = max(1, int(page))
         safe_page_size = max(1, min(int(page_size), 100))
         conditions = []
         if signal_id is not None:
             conditions.append(DecisionSignalOutcomeRecord.signal_id == signal_id)
+        if stock_code:
+            conditions.append(DecisionSignalRecord.stock_code == stock_code)
         if horizon:
             conditions.append(DecisionSignalOutcomeRecord.horizon == horizon)
         if engine_version:
@@ -158,22 +178,62 @@ class DecisionSignalOutcomeRepository:
             conditions.append(DecisionSignalOutcomeRecord.eval_status == eval_status)
         if outcome:
             conditions.append(DecisionSignalOutcomeRecord.outcome == outcome)
+        if source_type:
+            conditions.append(DecisionSignalRecord.source_type == source_type)
         where_clause = and_(*conditions) if conditions else True
         offset = (safe_page - 1) * safe_page_size
         with self.db.get_session() as session:
             total = session.execute(
                 select(func.count(DecisionSignalOutcomeRecord.id))
                 .select_from(DecisionSignalOutcomeRecord)
+                .join(DecisionSignalRecord, DecisionSignalRecord.id == DecisionSignalOutcomeRecord.signal_id)
                 .where(where_clause)
             ).scalar() or 0
             rows = session.execute(
-                select(DecisionSignalOutcomeRecord)
+                select(
+                    DecisionSignalOutcomeRecord,
+                    DecisionSignalRecord.stock_code,
+                    DecisionSignalRecord.stock_name,
+                    DecisionSignalRecord.created_at,
+                    DecisionSignalRecord.trace_id,
+                    DecisionSignalRecord.reason,
+                    DecisionSignalRecord.entry_low,
+                    DecisionSignalRecord.entry_high,
+                    DecisionSignalRecord.stop_loss,
+                    DecisionSignalRecord.target_price,
+                )
+                .join(DecisionSignalRecord, DecisionSignalRecord.id == DecisionSignalOutcomeRecord.signal_id)
                 .where(where_clause)
                 .order_by(desc(DecisionSignalOutcomeRecord.updated_at), desc(DecisionSignalOutcomeRecord.id))
                 .offset(offset)
                 .limit(safe_page_size)
-            ).scalars().all()
-            return list(rows), int(total)
+            ).all()
+            return [
+                OutcomeListRow(
+                    outcome=outcome_row,
+                    stock_code=stock_code_row,
+                    stock_name=stock_name,
+                    signal_created_at=signal_created_at,
+                    trace_id=trace_id,
+                    reason=reason,
+                    entry_low=entry_low,
+                    entry_high=entry_high,
+                    stop_loss=stop_loss,
+                    target_price=target_price,
+                )
+                for (
+                    outcome_row,
+                    stock_code_row,
+                    stock_name,
+                    signal_created_at,
+                    trace_id,
+                    reason,
+                    entry_low,
+                    entry_high,
+                    stop_loss,
+                    target_price,
+                ) in rows
+            ], int(total)
 
     def list_stats_rows(
         self,
@@ -181,12 +241,15 @@ class DecisionSignalOutcomeRepository:
         engine_version: str,
         horizons: Optional[List[str]] = None,
         statuses: Optional[List[str]] = None,
+        source_type: Optional[str] = None,
     ) -> List[OutcomeStatsRow]:
         conditions = [DecisionSignalOutcomeRecord.engine_version == engine_version]
         if horizons:
             conditions.append(DecisionSignalOutcomeRecord.horizon.in_(horizons))
         if statuses:
             conditions.append(DecisionSignalRecord.status.in_(statuses))
+        if source_type:
+            conditions.append(DecisionSignalRecord.source_type == source_type)
         with self.db.get_session() as session:
             rows = session.execute(
                 select(

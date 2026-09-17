@@ -2369,6 +2369,33 @@ textarea {
   color: var(--chat-prose-fg);
 }
 
+.chat-prose .chat-key-emphasis {
+  display: inline;
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.2rem;
+  font-weight: 700;
+}
+
+.chat-prose .chat-key-emphasis--positive {
+  color: hsl(var(--color-success) / 0.98);
+  background: hsl(var(--color-success) / 0.12);
+}
+
+.chat-prose .chat-key-emphasis--position {
+  color: hsl(var(--color-purple) / 0.98);
+  background: hsl(var(--color-purple) / 0.12);
+}
+
+.chat-prose .chat-key-emphasis--caution {
+  color: hsl(var(--color-warning) / 0.98);
+  background: hsl(var(--color-warning) / 0.12);
+}
+
+.chat-prose .chat-key-emphasis--risk {
+  color: hsl(var(--color-danger) / 0.98);
+  background: hsl(var(--color-danger) / 0.12);
+}
+
 .chat-prose ul,
 .chat-prose ol {
   margin: 0.375rem 0;

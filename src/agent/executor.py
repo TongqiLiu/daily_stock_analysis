@@ -59,6 +59,7 @@ class AgentResult:
     backend: str = ""
     error_code: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
+    decision_signal: Optional[Dict[str, Any]] = None
 
 
 # ============================================================

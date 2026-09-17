@@ -27,6 +27,7 @@ import {
 import { isNearBottom } from '../utils/chatScroll';
 import { getReportText } from '../utils/reportLanguage';
 import { extractStockCodesFromMessage } from '../utils/chatStockCode';
+import { formatDateTime } from '../utils/format';
 import {
   findMatchingStockCode,
   includesStockCode,
@@ -69,6 +70,7 @@ const PROMPT_TEMPLATES = [
 - 不额外展开新闻、研报、期权、组合快照或长篇基本面；缺失就写“数据缺失，无法判断”。
 - 日线为主；周线只做方向判断；无 4H 数据时不要推断 4H。
 - 常规输出控制在 900 字以内；如需列 12 项策略评分，每项关键依据不超过 18 字。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
+- 关键执行项必须加粗并带语义标识：**🟢 建议动作/入场/加仓**、**🟣 仓位与单笔最大风险**、**🔴 止损/失效条件**、**🟡 止盈/减仓**。数据不足时也要加粗标出，不能编造价格或比例。
 
 请输出：
 1. 当前状态：强势 / 震荡 / 回踩 / 突破 / 破位 / 高位风险。
@@ -76,8 +78,10 @@ const PROMPT_TEMPLATES = [
 3. 是否适合买入、持有、加仓、减仓或止损。
 4. 关键支撑、压力、多头生命线、失效位。
 5. 成交量和指标是否支持当前走势。
-6. 具体交易计划：入场/加仓条件、减仓条件、止损位。
-7. 一句话最终判断。`,
+6. 具体交易计划：入场/加仓条件、减仓条件、止损位、止盈位。
+7. 一句话最终判断。
+
+另设“仓位与分批执行”一节：先说明仓位比例只能代表计划仓位、不能冒充账户占比；给出首仓/加仓/减仓比例、关键触发价位、硬止损和 1R/2R 止盈。只允许盈利且结构确认后金字塔加仓，禁止下跌摊平；斐波那契位仅可作为回踩确认区。`,
     skills: ['multi_strategy_consensus'],
   },
   {
@@ -93,6 +97,7 @@ const PROMPT_TEMPLATES = [
 - 不额外展开新闻、研报、期权、基本面长分析；缺失就写“数据缺失，无法判断”。
 - 日线为主；周线只做方向判断；无 4H 数据时不要推断 4H。
 - 常规输出控制在 900 字以内；如需列 12 项策略评分，每项关键依据不超过 18 字。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
+- 关键执行项必须加粗并带语义标识：**🟢 持仓动作/加仓**、**🟣 仓位与单笔最大风险**、**🔴 止损/失效条件**、**🟡 止盈/减仓**。成本、仓位或账户数据缺失时必须加粗标出，禁止伪精确。
 
 输出结构：
 1. 持仓结论：继续持有 / 减仓 / 加仓 / 止损 / 做T降本 / 等突破，并给最重要依据。
@@ -101,7 +106,9 @@ const PROMPT_TEMPLATES = [
 4. 止损方案：硬止损位、结构止损位、移动止损位，跌破哪里必须认错。
 5. 加仓方案：允许加仓的触发条件、价格区间、加仓后止损；不允许加仓的情况。
 6. 减仓方案：压力位、冲高回落处理、放量突破后的持有条件。
-7. 最终计划：给出具体执行步骤。`,
+7. 最终计划：给出具体执行步骤。
+
+另设“仓位与分批执行”一节：仓位比例只能代表计划仓位、不能冒充账户占比；明确首仓/加仓/减仓比例、关键触发价位、硬止损和 1R/2R 止盈。只允许盈利且结构确认后金字塔加仓，禁止下跌摊平；斐波那契位仅可作为回踩确认区。`,
     skills: ['multi_strategy_consensus'],
   },
   {
@@ -149,6 +156,7 @@ const PROMPT_TEMPLATES = [
 6. 不额外展开新闻、研报、期权、组合快照或长篇基本面；缺失就写“数据缺失，无法判断”。
 7. 日线为主；周线只做方向判断；无 4H 数据时不要推断 4H。
 8. 常规输出控制在 900 字以内；如需列 12 项策略评分，每项关键依据不超过 18 字。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
+9. 关键执行项必须加粗并带语义标识：**🟢 建议动作/入场/加仓**、**🟣 仓位与单笔最大风险**、**🔴 止损/失效条件**、**🟡 止盈/减仓**；数据不足也要显式强调。
 
 输出格式：
 
@@ -183,7 +191,14 @@ const PROMPT_TEMPLATES = [
 - 减仓条件：
 
 五、最终判断
-用一句话说明：现在应该买入、等待、持有、减仓、止损，还是只观察。`,
+用一句话说明：现在应该买入、等待、持有、减仓、止损，还是只观察。
+
+六、仓位与分批执行
+- 明确仓位比例仅指计划仓位，不是账户净值占比；未读取账户风险预算时不得估算股数。
+- 首仓 / 加仓 / 减仓比例：
+- 金字塔加仓的确认价位与禁止条件：只允许盈利且结构确认后加仓，禁止下跌摊平。
+- 硬止损、1R / 2R 分批止盈、余仓移动止盈：
+- 斐波那契回踩区：只作为确认区，不是自动买点。`,
     skills: ['multi_strategy_consensus'],
   },
   {
@@ -222,6 +237,42 @@ const STRONG_COMPARE_STOCK_MESSAGE_RE = /比较|对比|\bvs\b|和[^，。,.!?！
 const WEAK_COMPARE_STOCK_MESSAGE_RE = /差异(?!化)|区别|不同|相比|对照|比一比/;
 const CHOICE_COMPARE_STOCK_MESSAGE_RE = /哪个|哪只|哪一个|谁更|更值得|更适合|怎么选|选哪|二选一/;
 const LINKED_COMPARE_STOCK_MESSAGE_RE = /(?:和|与|跟|同)[^，。,.!?！？]{0,40}(?:差异(?!化)|区别|不同|相比|对照|比一比)/;
+
+const getChatEmphasisTone = (children: React.ReactNode): string | undefined => {
+  const text = React.Children.toArray(children).join('').replace(/\s+/g, '');
+  if (text.includes('🔴')) {
+    return 'chat-key-emphasis--risk';
+  }
+  if (text.includes('🟡')) {
+    return 'chat-key-emphasis--caution';
+  }
+  if (text.includes('🟢')) {
+    return 'chat-key-emphasis--positive';
+  }
+  if (text.includes('🟣')) {
+    return 'chat-key-emphasis--position';
+  }
+  if (/止损|失效位|必须认错|回避|不交易|最大风险/.test(text)) {
+    return 'chat-key-emphasis--risk';
+  }
+  if (/止盈|减仓|压力位|目标价/.test(text)) {
+    return 'chat-key-emphasis--caution';
+  }
+  if (/建议动作|最终判断|买入|加仓|入场|支撑|持有/.test(text)) {
+    return 'chat-key-emphasis--positive';
+  }
+  if (/仓位|单笔风险|资金管理/.test(text)) {
+    return 'chat-key-emphasis--position';
+  }
+  return undefined;
+};
+
+const CHAT_MARKDOWN_COMPONENTS = {
+  strong: ({ children }: { children?: React.ReactNode }) => {
+    const tone = getChatEmphasisTone(children);
+    return <strong className={tone ? `chat-key-emphasis ${tone}` : undefined}>{children}</strong>;
+  },
+};
 const SWITCH_STOCK_MESSAGE_RE = /换成|改看|分析|看看|研究|诊断/;
 
 type ActiveStockResolution = {
@@ -1675,6 +1726,10 @@ const ChatPage: React.FC = () => {
             ) : (
               messages.map((msg) => {
                 const skillLabel = getMessageSkillLabel(msg);
+                const messageTimestamp = msg.role === 'assistant'
+                  ? (msg.completedAt ?? msg.createdAt)
+                  : msg.createdAt;
+                const messageTimeLabel = msg.role === 'assistant' ? '完成于' : '发送于';
                 return (
                 <div
                   key={msg.id}
@@ -1694,6 +1749,17 @@ const ChatPage: React.FC = () => {
                       msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'
                     )}
                   >
+                    {messageTimestamp && (
+                      <div
+                        className={cn(
+                          'mb-2 text-[11px] font-medium tracking-wide text-secondary-text/80',
+                          msg.role === 'user' && 'text-right',
+                        )}
+                        data-testid={`chat-message-time-${msg.id}`}
+                      >
+                        {messageTimeLabel} {formatDateTime(messageTimestamp)}
+                      </div>
+                    )}
                     {msg.role === 'assistant' && (skillLabel || msg.backend) && (
                       <div className="mb-2 flex flex-wrap gap-2">
                         {skillLabel ? <Badge variant="info" className="chat-skill-badge shadow-none" aria-label={`技能 ${skillLabel}`}>
@@ -1745,7 +1811,7 @@ const ChatPage: React.FC = () => {
                           </button>
                         </div>
                         <div className="chat-prose pr-20 sm:pr-24">
-                          <Markdown remarkPlugins={[remarkGfm]}>
+                          <Markdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
                             {msg.content}
                           </Markdown>
                         </div>
