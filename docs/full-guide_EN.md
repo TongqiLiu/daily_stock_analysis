@@ -156,6 +156,8 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `BOCHA_API_KEYS` | [Bocha Search](https://open.bocha.cn/) Web Search API (Chinese search optimized, supports AI summaries, multiple keys comma-separated) | Optional |
 | `BRAVE_API_KEYS` | [Brave Search](https://brave.com/search/api/) API (privacy-first, US-stock news enrichment, comma-separated for multiple keys) | Optional |
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search (structured search results) | Optional |
+
+> When the Ask-Stock Agent has no configured search engine or its keyed search fails, its stock-news tool attempts a read-only Futu public-news fallback and only admits direct company-name matches. This fallback does not replace an earnings calendar, SEC filings, or full news search; verify material events with company IR or exchange disclosures.
 | `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty, `searx.space` discovery is used only if public instances are explicitly enabled | Optional |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `false`). Public instances are commonly rate-limited or do not return JSON, so enabling this can add 30-60s per run and still yield no news | Optional |
 | `SEARXNG_TIMEOUT_SECONDS` | Per-search timeout in seconds for self-hosted SearXNG instances (default `10`, minimum `1`). Increase for slow instances (e.g. NAS deployments aggregating many engines); public-instance timeout is unaffected. GitHub Actions requires explicit variable mapping | Optional |

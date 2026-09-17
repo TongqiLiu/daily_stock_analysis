@@ -6,9 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src.agent.tools.search_tools import (
+    _format_futu_news_result,
     _handle_search_research_reports,
     _handle_search_comprehensive_intel,
     _handle_search_stock_news,
+    _search_futu_public_news,
 )
 from src.search_service import SearchResponse, SearchResult
 
@@ -155,6 +157,7 @@ class SearchToolsPersistenceTest(unittest.TestCase):
         unavailable = SimpleNamespace(is_available=False)
         db = SimpleNamespace(save_news_intel=MagicMock())
         with patch("src.agent.tools.search_tools._get_search_service", return_value=unavailable), \
+             patch("src.agent.tools.search_tools._search_futu_public_news", return_value={"success": False, "error": "unavailable", "attempts": []}), \
              patch("src.agent.tools.search_tools._get_db", return_value=db):
             result = _handle_search_stock_news("600519", "贵州茅台")
 
@@ -166,11 +169,74 @@ class SearchToolsPersistenceTest(unittest.TestCase):
             search_stock_news=MagicMock(return_value=_response("latest", success=False)),
         )
         with patch("src.agent.tools.search_tools._get_search_service", return_value=failed), \
+             patch("src.agent.tools.search_tools._search_futu_public_news", return_value={"success": False, "error": "unavailable", "attempts": []}), \
              patch("src.agent.tools.search_tools._get_db", return_value=db):
             result = _handle_search_stock_news("600519", "贵州茅台")
 
         self.assertFalse(result["success"])
         db.save_news_intel.assert_not_called()
+
+    def test_unavailable_search_uses_direct_futu_public_news_fallback(self) -> None:
+        unavailable = SimpleNamespace(is_available=False)
+        fallback = {
+            "success": True,
+            "query": "Penguin Solutions",
+            "provider": "Futu public news",
+            "attempts": [{"keyword": "Penguin Solutions", "success": True, "results_count": 1}],
+            "items": [{
+                "title": "Penguin Solutions Sets Conference Call for Results",
+                "publish_time": "1789511760",
+                "url": "https://news.futunn.com/en/post/1",
+            }],
+        }
+        with patch("src.agent.tools.search_tools._get_search_service", return_value=unavailable), \
+             patch("src.agent.tools.search_tools._search_futu_public_news", return_value=fallback), \
+             patch("src.agent.tools.search_tools._persist_futu_news_result"), \
+             patch("src.agent.tools.search_tools.record_news_evidence") as evidence:
+            result = _handle_search_stock_news("PENG", "Penguin Solutions")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["provider"], "Futu public news")
+        self.assertEqual(result["results_count"], 1)
+        self.assertEqual(result["results"][0]["title"], "Penguin Solutions Sets Conference Call for Results")
+        evidence.assert_called_once_with(1)
+
+    def test_futu_public_news_rejects_ambiguous_ticker_only_matches(self) -> None:
+        result = _format_futu_news_result({
+            "query": "PENG",
+            "provider": "Futu public news",
+            "attempts": [],
+            "items": [],
+        })
+        self.assertFalse(result["success"])
+        self.assertEqual(result["results"], [])
+
+    def test_futu_public_news_prefers_company_identity_for_ambiguous_peng_ticker(self) -> None:
+        payload = {
+            "code": 0,
+            "data": [
+                {
+                    "title": "Penguin Solutions Sets Conference Call for Results",
+                    "publish_time": "1789511760",
+                    "url": "https://news.futunn.com/en/post/1",
+                },
+                {
+                    "title": "Peng Jia resigns from an unrelated company",
+                    "publish_time": "1789511761",
+                    "url": "https://news.futunn.com/en/post/2",
+                },
+            ],
+        }
+        with patch("src.agent.tools.search_tools._fetch_futu_news", return_value=payload) as fetch:
+            result = _search_futu_public_news("PENG", "Penguin Solutions", limit=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["query"], "Penguin Solutions")
+        self.assertEqual(len(result["items"]), 1)
+        self.assertIn("Penguin Solutions", result["items"][0]["title"])
+        fetch.assert_called_once_with(
+            "Penguin Solutions", size=5, lang="en", news_type=1
+        )
 
     def test_search_research_reports_formats_public_results(self) -> None:
         payload = {

@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -110,11 +110,23 @@ def _format_publish_time(value: Any) -> str:
 
 
 def _fetch_futu_research(keyword: str, *, size: int, lang: str, timeout: int = 8) -> dict:
+    return _fetch_futu_news(keyword, size=size, lang=lang, news_type=3, timeout=timeout)
+
+
+def _fetch_futu_news(
+    keyword: str,
+    *,
+    size: int,
+    lang: str,
+    news_type: int = 1,
+    timeout: int = 8,
+) -> dict:
+    """Fetch public Futu news without requiring a third-party search API key."""
     params = urlencode(
         {
             "keyword": keyword,
             "size": size,
-            "news_type": 3,
+            "news_type": news_type,
             "lang": lang,
             "sort_type": 2,
         }
@@ -124,6 +136,131 @@ def _fetch_futu_research(keyword: str, *, size: int, lang: str, timeout: int = 8
     with urlopen(request, timeout=timeout) as response:
         raw = response.read().decode("utf-8")
     return json.loads(raw)
+
+
+def _futu_news_keyword_candidates(stock_code: str, stock_name: str) -> list[str]:
+    """Prefer a verified company name over an ambiguous ticker such as PENG."""
+    candidates: list[str] = []
+    canonical_code = _canonical_search_code(stock_code)
+    try:
+        from src.data.stock_mapping import foreign_stock_english_aliases
+
+        aliases = foreign_stock_english_aliases(canonical_code, stock_name)
+    except Exception:  # Mapping is optional for unknown symbols.
+        aliases = ()
+    for value in (*aliases, stock_name, canonical_code, stock_code):
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+    return candidates
+
+
+def _futu_news_matches_subject(item: dict, keyword: str) -> bool:
+    """Require a direct company-name match so ambiguous ticker searches stay fail-closed."""
+    title = _strip_search_markup(item.get("title")).casefold()
+    normalized_keyword = re.sub(r"\s+", " ", str(keyword or "").casefold()).strip()
+    # A bare ticker is too ambiguous for this public endpoint (for example PENG).
+    if len(normalized_keyword) < 5 or " " not in normalized_keyword:
+        return False
+    return normalized_keyword in title
+
+
+def _search_futu_public_news(stock_code: str, stock_name: str, *, limit: int) -> dict:
+    """Return direct company news from Futu as a no-key fallback for Agent news tools."""
+    attempts = []
+    last_error = ""
+    for keyword in _futu_news_keyword_candidates(stock_code, stock_name):
+        try:
+            payload = _fetch_futu_news(keyword, size=limit, lang="en", news_type=1)
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+            last_error = str(exc)
+            attempts.append({"keyword": keyword, "success": False, "error": last_error})
+            continue
+        if str(payload.get("code")) != "0":
+            last_error = str(payload.get("message") or "Futu news search returned non-zero code")
+            attempts.append({"keyword": keyword, "success": False, "error": last_error})
+            continue
+        raw_items = payload.get("data") or []
+        if not isinstance(raw_items, list):
+            last_error = "Futu news search returned invalid data shape"
+            attempts.append({"keyword": keyword, "success": False, "error": last_error})
+            continue
+        items = [item for item in raw_items if isinstance(item, dict) and _futu_news_matches_subject(item, keyword)]
+        attempts.append({"keyword": keyword, "success": True, "results_count": len(items)})
+        if items:
+            return {
+                "success": True,
+                "query": keyword,
+                "provider": "Futu public news",
+                "attempts": attempts,
+                "items": items[:limit],
+            }
+        last_error = "Futu returned no direct company-news matches"
+    return {
+        "success": False,
+        "provider": "Futu public news",
+        "attempts": attempts,
+        "error": last_error or "Futu public news search unavailable",
+        "items": [],
+    }
+
+
+def _format_futu_news_result(payload: dict) -> dict:
+    """Normalize public Futu result fields to the Agent news-tool response contract."""
+    results = []
+    for item in payload.get("items") or []:
+        results.append({
+            "title": _strip_search_markup(item.get("title")),
+            "snippet": "",
+            "url": str(item.get("url") or "").strip(),
+            "source": "Futu public news",
+            "published_date": _format_publish_time(item.get("publish_time")),
+        })
+    return {
+        "query": payload.get("query", ""),
+        "provider": payload.get("provider", "Futu public news"),
+        "success": bool(results),
+        "results_count": len(results),
+        "results": results,
+        "attempts": payload.get("attempts", []),
+    }
+
+
+def _persist_futu_news_result(*, stock_code: str, stock_name: str, result: dict) -> None:
+    """Keep fallback news visible in the same best-effort evidence store as keyed providers."""
+    from src.search_service import SearchResponse, SearchResult
+
+    response = SearchResponse(
+        query=str(result.get("query") or stock_name),
+        provider=str(result.get("provider") or "Futu public news"),
+        success=bool(result.get("success")),
+        results=[
+            SearchResult(
+                title=str(item.get("title") or ""),
+                snippet=str(item.get("snippet") or ""),
+                url=str(item.get("url") or ""),
+                source=str(item.get("source") or "Futu public news"),
+                published_date=str(item.get("published_date") or "") or None,
+            )
+            for item in result.get("results") or []
+            if isinstance(item, dict)
+        ],
+    )
+    _persist_news_response(
+        stock_code=stock_code,
+        stock_name=stock_name,
+        dimension="latest_news",
+        response=response,
+    )
+
+
+def _try_futu_public_news_fallback(stock_code: str, stock_name: str) -> Optional[dict]:
+    fallback = _search_futu_public_news(stock_code, stock_name, limit=5)
+    if not fallback["success"]:
+        return None
+    result = _format_futu_news_result(fallback)
+    _persist_futu_news_result(stock_code=stock_code, stock_name=stock_name, result=result)
+    return result
 
 
 def _persist_news_response(
@@ -168,11 +305,28 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
     query_code, query_name = _resolve_search_subject(stock_code, stock_name)
 
     if not service.is_available:
-        return {"error": "No search engine available (no API keys configured)"}
+        fallback = _search_futu_public_news(query_code, query_name, limit=5)
+        if fallback["success"]:
+            result = _format_futu_news_result(fallback)
+            _persist_futu_news_result(stock_code=query_code, stock_name=query_name, result=result)
+            record_news_evidence(result["results_count"])
+            return result
+        record_news_evidence(0)
+        return {
+            "success": False,
+            "provider": "Futu public news",
+            "error": "No search engine available and Futu public-news fallback failed: " + fallback["error"],
+            "attempts": fallback["attempts"],
+            "results": [],
+        }
 
     response = service.search_stock_news(query_code, query_name, max_results=5)
 
     if not response.success:
+        fallback_result = _try_futu_public_news_fallback(query_code, query_name)
+        if fallback_result is not None:
+            record_news_evidence(fallback_result["results_count"])
+            return fallback_result
         # 检索已发起但失败：Agent 这一轮没有拿到新闻证据，必须记 0 而不是不记，
         # 否则报告会把「搜过但失败」误报成「未配置搜索渠道」。
         record_news_evidence(0)

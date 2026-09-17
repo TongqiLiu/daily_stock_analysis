@@ -163,6 +163,8 @@ daily_stock_analysis/
 | `BOCHA_API_KEYS` | [博查搜索](https://open.bocha.cn/) Web Search API（中文搜索优化，支持AI摘要，多个key用逗号分隔） | 可选 |
 | `BRAVE_API_KEYS` | [Brave Search](https://brave.com/search/api/) API（隐私优先，美股优化，多个key用逗号分隔） | 可选 |
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search（结构化搜索结果） | 可选 |
+
+> 问股 Agent 的个股新闻工具在上述搜索引擎均未配置或调用失败时，会尝试富途公开新闻作为只读降级来源；仅接纳与公司名称直接匹配的结果。该降级不替代财报日历、SEC 公告或完整新闻搜索，关键事件仍应以公司 IR/交易所披露核验。
 | `SEARXNG_BASE_URLS` | SearXNG 自建实例（无配额兜底，需在 settings.yml 启用 format: json）；留空时仅在显式启用公共实例发现后使用 `searx.space` | 可选 |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `false`）。公共实例普遍限流或未开启 JSON 输出，开启后每次分析可能多耗 30~60 秒且新闻面为空 | 可选 |
 | `SEARXNG_TIMEOUT_SECONDS` | 自建 SearXNG 单次搜索超时（秒，默认 `10`，最小 `1`）；实例较慢（如聚合引擎较多的 NAS 部署）时可调大，公共实例超时不受影响。GitHub Actions 需显式映射该变量 | 可选 |

@@ -92,6 +92,7 @@ STOCK_NAME_MAP = {
     "LI": "理想汽车",
     "COIN": "Coinbase",
     "MSTR": "MicroStrategy",
+    "PENG": "Penguin Solutions",
     # === HK stocks (5-digit) ===
     "00700": "腾讯控股",
     "03690": "美团",
@@ -158,6 +159,7 @@ STOCK_ENGLISH_NAME_MAP: Dict[str, Tuple[str, ...]] = {
     "LI": ("Li Auto Inc.", "Li Auto"),
     "COIN": ("Coinbase Global, Inc.", "Coinbase"),
     "MSTR": ("MicroStrategy Incorporated", "MicroStrategy"),
+    "PENG": ("Penguin Solutions, Inc.", "Penguin Solutions"),
     # === HK stocks (5-digit) ===
     "00700": ("Tencent Holdings", "Tencent"),
     "03690": ("Meituan",),
