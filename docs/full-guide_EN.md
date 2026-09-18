@@ -2,6 +2,12 @@
 
 This document contains the complete configuration guide for the AI Stock Analysis System, intended for users who need advanced features or special deployment methods.
 
+### Ask-stock position execution safeguards
+
+The consensus execution gate applies to both new entries and holding adds. Missing execution inputs or insufficient reward/risk block both, while existing-position protection remains visible. The 1R/2R references are observation levels, not automatic 25% sales. Resistance or low volume alone does not trigger reduction: distinguish intact higher lows and strong closes from failed breakouts with bearish follow-through. Hard invalidation and account risk limits take priority. Each proposed repurchase or net add needs a fresh entry/structural stop/next-resistance reward-risk calculation (at least 1.5), plus total-risk review. Do not invent allocation sizes without position/risk inputs. Reducing exposure is not guaranteed cost-basis reduction; total P/L includes realized and unrealized results and fees. These safeguards are not automatic orders or evidence of improved win rate.
+
+`get_volume_analysis` uses only calendar-verified completed daily bars and excludes bars after a frozen historical date. It returns `data_as_of`, `bar_completion`, excluded-bar count and actual baseline sample size. Baseline averages exclude the comparison day. During a session, results usually describe the preceding completed session, not today's intraday volume. Unverifiable calendar/date inputs return an explicit unavailable result without confirmation ratios. Other technical tools still require their own as-of checks; this completion guarantee does not apply to all tools.
+
 > Quick start guide available in [README_EN.md](README_EN.md). This document covers advanced configuration.
 
 ## Project Structure

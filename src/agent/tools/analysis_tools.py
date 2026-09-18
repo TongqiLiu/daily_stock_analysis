@@ -215,7 +215,7 @@ def _multi_strategy_actions(decision: str) -> dict[str, str]:
             "no_position": "avoid",
             "no_position_label": "暂不介入",
             "has_position": "reduce",
-            "has_position_label": "反弹减仓并收紧止损",
+            "has_position_label": "结构转弱或突破失败确认时减仓；不因单独缩量卖出",
         }
     if decision == "卖出":
         return {
@@ -521,6 +521,12 @@ def _apply_multi_strategy_execution_gate(actions: dict[str, str], execution: dic
     if execution.get("has_position_action") == "sell":
         adjusted["has_position"] = "sell"
         adjusted["has_position_label"] = "已跌破硬失效位，按计划退出"
+    elif execution.get("status") != "ready" and adjusted.get("has_position") == "add":
+        adjusted["has_position"] = "hold"
+        adjusted["has_position_label"] = "暂不加仓；执行条件未通过，已有仓位按结构管理"
+    if execution.get("status") in {"partial", "unavailable"} and adjusted.get("no_position") == "buy":
+        adjusted["no_position"] = "watch"
+        adjusted["no_position_label"] = "执行数据不足，暂不新开仓"
     return adjusted
 
 
@@ -556,6 +562,19 @@ def _build_multi_strategy_position_plan(
         "account_sizing_formula": "计划仓位金额 = 账户净值 × 单笔风险预算 ÷ 止损距离比例；未读取账户净值/风险预算时不得换算股数或账户占比。",
         "livermore_rule": "仅在首仓已盈利且结构确认后加仓；禁止向亏损仓摊平。",
         "pyramid_rule": "50% / 30% / 20% 是计划仓位的分段，不是账户资金比例。",
+        "existing_position_management": {
+            "status": "exit" if execution.get("has_position_action") == "sell" else "conditional",
+            "invalidation_level": stop,
+            "resistance_observation": resistance,
+            "rules": [
+                "压力位与1R/2R只是评估位置，不是自动卖点；缩量本身不能触发减仓。",
+                "冲高回落/突破失败并有空头延续时才考虑结构性减仓；强收盘、浅回撤、HL保持时优先跟踪有效结构保护位。",
+                "硬失效位触发或账户风险超预算时优先控险，不必等待空头延续；缺持仓与风险预算时不编造减仓股数/比例。",
+                "减仓是降低风险，不保证降本；回补须另算新增风险，补回已卖股数与净增加持仓必须区分，总盈亏包含已实现与未实现及费用。",
+            ],
+        },
+        "add_requires_reassessment": True,
+        "add_rule": "突破或HL回踩确认仅是候选：须有计划周期收盘及后续跟随/回踩证据，并按拟成交价、新的有效结构止损和下一阻力重算盈亏比（至少1.5）及总风险；缺任何一项不加仓，不得为了凑盈亏比虚设近止损。",
     }
     if not can_open:
         reason = (
@@ -611,20 +630,20 @@ def _build_multi_strategy_position_plan(
             {
                 "stage": "加仓一",
                 "allocation_pct": 30,
-                "trigger": "首仓盈利后，放量突破并收盘站稳近端阻力；不得在失败突破或亏损状态加仓。",
+                "trigger": "首仓盈利后，突破出现收盘与后续跟随/回踩确认；量能仅辅助。须按拟成交价、新结构止损、下一阻力重算盈亏比≥1.5及总风险，未通过不加仓。",
                 "price": round(add_trigger, 4) if add_trigger is not None else None,
             },
             {
                 "stage": "加仓二",
                 "allocation_pct": 20,
-                "trigger": "突破后形成紧凑平台/回踩不破突破位，或出现新的有效二次入场；仍需保持首仓盈利。",
+                "trigger": "形成紧凑平台/HL回踩确认或有效二次入场；仍需首仓盈利，并重新验证新增部分盈亏比≥1.5及加仓后总风险。",
                 "price": round(add_trigger, 4) if add_trigger is not None else None,
             },
         ],
         "take_profit_tranches": [
-            {"stage": "1R", "price": round(one_r, 4), "reduce_pct": 25, "rule": "先兑现一部分并把剩余仓的风险收紧。"},
-            {"stage": "2R", "price": round(two_r, 4), "reduce_pct": 25, "rule": "第二次分批止盈；余仓跟随趋势。"},
-            {"stage": "余仓", "price": None, "reduce_pct": 50, "rule": "按重要低点、强阳K收盘或已验证的 VWAP 规则移动止盈。"},
+            {"stage": "1R", "price": round(one_r, 4), "reduce_pct": None, "rule": "风险收益观察位，非自动卖点；只有结构转弱或风险预算要求时才确定减仓比例。"},
+            {"stage": "2R", "price": round(two_r, 4), "reduce_pct": None, "rule": "重新评估延续与阻力；强势结构保持时跟踪保护，不因达到2R或缩量机械兑现。"},
+            {"stage": "余仓", "price": None, "reduce_pct": None, "rule": "跟踪已确认的重要低点；强阳K收盘是激进保护参考，不是普通趋势中一跌即清仓；VWAP仅用于已验证日内周期。"},
         ],
         "fibonacci_retracement": fib_levels,
         **common,
@@ -1264,7 +1283,8 @@ calculate_ma_tool = ToolDefinition(
 
 def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
     """Analyse volume-price patterns over recent trading days."""
-    from src.services.history_loader import load_history_df
+    from src.services.history_loader import get_frozen_target_date, load_history_df
+    from src.core.trading_calendar import build_market_phase_context, get_market_for_stock
     import pandas as pd
 
     df, source = load_history_df(stock_code, days=max(days + 20, 60))
@@ -1272,17 +1292,45 @@ def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
     if df is None or df.empty:
         return {"error": f"No historical data for {stock_code}"}
 
+    # Do not compare an unfinished session's cumulative volume with full days.
+    # Calendar failures must not inherit the calendar helper's fail-open date.
+    phase = build_market_phase_context(market=get_market_for_stock(stock_code))
+    if phase.phase.value == "unknown" or phase.warnings:
+        return {
+            "code": stock_code, "source": source, "status": "unavailable",
+            "error": "交易日完成状态无法验证，量能待确认",
+            "reason": ",".join(phase.warnings) or "unknown_market_phase",
+        }
+    if "date" not in df.columns:
+        return {
+            "code": stock_code, "source": source, "status": "unavailable",
+            "error": "日线缺少日期，不能验证完成状态，量能待确认",
+        }
+    cutoff = phase.effective_daily_bar_date
+    frozen = get_frozen_target_date()
+    if frozen is not None:
+        cutoff = min(cutoff, frozen)
+    df = df.copy()
+    bar_dates = pd.to_datetime(df["date"], format="mixed", errors="coerce").dt.date
+    if bar_dates.isna().any():
+        return {
+            "code": stock_code, "source": source, "status": "unavailable",
+            "error": "日线日期无效，不能验证完成状态，量能待确认",
+        }
+    excluded_bars = int((bar_dates > cutoff).sum())
+    df["date"] = bar_dates
+    df = df.loc[bar_dates <= cutoff].sort_values("date").drop_duplicates("date", keep="last")
     df = df.tail(days).copy()
-    if len(df) < 5:
-        return {"error": f"Insufficient data for volume analysis (got {len(df)} days, need >= 5)"}
+    if len(df) < 6:
+        return {"error": f"Insufficient completed data for volume analysis (got {len(df)} days, need >= 6)"}
 
     close = df["close"]
     volume = df["volume"]
 
     # Average volumes
-    avg_vol_5 = float(volume.tail(5).mean())
-    avg_vol_10 = float(volume.tail(10).mean())
-    avg_vol_20 = float(volume.tail(20).mean()) if len(df) >= 20 else avg_vol_10
+    baseline_volume = volume.iloc[:-1]
+    avg_vol_5 = float(baseline_volume.tail(5).mean())
+    avg_vol_20 = float(baseline_volume.tail(20).mean())
     latest_vol = float(volume.iloc[-1])
     vol_ratio_5d = round(latest_vol / avg_vol_5, 2) if avg_vol_5 > 0 else None
     vol_ratio_20d = round(latest_vol / avg_vol_20, 2) if avg_vol_20 > 0 else None
@@ -1292,9 +1340,13 @@ def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
 
     # Volume-price correlation (last N days)
     try:
-        import numpy as np
-        vp_corr = float(pd.Series(volume.values, dtype=float).corr(pd.Series(close.values, dtype=float)))
-        vp_corr = round(vp_corr, 3)
+        volume_series = pd.Series(volume.values, dtype=float)
+        price_series = pd.Series(close.values, dtype=float)
+        vp_corr = (
+            float(volume_series.corr(price_series))
+            if volume_series.nunique() > 1 and price_series.nunique() > 1 else None
+        )
+        vp_corr = round(vp_corr, 3) if vp_corr is not None and math.isfinite(vp_corr) else None
     except Exception:
         vp_corr = None
 
@@ -1333,6 +1385,13 @@ def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
     return {
         "code": stock_code,
         "source": source,
+        "status": "ok",
+        "data_as_of": str(df["date"].iloc[-1]),
+        "bar_completion": "completed",
+        "excluded_uncompleted_or_future_bars": excluded_bars,
+        "volume_ratio_basis": "最近已完成日成交量 / 此前已完成交易日均量（不含被比较日）",
+        "baseline_days_20d": min(len(baseline_volume), 20),
+        "interpretation_guard": "本结果截至data_as_of，不代表盘中当前日量能；缩量不单独证明假突破或触发减仓。",
         "period_days": len(df),
         "latest_volume": latest_vol,
         "avg_volume_5d": round(avg_vol_5, 0),

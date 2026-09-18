@@ -184,7 +184,7 @@ def test_execution_gate_waits_when_a_bullish_score_has_insufficient_reward_to_ri
     assert result["execution"]["reward_risk_ratio"] == 1.07
     assert result["actions"]["no_position"] == "watch"
     assert result["actions"]["no_position_label"] == "等待突破/回踩确认，当前不追入"
-    assert result["actions"]["has_position"] == "add"
+    assert result["actions"]["has_position"] == "hold"
 
 
 def test_position_plan_uses_pyramiding_only_after_a_valid_risk_gate() -> None:
@@ -200,7 +200,8 @@ def test_position_plan_uses_pyramiding_only_after_a_valid_risk_gate() -> None:
     assert plan["new_position_allowed"] is True
     assert [item["allocation_pct"] for item in plan["tranches"]] == [50, 30, 20]
     assert plan["hard_stop"] == 97.8
-    assert plan["take_profit_tranches"][0]["reduce_pct"] == 25
+    assert all(item["reduce_pct"] is None for item in plan["take_profit_tranches"])
+    assert plan["add_requires_reassessment"] is True
     assert "禁止向亏损仓摊平" in plan["livermore_rule"]
     assert [item["ratio"] for item in plan["fibonacci_retracement"]] == [
         "38.2%", "50.0%", "61.8%"
@@ -210,7 +211,7 @@ def test_position_plan_uses_pyramiding_only_after_a_valid_risk_gate() -> None:
 
     assert "#### 2.1 仓位与分批执行（独立计划）" in rendered
     assert "| 首仓 | 50% | 102 |" in rendered
-    assert "| **🟡 1R** | 106.2 | 25% |" in rendered
+    assert "| **🟡 1R** | 106.2 | 按结构与风险预算确定 |" in rendered
     assert "斐波那契区间由本轮近端支撑—阻力推导" in rendered
 
 
@@ -233,6 +234,8 @@ def test_position_plan_blocks_new_allocation_when_evidence_is_insufficient() -> 
     assert result["position_plan"]["tranches"] == []
     rendered = _render_multi_strategy_score_section(result)
     assert "**🔴 新增仓位：0%**" in rendered
+    assert "已有仓位管理" in rendered
+    assert "缩量本身不能触发减仓" in rendered
 
 
 def test_position_plan_requires_a_bullish_multi_strategy_decision() -> None:

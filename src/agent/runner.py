@@ -413,6 +413,21 @@ def _render_multi_strategy_position_section(payload: Dict[str, Any]) -> list[str
         + _markdown_table_cell(plan.get("reason") or "未提供"),
         "- **🟣 定仓公式：**" + _markdown_table_cell(plan.get("account_sizing_formula")),
     ]
+    holding = plan.get("existing_position_management")
+    if isinstance(holding, dict):
+        lines.extend([
+            "",
+            "| 已有仓位管理 | 参考 / 条件 |",
+            "|---|---|",
+            "| **🔴 结构失效位** | " + _format_multi_strategy_number(holding.get("invalidation_level")) + " |",
+            "| **🟡 压力观察位（非自动卖点）** | " + _format_multi_strategy_number(holding.get("resistance_observation")) + " |",
+        ])
+        if holding.get("status") == "exit":
+            lines.append("| **🔴 原计划失效** | 已触发硬失效位，优先按计划退出 |")
+        for rule in holding.get("rules") or []:
+            lines.append("| 管理约束 | " + _markdown_table_cell(rule) + " |")
+    if plan.get("add_rule"):
+        lines.append("- **🟣 回补 / 加仓门槛：**" + _markdown_table_cell(plan["add_rule"]))
     if not plan.get("new_position_allowed"):
         lines.extend([
             "- **🔴 新增仓位：0%**。当前只允许保护已有仓位或等待结构重建；不能因为价格回落而机械采用斐波那契加仓。",
@@ -454,7 +469,7 @@ def _render_multi_strategy_position_section(payload: Dict[str, Any]) -> list[str
 
     lines.extend([
         "",
-        "| 分批止盈 | 参考价 | 减仓比例 | 执行规则 |",
+        "| 止盈观察（非自动执行） | 参考价 | 减仓比例 | 执行规则 |",
         "|---|---:|---:|---|",
     ])
     for target in plan.get("take_profit_tranches") or []:
@@ -465,7 +480,8 @@ def _render_multi_strategy_position_section(payload: Dict[str, Any]) -> list[str
             + " | ".join([
                 "**🟡 " + _markdown_table_cell(target.get("stage")) + "**",
                 _format_multi_strategy_number(target.get("price")),
-                _format_multi_strategy_number(target.get("reduce_pct"), decimals=0) + "%",
+                (_format_multi_strategy_number(target.get("reduce_pct"), decimals=0) + "%")
+                if target.get("reduce_pct") is not None else "按结构与风险预算确定",
                 _markdown_table_cell(target.get("rule")),
             ])
             + " |"
