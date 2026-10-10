@@ -556,11 +556,11 @@ def test_codex_stream_skill_resolution_failure_does_not_register_request() -> No
                 )
             )
 
-        with agent_endpoint._ACTIVE_CODEX_STREAMS_LOCK:
-            assert request_id not in agent_endpoint._ACTIVE_CODEX_STREAMS
+        with agent_endpoint._ACTIVE_AGENT_STREAMS_LOCK:
+            assert request_id not in agent_endpoint._ACTIVE_AGENT_STREAMS
     finally:
-        with agent_endpoint._ACTIVE_CODEX_STREAMS_LOCK:
-            agent_endpoint._ACTIVE_CODEX_STREAMS.pop(request_id, None)
+        with agent_endpoint._ACTIVE_AGENT_STREAMS_LOCK:
+            agent_endpoint._ACTIVE_AGENT_STREAMS.pop(request_id, None)
 
 
 @pytest.mark.parametrize("failure", ["context preparation failed", "database write failed"])
@@ -629,10 +629,10 @@ def test_agent_chat_stream_cancels_backend_when_generator_closes() -> None:
     assert accepted["backend"] == "codex_app_server"
 
 
-def test_codex_stop_waits_for_cleanup_and_emits_one_terminal_event() -> None:
+def test_stop_signals_an_active_agent_stream() -> None:
     cancel_event = threading.Event()
-    with agent_endpoint._ACTIVE_CODEX_STREAMS_LOCK:
-        agent_endpoint._ACTIVE_CODEX_STREAMS["cancel-request"] = cancel_event
+    with agent_endpoint._ACTIVE_AGENT_STREAMS_LOCK:
+        agent_endpoint._ACTIVE_AGENT_STREAMS["cancel-request"] = cancel_event
     try:
         assert asyncio.run(agent_endpoint.cancel_agent_chat_stream("cancel-request")) == {
             "accepted": True,
@@ -640,11 +640,50 @@ def test_codex_stop_waits_for_cleanup_and_emits_one_terminal_event() -> None:
         }
         assert cancel_event.is_set()
     finally:
-        with agent_endpoint._ACTIVE_CODEX_STREAMS_LOCK:
-            agent_endpoint._ACTIVE_CODEX_STREAMS.pop("cancel-request", None)
+        with agent_endpoint._ACTIVE_AGENT_STREAMS_LOCK:
+            agent_endpoint._ACTIVE_AGENT_STREAMS.pop("cancel-request", None)
 
 
-def test_codex_stop_rejects_unknown_or_finished_request() -> None:
+def test_stop_endpoint_cancels_an_accepted_litellm_turn() -> None:
+    executor = _executor()
+
+    def wait_for_cancel(*_args, **kwargs):
+        cancel_event = kwargs["cancel_event"]
+        assert cancel_event.wait(timeout=1.0)
+        return _result(backend="litellm", success=False, error_code="cancelled")
+
+    executor.execute_turn.side_effect = wait_for_cancel
+
+    async def exercise() -> list[dict]:
+        with patch("api.v1.endpoints.agent.get_config", return_value=_litellm_config()), \
+             patch("api.v1.endpoints.agent._build_executor", return_value=executor):
+            response = await agent_endpoint.agent_chat_stream(
+                agent_endpoint.ChatRequest(
+                    message="question",
+                    session_id="litellm-cancel-session",
+                    request_id="litellm-cancel-request",
+                ),
+                session_service=AgentChatSessionService(),
+            )
+            iterator = response.body_iterator
+            accepted = json.loads((await anext(iterator)).removeprefix("data: ").strip())
+            pending_terminal = asyncio.create_task(anext(iterator))
+            await asyncio.sleep(0)
+            assert await agent_endpoint.cancel_agent_chat_stream("litellm-cancel-request") == {
+                "accepted": True,
+                "request_id": "litellm-cancel-request",
+            }
+            terminal = json.loads((await pending_terminal).removeprefix("data: ").strip())
+            await iterator.aclose()
+            return [accepted, terminal]
+
+    events = asyncio.run(exercise())
+    assert [event["type"] for event in events] == ["accepted", "done"]
+    assert events[0]["backend"] == "litellm"
+    assert events[1]["error_code"] == "cancelled"
+
+
+def test_stop_rejects_unknown_or_finished_request() -> None:
     with pytest.raises(Exception) as exc_info:
         asyncio.run(agent_endpoint.cancel_agent_chat_stream("missing-request"))
     assert getattr(exc_info.value, "status_code", None) == 404

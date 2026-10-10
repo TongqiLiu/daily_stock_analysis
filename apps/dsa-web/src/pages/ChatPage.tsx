@@ -2179,7 +2179,7 @@ const ChatPage: React.FC = () => {
                     </Button>
                   </span>
                 </Tooltip>
-                {loading && agentStatus?.backend === 'codex_app_server' ? (
+                {loading ? (
                   <Button
                     variant="danger-subtle"
                     onClick={stopStream}

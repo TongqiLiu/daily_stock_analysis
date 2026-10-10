@@ -275,14 +275,7 @@ beforeEach(() => {
 });
 
 describe('ChatPage', () => {
-  it('lets the user stop an active Codex analysis from the existing Chat composer', async () => {
-    mockGetStatus.mockResolvedValueOnce({
-      backend: 'codex_app_server',
-      available: true,
-      experimental: true,
-      errorCode: null,
-      message: null,
-    });
+  it('lets the user stop an active analysis from the existing Chat composer', async () => {
     mockStoreState.loading = true;
 
     render(
@@ -297,7 +290,7 @@ describe('ChatPage', () => {
     expect(screen.queryByRole('button', { name: '发送' })).not.toBeInTheDocument();
   });
 
-  it('keeps the existing waiting state for LiteLLM without offering a false stop', async () => {
+  it('offers the same stop control for LiteLLM analysis', async () => {
     mockStoreState.loading = true;
 
     render(
@@ -306,9 +299,8 @@ describe('ChatPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('button', { name: '处理中...' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: '停止分析' })).not.toBeInTheDocument();
-    expect(mockStopStream).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: '停止分析' }));
+    expect(mockStopStream).toHaveBeenCalledTimes(1);
   });
 
   it('labels the stop action in English when the UI language is English', async () => {

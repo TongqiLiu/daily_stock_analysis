@@ -156,7 +156,7 @@ describe('agentChatStore.startStream', () => {
     expect(ac.signal.aborted).toBe(false);
   });
 
-  it('derives server-side stopping from the backend in accepted', async () => {
+  it.each(['litellm', 'codex_app_server'] as const)('enables server-side stopping after %s accepts', async (backend) => {
     let streamController!: ReadableStreamDefaultController<Uint8Array>;
     const acceptedReceived = createDeferred<void>();
     vi.mocked(agentApi.chatStream).mockResolvedValue(new Response(
@@ -181,7 +181,7 @@ describe('agentChatStore.startStream', () => {
       { onAccepted: () => acceptedReceived.resolve() },
     );
     streamController.enqueue(encoder.encode(
-      `${accepted('request-live-codex', 'session-test', 'codex_app_server')}\n`,
+      `${accepted('request-live-codex', 'session-test', backend)}\n`,
     ));
     await acceptedReceived.promise;
 
@@ -191,7 +191,7 @@ describe('agentChatStore.startStream', () => {
     expect(useAgentChatStore.getState().abortController?.signal.aborted).toBe(false);
 
     streamController.enqueue(encoder.encode(
-      'data: {"type":"done","success":false,"content":"","backend":"codex_app_server","error_code":"cancelled"}\n',
+      `data: ${JSON.stringify({ type: 'done', success: false, content: '', backend, error_code: 'cancelled' })}\n`,
     ));
     streamController.close();
     await streamPromise;

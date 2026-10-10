@@ -49,8 +49,11 @@ router = APIRouter()
 
 _AGENT_SSE_HEARTBEAT_SECONDS = 15.0
 _AGENT_SSE_CLEANUP_TIMEOUT_SECONDS = 5.0
-_ACTIVE_CODEX_STREAMS: Dict[str, threading.Event] = {}
-_ACTIVE_CODEX_STREAMS_LOCK = threading.Lock()
+# All streaming backends receive the same cooperative cancellation signal.  The
+# request registry deliberately outlives the client connection so a user can
+# stop an accepted turn explicitly instead of relying on an SSE disconnect.
+_ACTIVE_AGENT_STREAMS: Dict[str, threading.Event] = {}
+_ACTIVE_AGENT_STREAMS_LOCK = threading.Lock()
 
 
 async def _stream_agent_events(
@@ -573,17 +576,16 @@ async def agent_chat_stream(
     selected_skill_ids = skill_selection.selected_skill_ids_update
     stream_ctx = _build_agent_chat_context(request, config, skills)
 
-    if backend_id == "codex_app_server":
-        with _ACTIVE_CODEX_STREAMS_LOCK:
-            if request_id in _ACTIVE_CODEX_STREAMS:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "request_conflict",
-                        "message": "This Agent request is already running",
-                    },
-                )
-            _ACTIVE_CODEX_STREAMS[request_id] = cancel_event
+    with _ACTIVE_AGENT_STREAMS_LOCK:
+        if request_id in _ACTIVE_AGENT_STREAMS:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "request_conflict",
+                    "message": "This Agent request is already running",
+                },
+            )
+        _ACTIVE_AGENT_STREAMS[request_id] = cancel_event
 
     def progress_callback(event: dict):
         if cancel_event.is_set():
@@ -718,10 +720,9 @@ async def agent_chat_stream(
             except Exception as exc:
                 logger.warning("agent executor cleanup error (ignored): %s", exc, exc_info=True)
             finally:
-                if backend_id == "codex_app_server":
-                    with _ACTIVE_CODEX_STREAMS_LOCK:
-                        if _ACTIVE_CODEX_STREAMS.get(request_id) is cancel_event:
-                            _ACTIVE_CODEX_STREAMS.pop(request_id, None)
+                with _ACTIVE_AGENT_STREAMS_LOCK:
+                    if _ACTIVE_AGENT_STREAMS.get(request_id) is cancel_event:
+                        _ACTIVE_AGENT_STREAMS.pop(request_id, None)
 
     return StreamingResponse(
         event_generator(),
@@ -736,9 +737,9 @@ async def agent_chat_stream(
 
 @router.post("/chat/stream/{request_id}/cancel")
 async def cancel_agent_chat_stream(request_id: str):
-    """Signal cancellation while the original Codex SSE remains open."""
-    with _ACTIVE_CODEX_STREAMS_LOCK:
-        cancel_event = _ACTIVE_CODEX_STREAMS.get(request_id)
+    """Signal cancellation while an accepted Agent SSE remains open."""
+    with _ACTIVE_AGENT_STREAMS_LOCK:
+        cancel_event = _ACTIVE_AGENT_STREAMS.get(request_id)
     if cancel_event is None:
         raise HTTPException(
             status_code=404,

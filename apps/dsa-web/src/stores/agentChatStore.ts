@@ -660,9 +660,9 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           }
           acceptedEvent = event as StreamAcceptedEvent;
           finalBackend = acceptedEvent.backend;
-          patchOwnedStream({
-            serverCancellation: acceptedEvent.backend === 'codex_app_server',
-          });
+          // Both backends accept the server-side cooperative stop signal.  Keep
+          // SSE open so the terminal cancellation event can confirm cleanup.
+          patchOwnedStream({ serverCancellation: true });
           updateSessionMessages((prev) => [
             ...prev,
             { ...userMessage, backend: acceptedEvent!.backend },
