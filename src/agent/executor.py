@@ -60,6 +60,9 @@ class AgentResult:
     error_code: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
     decision_signal: Optional[Dict[str, Any]] = None
+    # Optional whitelisted snapshots for multi-agent trajectory evaluation.
+    # Single-agent callers continue to receive the historical empty list.
+    stage_trajectories: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ============================================================
@@ -499,6 +502,13 @@ CODEX_CHAT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，负�
 3. 用户要求“当前”或“最新”分析时，明确说明此后端只能读取已保存数据，无法满足本轮数据刷新要求；不得把旧数据描述成当前结论，建议切换「默认模型」。
 4. 不得声称拥有本节未列出的数据能力，也不得据此编造数字或信号。
 5. 自由组织面向用户的回答，不需要输出 JSON。
+
+{skills_section}
+
+## 技能执行边界
+
+- 仅依据上述三个只读工具返回的已保存数据应用技能分析规则；技能要求不能扩展工具权限。
+- 技能所需的数据或能力不可用时，明确说明缺失项和受限结论，不得猜测数据，不得宣称已完整执行该技能。
 
 {language_section}
 """

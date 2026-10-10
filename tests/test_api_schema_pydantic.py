@@ -27,6 +27,7 @@ DECISION_SIGNAL_PATHS = (
     "/api/v1/decision-signals/{signal_id}/feedback",
     "/api/v1/decision-signals/{signal_id}",
     "/api/v1/decision-signals/{signal_id}/status",
+    "/api/v1/decision-signals/stocks/{stock_code}/review",
 )
 DECISION_SIGNAL_SCHEMAS = (
     "DecisionSignalCreateRequest",
@@ -50,6 +51,7 @@ DECISION_SIGNAL_SCHEMAS = (
     "DecisionSignalReassessErrorResponse",
     "DecisionSignalReassessRequest",
     "DecisionSignalReassessResponse",
+    "DecisionSignalReviewMemory",
     "DecisionSignalStatusUpdateRequest",
     "DecisionSignalWarning",
 )

@@ -1836,23 +1836,6 @@
             }
           },
           {
-            "name": "stock_code",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "maxLength": 32
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Stock Code"
-            }
-          },
-          {
             "name": "horizon",
             "in": "query",
             "required": false,
@@ -1914,22 +1897,6 @@
                 }
               ],
               "title": "Outcome"
-            }
-          },
-          {
-            "name": "source_type",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Type"
             }
           },
           {
@@ -2077,22 +2044,6 @@
               ],
               "title": "Statuses"
             }
-          },
-          {
-            "name": "source_type",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Type"
-            }
           }
         ],
         "responses": {
@@ -2149,36 +2100,55 @@
         }
       }
     },
-    "/api/v1/decision-signals/outcomes/ai-review": {
-      "post": {
+    "/api/v1/decision-signals/stocks/{stock_code}/review": {
+      "get": {
         "tags": [
           "DecisionSignals"
         ],
-        "summary": "生成决策信号 AI 后置复盘",
-        "description": "基于确定性 outcome 聚合结果生成只读归因；不会重算 hit/miss 或修改策略权重。",
-        "operationId": "generateDecisionSignalPostReview",
+        "summary": "查询单票决策信号复盘摘要",
+        "description": "聚合指定股票在当前 engine_version 下的 signal-level outcome/feedback，返回只读低敏 ReviewMemory 摘要；样本不足、unable 率高或数据质量弱时 confidence_adjustment 固定为 observe，仅供观察，不构成交易信号。",
+        "operationId": "getDecisionSignalStockReview",
         "security": [
           {
             "AdminSessionCookie": []
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DecisionSignalPostReviewRequest"
-              }
+        "parameters": [
+          {
+            "name": "stock_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Stock Code"
             }
           },
-          "required": true
-        },
+          {
+            "name": "horizon",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional outcome horizon filter: 1d/3d/5d/10d",
+              "title": "Horizon"
+            },
+            "description": "Optional outcome horizon filter: 1d/3d/5d/10d"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DecisionSignalPostReviewResponse"
+                  "$ref": "#/components/schemas/DecisionSignalReviewMemory"
                 }
               }
             }
@@ -2194,27 +2164,7 @@
             }
           },
           "400": {
-            "description": "已完成样本不足",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "当前 AI 后端不可用",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "AI 复盘生成失败",
+            "description": "查询参数非法",
             "content": {
               "application/json": {
                 "schema": {
@@ -2224,11 +2174,21 @@
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "路径或查询参数校验失败",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "查询失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -6325,50 +6285,6 @@
             "type": "integer",
             "title": "Signal Id"
           },
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stock Code"
-          },
-          "stock_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stock Name"
-          },
-          "signal_created_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Signal Created At"
-          },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trace Id"
-          },
           "horizon": {
             "type": "string",
             "title": "Horizon"
@@ -6582,61 +6498,6 @@
           "holding_state": {
             "type": "string",
             "title": "Holding State"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
-          "entry_low": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Entry Low"
-          },
-          "entry_high": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Entry High"
-          },
-          "stop_loss": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stop Loss"
-          },
-          "target_price": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target Price"
           },
           "created_at": {
             "anyOf": [
@@ -6939,28 +6800,6 @@
             ],
             "title": "Avg Stock Return Pct"
           },
-          "avg_adverse_excursion_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Avg Adverse Excursion Pct"
-          },
-          "max_adverse_excursion_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Adverse Excursion Pct"
-          },
           "unable_reasons": {
             "additionalProperties": {
               "type": "integer"
@@ -7009,24 +6848,6 @@
             "type": "array",
             "title": "Statuses"
           },
-          "source_type": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "analysis",
-                  "agent",
-                  "alert",
-                  "market_review",
-                  "manual"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Type"
-          },
           "total": {
             "type": "integer",
             "title": "Total"
@@ -7073,28 +6894,6 @@
             ],
             "title": "Avg Stock Return Pct"
           },
-          "avg_adverse_excursion_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Avg Adverse Excursion Pct"
-          },
-          "max_adverse_excursion_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Adverse Excursion Pct"
-          },
           "unable_reasons": {
             "additionalProperties": {
               "type": "integer"
@@ -7128,103 +6927,6 @@
           "profile_calibration"
         ],
         "title": "DecisionSignalOutcomeStatsResponse"
-      },
-      "DecisionSignalPostReviewRequest": {
-        "properties": {
-          "horizons": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "intraday",
-                    "1d",
-                    "3d",
-                    "5d",
-                    "10d",
-                    "swing",
-                    "long"
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Horizons"
-          },
-          "source_type": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "analysis",
-                  "agent",
-                  "alert",
-                  "market_review",
-                  "manual"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Type"
-          }
-        },
-        "type": "object",
-        "title": "DecisionSignalPostReviewRequest"
-      },
-      "DecisionSignalPostReviewResponse": {
-        "properties": {
-          "content": {
-            "type": "string",
-            "title": "Content"
-          },
-          "provider": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provider"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          },
-          "prompt_version": {
-            "type": "string",
-            "title": "Prompt Version"
-          },
-          "completed_samples": {
-            "type": "integer",
-            "title": "Completed Samples"
-          },
-          "generated_at": {
-            "type": "string",
-            "title": "Generated At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "content",
-          "prompt_version",
-          "completed_samples",
-          "generated_at"
-        ],
-        "title": "DecisionSignalPostReviewResponse"
       },
       "DecisionSignalProfileCalibration": {
         "properties": {
@@ -8013,6 +7715,42 @@
             ],
             "title": "Source",
             "description": "数据来源"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp",
+            "description": "上下文原始时间，可能为抓取时间"
+          },
+          "provider_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Timestamp",
+            "description": "来源记录的观测时间"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At",
+            "description": "数据抓取时间，不代表观测时间"
           },
           "warnings": {
             "items": {
@@ -9462,6 +9200,83 @@
           "status"
         ],
         "title": "StockProfileQuoteBlock"
+      },
+      "DecisionSignalReviewMemory": {
+        "properties": {
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "scope": {
+            "type": "string",
+            "const": "stock",
+            "title": "Scope",
+            "default": "stock"
+          },
+          "sample_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Sample Size",
+            "default": 0
+          },
+          "completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Completed",
+            "default": 0
+          },
+          "hit_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hit Rate Pct"
+          },
+          "avg_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Return Pct"
+          },
+          "common_miss_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Common Miss Reasons"
+          },
+          "confidence_adjustment": {
+            "type": "string",
+            "enum": [
+              "upgrade",
+              "downgrade",
+              "neutral",
+              "observe"
+            ],
+            "title": "Confidence Adjustment",
+            "default": "observe"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "stock_code"
+        ],
+        "title": "DecisionSignalReviewMemory",
+        "description": "Read-only, low-sensitivity review summary of DecisionSignal outcomes for one stock.\n\nAggregated server-side from signal-level outcomes/feedback.  Raw evidence,\nprompt text, diagnostics, and holdings are intentionally excluded; the\npayload is observational context only and must not be used as a trading\nsignal."
       }
     },
     "securitySchemes": {
