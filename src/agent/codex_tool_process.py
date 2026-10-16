@@ -16,9 +16,14 @@ import struct
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Callable, Optional
 
-from src.agent.tools.execution import ToolAccessContext
+from src.agent.tools.execution import (
+    ToolAccessContext,
+    _bind_owned_tool_process,
+    _reset_owned_tool_process,
+)
 
 
 # Gate P observed cooperative TERM completion in under 25 ms.  The grace keeps
@@ -75,6 +80,7 @@ def _send_result_frame(connection: Any, payload: dict) -> None:
             "ok": bool(payload.get("ok")),
             "tool_name": payload.get("tool_name"),
             "error": payload.get("error"),
+            "news_evidence_count": payload.get("news_evidence_count", 0),
         },
     }
     encoded_header = _encode_json(header)
@@ -108,6 +114,10 @@ def _decode_frame(raw_frame: bytes) -> dict:
 
 
 def _context_payload(context: ToolAccessContext) -> dict:
+    from src.agent.freshness import is_fresh_market_data_required
+    from src.services.history_loader import get_frozen_target_date
+
+    frozen_date = context.frozen_target_date or get_frozen_target_date()
     stock_scope = context.stock_scope
     stock_payload = None
     if stock_scope is not None:
@@ -130,6 +140,11 @@ def _context_payload(context: ToolAccessContext) -> dict:
         "max_result_bytes": context.max_result_bytes,
         "redact_result": context.redact_result,
         "audit_context": context.audit_context,
+        "require_fresh_market_data": (
+            is_fresh_market_data_required()
+            if context.require_fresh_market_data is None else context.require_fresh_market_data
+        ),
+        "frozen_target_date": frozen_date.isoformat() if frozen_date is not None else None,
     }
 
 
@@ -159,6 +174,11 @@ def _context_from_payload(payload: dict) -> ToolAccessContext:
         max_result_bytes=payload.get("max_result_bytes"),
         redact_result=bool(payload.get("redact_result")),
         audit_context=payload.get("audit_context") or {},
+        require_fresh_market_data=bool(payload.get("require_fresh_market_data")),
+        frozen_target_date=(
+            date.fromisoformat(payload["frozen_target_date"])
+            if payload.get("frozen_target_date") else None
+        ),
     )
 
 
@@ -180,17 +200,33 @@ def _tool_process_entry(
     request_json: str,
     worker: ToolWorker,
 ) -> None:
+    process_token = None
+    fresh_token = None
+    frozen_token = None
+    news_token = None
     try:
         os.setsid()
         if os.getpgrp() != os.getpid():
             raise RuntimeError("tool worker did not acquire its own process group")
+        process_token = _bind_owned_tool_process()
         _send_frame(connection, {"type": "ready"})
 
         request = json.loads(request_json)
+        from src.agent.freshness import set_fresh_market_data_required
+        from src.agent.news_evidence import activate_news_evidence_scope, get_current_news_evidence
+
+        context = _context_from_payload(request["context"])
+        fresh_token = set_fresh_market_data_required(context.require_fresh_market_data)
+        # A new spawned process has no inherited history cutoff. Avoid importing
+        # the data stack for tools that do not need a frozen historical window.
+        if context.frozen_target_date is not None:
+            from src.services.history_loader import set_frozen_target_date
+            frozen_token = set_frozen_target_date(context.frozen_target_date)
+        news_token = activate_news_evidence_scope()
         result = worker(
             str(request["tool_name"]),
             request["arguments"],
-            _context_from_payload(request["context"]),
+            context,
         )
         if not isinstance(result, dict):
             raise TypeError("tool worker returned a non-object result")
@@ -208,6 +244,9 @@ def _tool_process_entry(
             "tool_name": result.get("tool_name"),
             "result_text": str(result.get("result_text", "")),
             "error": result.get("error"),
+            "news_evidence_count": (
+                get_current_news_evidence().total if result.get("ok") else 0
+            ),
         }
         _send_result_frame(connection, wire_result)
     except Exception as exc:
@@ -227,6 +266,17 @@ def _tool_process_entry(
         except (BrokenPipeError, EOFError, OSError):
             pass
     finally:
+        if news_token is not None:
+            from src.agent.news_evidence import reset_news_evidence_scope
+            reset_news_evidence_scope(news_token)
+        if frozen_token is not None:
+            from src.services.history_loader import reset_frozen_target_date
+            reset_frozen_target_date(frozen_token)
+        if fresh_token is not None:
+            from src.agent.freshness import reset_fresh_market_data_required
+            reset_fresh_market_data_required(fresh_token)
+        if process_token is not None:
+            _reset_owned_tool_process(process_token)
         connection.close()
 
 
@@ -276,7 +326,12 @@ class CodexToolProcessRunner:
     """Own and reap every process used for one transport's DSA tool calls."""
 
     def __init__(self, *, worker: ToolWorker = _execute_registered_tool) -> None:
+        from src.agent.news_evidence import get_current_news_evidence
+
         self._worker = worker
+        # Transport is constructed in the request scope, before its protocol and
+        # dispatch threads. Keep only the parent accumulator; never send it over IPC.
+        self._news_evidence = get_current_news_evidence()
         self._mp_context = mp.get_context("spawn")
         self._state_lock = threading.Lock()
         self._active: dict[int, _OwnedToolProcess] = {}
@@ -290,6 +345,9 @@ class CodexToolProcessRunner:
         arguments: Any,
         context: ToolAccessContext,
     ) -> dict:
+        from src.agent.news_evidence import get_current_news_evidence
+
+        news_evidence = self._news_evidence or get_current_news_evidence()
         cancel_event = context.cancel_event
         if cancel_event is not None and cancel_event.is_set():
             return _error_result(tool_name, "cancelled", "Tool execution was cancelled.")
@@ -463,6 +521,17 @@ class CodexToolProcessRunner:
         if isinstance(message, dict) and message.get("type") == "result":
             payload = message.get("payload")
             if isinstance(payload, dict):
+                count = payload.pop("news_evidence_count", 0)
+                if type(count) is not int or count < 0:
+                    return _error_result(
+                        tool_name,
+                        "tool_roundtrip_failed",
+                        "Tool worker returned invalid news evidence metadata.",
+                    )
+                # Only evidence included in a successful, fully delivered result
+                # counts. Cancellation, truncation and cleanup failures return above.
+                if payload.get("ok") and news_evidence is not None:
+                    news_evidence.record(count)
                 return payload
             return _error_result(
                 tool_name,

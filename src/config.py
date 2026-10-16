@@ -1021,6 +1021,7 @@ class Config:
     _agent_mode_explicit: bool = False  # True when AGENT_MODE was explicitly set in env
     agent_max_steps: int = AGENT_MAX_STEPS_DEFAULT
     agent_skills: List[str] = field(default_factory=list)
+    multi_strategy_enabled_setups: List[str] = field(default_factory=list)
     agent_skill_dir: Optional[str] = None
     agent_nl_routing: bool = False  # Enable natural language routing in bot dispatcher
     agent_arch: str = "single"     # Agent architecture: 'single' (legacy) or 'multi' (orchestrator)
@@ -1968,6 +1969,7 @@ class Config:
                 minimum=1,
             ),
             agent_skills=[s.strip() for s in os.getenv('AGENT_SKILLS', '').split(',') if s.strip()],
+            multi_strategy_enabled_setups=[s.strip() for s in os.getenv('MULTI_STRATEGY_ENABLED_SETUPS', '').split(',') if s.strip()],
             agent_skill_dir=os.getenv('AGENT_SKILL_DIR') or os.getenv('AGENT_STRATEGY_DIR'),
             agent_nl_routing=os.getenv('AGENT_NL_ROUTING', 'false').lower() == 'true',
             agent_arch=os.getenv('AGENT_ARCH', 'single').lower(),

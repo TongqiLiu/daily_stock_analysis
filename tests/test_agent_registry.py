@@ -501,12 +501,12 @@ class TestBuiltinSkills(unittest.TestCase):
         self.assertIsNotNone(highlow)
         self.assertIsNotNone(vcp)
         self.assertIsNotNone(vcp_breakout)
-        self.assertEqual(pullback.display_name, "EMA200回踩")
+        self.assertEqual(pullback.display_name, "5m ORB＋EMA200")
         self.assertTrue(pullback.user_invocable)
         self.assertFalse(highlow.user_invocable)
         self.assertEqual(vcp.display_name, "VCP H1/H2")
         self.assertTrue(vcp.user_invocable)
-        self.assertEqual(vcp_breakout.display_name, "VCP突破交易员")
+        self.assertEqual(vcp_breakout.display_name, "🚀 VCP突破交易员")
         self.assertTrue(vcp_breakout.user_invocable)
 
         user_visible_ids = {
@@ -527,11 +527,11 @@ class TestBuiltinSkills(unittest.TestCase):
 
         skill = manager.get("intraday_t_trading")
         self.assertIsNotNone(skill)
-        self.assertEqual(skill.display_name, "日内做T")
+        self.assertEqual(skill.display_name, "🔄 日内做T")
         self.assertEqual(skill.category, "pattern")
         self.assertTrue(skill.user_invocable)
         self.assertEqual(skill.default_priority, 31)
-        self.assertEqual(skill.required_tools, ["analyze_intraday_t"])
+        self.assertEqual(skill.required_tools, ["analyze_intraday_t", "get_stock_backtest_summary"])
 
         registered_tools = set(get_tool_registry().list_names())
         self.assertIn("analyze_intraday_t", registered_tools)
@@ -551,7 +551,7 @@ class TestBuiltinSkills(unittest.TestCase):
 
         skill = manager.get("options_strategy_analysis")
         self.assertIsNotNone(skill)
-        self.assertEqual(skill.display_name, "期权策略分析")
+        self.assertEqual(skill.display_name, "🎯 期权策略分析")
         self.assertEqual(skill.category, "framework")
         self.assertTrue(skill.user_invocable)
         self.assertEqual(skill.required_tools, [
@@ -559,6 +559,7 @@ class TestBuiltinSkills(unittest.TestCase):
             "analyze_trend",
             "get_option_strategy_snapshot",
             "get_option_strategy_analysis",
+            "get_stock_backtest_summary",
         ])
 
         registered_tools = set(get_tool_registry().list_names())
@@ -608,7 +609,7 @@ class TestBuiltinSkills(unittest.TestCase):
 
         skill = manager.get("serenity_research")
         self.assertIsNotNone(skill)
-        self.assertEqual(skill.display_name, "Serenity投研")
+        self.assertEqual(skill.display_name, "🔎 Serenity投研")
         self.assertEqual(skill.category, "framework")
         self.assertTrue(skill.user_invocable)
         self.assertEqual(skill.default_priority, 24)
@@ -841,6 +842,7 @@ instructions: 用自然语言描述的策略内容
         try:
             skill = load_skill_from_yaml(tmp_path)
             self.assertEqual(skill.name, "minimal")
+            self.assertEqual(skill.catalog_group, "advanced")
             self.assertEqual(skill.category, "trend")  # default
             self.assertEqual(skill.core_rules, [])
             self.assertEqual(skill.required_tools, [])
@@ -856,6 +858,7 @@ instructions: 用自然语言描述的策略内容
 name: metadata_skill
 display_name: 元数据技能
 description: 带有默认元数据的技能
+catalog_group: core
 aliases: [别名一, 别名二]
 default_active: true
 default_router: true
@@ -874,6 +877,7 @@ instructions: |
             self.assertTrue(skill.default_active)
             self.assertTrue(skill.default_router)
             self.assertEqual(skill.default_priority, 15)
+            self.assertEqual(skill.catalog_group, "core")
             self.assertEqual(skill.market_regimes, ["trending_up", "volatile"])
         finally:
             os.unlink(tmp_path)
@@ -991,6 +995,7 @@ aliases: [轮动, 龙头侦察]
 default-active: true
 default-router: true
 default-priority: 12
+catalog-group: core
 market-regimes: [sector_hot]
 ---
 Track hot sectors and leading stocks.
@@ -1002,6 +1007,7 @@ Track hot sectors and leading stocks.
             self.assertTrue(skill.default_active)
             self.assertTrue(skill.default_router)
             self.assertEqual(skill.default_priority, 12)
+            self.assertEqual(skill.catalog_group, "core")
             self.assertEqual(skill.market_regimes, ["sector_hot"])
         finally:
             shutil.rmtree(tmpdir)

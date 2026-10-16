@@ -48,10 +48,12 @@ aliases: [我的战法, 我的模型]
 # default_active: 是否属于默认激活技能集
 # default_router: 是否属于路由 fallback 技能集
 # default_priority: 默认展示/排序优先级，数值越小越靠前
+# catalog_group: 问股/首页选择器分组，core 或 advanced；未填写默认 advanced
 # market_regimes: 该技能优先适配的市场状态标签
 default_active: true
 default_router: false
 default_priority: 100
+catalog_group: advanced
 market_regimes: [trending_up]
 
 # 策略详细说明（自然语言，支持 Markdown 格式）
@@ -71,6 +73,18 @@ instructions: |
   - 满足条件时建议的 sentiment_score 调整
   - 在 `buy_reason` 中注明策略名称
 ```
+
+### 问股核心与进阶入口
+
+问股与首页默认展示七个核心技能：多策略联合、价格行为学、VCP 突破交易员、日内做 T、期权策略分析、Serenity 投研和价值投资。分组代表用途和证据约束，不代表实盘收益排名。VCP H1/H2 等专项技能保留在“进阶技能”中；EMA200 专项按实际规则标为“5分钟 ORB + EMA200”。
+
+选择器 API 的默认推荐优先从核心组按既有默认/排序元数据选择，目前为多策略联合；没有核心技能时沿用全目录回退。此推荐不修改未显式选择技能时的后台 pipeline 默认规则。
+
+`catalog_group` 只控制选择器展示，不改变技能 ID、自动路由、激活规则、工具或历史会话。已选进阶技能在收起列表后仍显示，历史会话恢复后也保留原选择。API 的 `/api/v1/agent/skills` 及兼容入口 `/strategies` 均返回该追加字段；旧客户端可忽略，新客户端连接未返回该字段的旧服务时继续显示原列表。自定义 YAML 未填写时进入进阶组，`SKILL.md` frontmatter 同时支持 `catalog-group` 和 `catalog_group`；其他分组值会报告加载错误。
+
+价投快捷模板要求核实财报来源、报告期、现金流、负债和估值假设；关键输入缺失时不输出合理买入价或固定账户仓位。综合分析模板保留后端生成的 13 项证据明细与五维得分，缺少账户风险预算时只说明仓位计算方法。股票价格回测与技能真实样本业绩必须分开解释，不能用前者宣称价投或其他技能的实盘胜率。
+
+The selectors show seven core skills and keep specialist skills under an accessible advanced disclosure. `catalog_group` is presentation metadata (`core` or `advanced`, default `advanced`); it does not change IDs, routing, execution or saved selections. Both skill endpoints add this field, while older clients and servers remain compatible. Financial and allocation templates require attributable evidence and distinguish price backtests from skill performance.
 
 ### 核心交易理念参考
 

@@ -110,6 +110,7 @@ class ToolCallRecord:
     success: bool
     started_at: float
     finished_at: float
+    decision_payload: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -865,6 +866,14 @@ class CodexAppServerTransport:
         else:
             result = {"ok": False, "result_text": json.dumps({"error": "tool_not_allowed"})}
         finished_at = time.monotonic()
+        decision_payload = None
+        if tool_name == "calculate_multi_strategy_score" and result.get("ok"):
+            try:
+                parsed = json.loads(result.get("result_text") or "null")
+                if isinstance(parsed, dict) and parsed.get("status") == "ok":
+                    decision_payload = parsed
+            except (TypeError, ValueError):
+                pass
         record = ToolCallRecord(
             thread_id=thread_id,
             turn_id=turn_id,
@@ -873,6 +882,7 @@ class CodexAppServerTransport:
             success=bool(result.get("ok")),
             started_at=started_at,
             finished_at=finished_at,
+            decision_payload=decision_payload,
         )
         with self._state_lock:
             self._tool_calls.append(record)

@@ -10,6 +10,7 @@ Tools:
 """
 
 import logging
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,6 +33,11 @@ _MARKET_DATA_CACHE_POLICY = ToolPolicy.declared(
     permissions=["market_data:read"],
     scope_dimensions=["stock"],
 )
+# These audited core handlers only fetch data or write a recomputable cache.
+# DatabaseManager cache upserts commit atomically; the owned worker's process
+# group must be terminated/reaped to bound blocking provider/DB calls.
+_CORE_MARKET_DATA_STOCK_POLICY = replace(_MARKET_DATA_STOCK_POLICY, process_cancellation_safe=True)
+_CORE_MARKET_DATA_CACHE_POLICY = replace(_MARKET_DATA_CACHE_POLICY, process_cancellation_safe=True)
 _ANALYSIS_CONTEXT_POLICY = ToolPolicy.declared(
     read_only=True,
     side_effects=["db_read"],
@@ -158,6 +164,11 @@ def _compact_fundamental_context(fundamental_context: dict) -> dict:
         "status": fundamental_context.get("status"),
         "coverage": fundamental_context.get("coverage", {}),
     }
+    # Retrieval time is not a financial report date. Keep upstream provenance
+    # instead of discarding it and forcing the analyst to guess freshness.
+    for key in ("as_of", "provider", "data_quality", "missing_fields", "source_chain", "errors"):
+        if key in fundamental_context:
+            compact[key] = fundamental_context[key]
     for block in blocks:
         payload = fundamental_context.get(block, {})
         if isinstance(payload, dict):
@@ -165,6 +176,9 @@ def _compact_fundamental_context(fundamental_context: dict) -> dict:
                 "status": payload.get("status"),
                 "data": payload.get("data", {}),
             }
+            for key in ("source_chain", "errors", "as_of", "coverage"):
+                if key in payload:
+                    compact[block][key] = payload[key]
         else:
             compact[block] = {"status": "failed", "data": {}}
     return compact
@@ -335,7 +349,7 @@ get_realtime_quote_tool = ToolDefinition(
     ],
     handler=_handle_get_realtime_quote,
     category="data",
-    policy=_MARKET_DATA_STOCK_POLICY,
+    policy=_CORE_MARKET_DATA_STOCK_POLICY,
 )
 
 
@@ -439,7 +453,7 @@ get_daily_history_tool = ToolDefinition(
     ],
     handler=_handle_get_daily_history,
     category="data",
-    policy=_MARKET_DATA_CACHE_POLICY,
+    policy=_CORE_MARKET_DATA_CACHE_POLICY,
 )
 
 
@@ -584,7 +598,7 @@ get_weekly_history_tool = ToolDefinition(
     ],
     handler=_handle_get_weekly_history,
     category="data",
-    policy=_MARKET_DATA_CACHE_POLICY,
+    policy=_CORE_MARKET_DATA_CACHE_POLICY,
 )
 
 
@@ -732,7 +746,7 @@ get_stock_info_tool = ToolDefinition(
     ],
     handler=_handle_get_stock_info,
     category="data",
-    policy=_MARKET_DATA_STOCK_POLICY,
+    policy=_CORE_MARKET_DATA_STOCK_POLICY,
 )
 
 
@@ -966,7 +980,7 @@ def _classify_fear_greed_unavailable(reason: Optional[str]) -> Tuple[str, str, s
         return (
             "unknown",
             "No data returned from szdt.tech.",
-            "Fear/greed data source unavailable; using neutral proxy score 0.",
+            "Fear/greed data source unavailable; exclude missing evidence from scoring.",
         )
 
     if "查询股票个数额度已用完" in text or "手动删减已查询股票" in text:
@@ -1007,7 +1021,7 @@ def _classify_fear_greed_unavailable(reason: Optional[str]) -> Tuple[str, str, s
     return (
         "api_error",
         text,
-        "szdt returned an upstream error; fallback to proxy sentiment.",
+        "szdt returned an upstream error; retry later and keep sentiment evidence missing.",
     )
 
 
@@ -1018,6 +1032,8 @@ def _handle_get_fear_greed_index(stock_code: str) -> dict:
         return {
             "stock_code": stock_code,
             "status": "not_configured",
+            "evidence_status": "missing",
+            "score": None,
             "note": "SZDT_AUTH_TOKEN not set; fear/greed index unavailable.",
         }
 
@@ -1029,6 +1045,8 @@ def _handle_get_fear_greed_index(stock_code: str) -> dict:
         return {
             "stock_code": stock_code,
             "status": "error",
+            "evidence_status": "missing",
+            "score": None,
             "error": f"fear/greed fetch failed: {exc}",
         }
 
@@ -1038,14 +1056,16 @@ def _handle_get_fear_greed_index(stock_code: str) -> dict:
         return {
             "stock_code": stock_code,
             "status": "unavailable",
+            "evidence_status": "missing",
+            "score": None,
             "reason_code": reason_code,
             "reason_detail": reason_detail,
             "suggested_action": suggested_action,
-            "proxy_score": 0.0,
-            "proxy_label": "中性(代理)",
+            "proxy_score": None,
+            "proxy_label": None,
             "note": (
-                "Fear/greed source unavailable. Use proxy_score=0 (neutral) in strategy scoring "
-                "instead of marking this strategy as not applicable."
+                "Fear/greed source unavailable. Mark evidence missing and exclude it from "
+                "both score numerator and denominator; missing data is not neutral sentiment."
             ),
         }
 
@@ -1084,7 +1104,7 @@ get_fear_greed_index_tool = ToolDefinition(
     ],
     handler=_handle_get_fear_greed_index,
     category="data",
-    policy=_MARKET_DATA_STOCK_POLICY,
+    policy=_CORE_MARKET_DATA_STOCK_POLICY,
 )
 
 
@@ -1161,9 +1181,9 @@ get_valuation_percentile_tool = ToolDefinition(
     description=(
         "Get historical valuation percentile (PE / PB / PS) for a stock. "
         "Returns current value, percentile rank (0-100), 5-bucket distribution, "
-        "and a Chinese rating (极低估/偏低估/合理/偏高估/极高估). "
-        "Useful as the core 'is it cheap?' signal for long-term value investing. "
-        "A-share: full ~5-year daily history via akshare/baidu. "
+        "and a relative-history label (历史极低/历史偏低/历史中位/历史偏高/历史极高). "
+        "This is not intrinsic value, margin of safety or a buy/sell signal. "
+        "A-share: dated daily history via akshare/baidu; actual coverage may be shorter than requested. "
         "US: current value only (status='partial', historical percentile not available). "
         "HK: not supported yet (status='unavailable'). "
         "All failures return a dict with status field, never raises."
@@ -1192,7 +1212,7 @@ get_valuation_percentile_tool = ToolDefinition(
     ],
     handler=_handle_get_valuation_percentile,
     category="data",
-    policy=_MARKET_DATA_CACHE_POLICY,
+    policy=_CORE_MARKET_DATA_CACHE_POLICY,
 )
 
 
@@ -1253,11 +1273,13 @@ def _handle_get_dcf_valuation(
 get_dcf_valuation_tool = ToolDefinition(
     name="get_dcf_valuation",
     description=(
-        "Run a lightweight DCF valuation and return bull/base/bear intrinsic value scenarios. "
+        "Run a simplified cash-flow sensitivity model and return illustrative bull/base/bear scenarios. "
         "Outputs forecast assumptions, enterprise/equity value, intrinsic price per share, "
         "and upside/downside percentage vs current price. "
-        "Designed for long-term valuation analysis and AI-cycle growth stock screening. "
-        "Returns status='partial'/'unavailable' when key financial inputs are incomplete."
+        "Requires real positive FCF, dated periods, known cash/debt/shares and matching currencies. "
+        "Includes sources, timestamps, missing fields, terminal-value share and margin-of-safety arithmetic. "
+        "Automatic growth/discount assumptions and FCF basis are unvalidated: decision_eligible=false; "
+        "never treat these prices as verified intrinsic values. Returns partial/unavailable, not fabricated inputs."
     ),
     parameters=[
         ToolParameter(
@@ -1275,7 +1297,7 @@ get_dcf_valuation_tool = ToolDefinition(
     ],
     handler=_handle_get_dcf_valuation,
     category="data",
-    policy=_MARKET_DATA_CACHE_POLICY,
+    policy=_CORE_MARKET_DATA_CACHE_POLICY,
 )
 
 

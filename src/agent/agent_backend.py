@@ -30,6 +30,8 @@ AGENT_BACKEND_ERROR_CODES = frozenset(
         "resource_cleanup_failed",
         "invalid_timeout",
         "unknown_backend_error",
+        "trade_plan_missing",
+        "stock_scope_mismatch",
     }
 )
 AGENT_BACKEND_IDS = frozenset({"auto", "litellm", "codex_app_server"})
@@ -80,6 +82,7 @@ class AgentRunResult:
     error_message: Optional[str] = None
     messages: List[Dict[str, Any]] = field(default_factory=list)
     total_steps: int = 0
+    decision_payload: Optional[Dict[str, Any]] = None
 
 
 class AgentBackend(ABC):
@@ -132,6 +135,10 @@ class LiteLLMAgentBackend(AgentBackend):
             error_code = "timeout"
         elif not loop_result.success:
             error_code = "unknown_backend_error"
+        from src.agent.runner import _latest_multi_strategy_score_payload
+        decision_payload = _latest_multi_strategy_score_payload(
+            loop_result.messages[2 + len(request.history_messages):]
+        ) if loop_result.success else None
         return AgentRunResult(
             success=loop_result.success,
             final_answer=loop_result.content,
@@ -144,4 +151,5 @@ class LiteLLMAgentBackend(AgentBackend):
             error_message=loop_result.error,
             messages=loop_result.messages,
             total_steps=loop_result.total_steps,
+            decision_payload=decision_payload,
         )

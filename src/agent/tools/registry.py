@@ -8,7 +8,6 @@ Provides:
 - @tool decorator for easy tool registration
 """
 
-import json
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -36,7 +35,12 @@ class ToolParameter:
 
 @dataclass(frozen=True)
 class ToolPolicy:
-    """Internal policy metadata for DSA Tool Surface descriptors."""
+    """Tool Surface capabilities.
+
+    ``cancellation_safe`` denotes cooperative handlers. Blocking reads and
+    transactional cache writes may instead declare ``process_cancellation_safe``
+    and require an owned worker to provide bounded termination.
+    """
 
     read_only: Optional[bool] = None
     side_effects: List[str] = field(default_factory=list)
@@ -45,6 +49,14 @@ class ToolPolicy:
     scope_dimensions: List[str] = field(default_factory=list)
     cancellation_safe: bool = False
     timeout_seconds: Optional[float] = None
+    process_cancellation_safe: bool = False
+
+    def __post_init__(self) -> None:
+        if self.process_cancellation_safe and (
+            self.read_only is not True
+            or not set(self.side_effects).issubset({"network_read", "db_read", "db_write_cache"})
+        ):
+            raise ValueError("Process cancellation is limited to reads and transactional cache writes")
 
     @classmethod
     def unknown(cls) -> "ToolPolicy":
@@ -60,6 +72,7 @@ class ToolPolicy:
         scope_dimensions: Optional[List[str]] = None,
         cancellation_safe: bool = False,
         timeout_seconds: Optional[float] = None,
+        process_cancellation_safe: bool = False,
     ) -> "ToolPolicy":
         return cls(
             read_only=read_only,
@@ -69,6 +82,7 @@ class ToolPolicy:
             scope_dimensions=list(scope_dimensions or []),
             cancellation_safe=bool(cancellation_safe),
             timeout_seconds=timeout_seconds,
+            process_cancellation_safe=bool(process_cancellation_safe),
         )
 
     def to_public_dict(self) -> Dict[str, Any]:
@@ -78,6 +92,7 @@ class ToolPolicy:
             "permissions": list(self.permissions),
             "policy_status": self.policy_status,
             "cancellation_safe": self.cancellation_safe,
+            "process_cancellation_safe": self.process_cancellation_safe,
         }
 
 

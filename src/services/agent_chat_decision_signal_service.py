@@ -17,7 +17,7 @@ from src.services.portfolio_service import VALID_MARKETS
 
 logger = logging.getLogger(__name__)
 
-_ACTIONABLE_CHAT_ACTIONS = frozenset({"buy", "add", "hold", "reduce", "sell", "avoid"})
+_ACTIONABLE_CHAT_ACTIONS = frozenset({"buy", "add", "hold", "reduce", "sell", "avoid", "watch"})
 _CONCLUSION_LINE = re.compile(r"(?:最终(?:判断|结论|计划)?|持仓结论|一句话(?:判断|结论)?|结论)\s*[：:]?\s*(.+)", re.IGNORECASE)
 _HORIZON_PATTERNS = (
     (re.compile(r"(?:T\s*\+\s*10|10\s*(?:个)?交易日|10\s*日)", re.IGNORECASE), "10d"),
@@ -43,12 +43,27 @@ class AgentChatDecisionSignalService:
         assistant_message_id: int,
         backend: str,
         model: str,
+        decision_payload: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         try:
             stock_code = self._single_stock_code(stock_scope)
-            action = self._extract_action(content)
+            plan = (decision_payload or {}).get("trade_plan")
+            if isinstance(plan, dict):
+                if normalize_stock_code(str(plan.get("stock_code") or "")) != normalize_stock_code(stock_code):
+                    logger.warning("Skip mismatched structured chat plan for %s", stock_code)
+                    return None
+                action = plan.get("action")
+            else:
+                action = self._extract_action(content)
             if not stock_code or action not in _ACTIONABLE_CHAT_ACTIONS:
                 return None
+            trace_id = f"chat:{session_id}:{assistant_message_id}"[:64]
+            if isinstance(plan, dict):
+                existing = self.signal_service.list_signals(
+                    trace_id=trace_id, stock_code=stock_code, source_type="agent", page_size=1,
+                )
+                if isinstance(existing, dict) and existing.get("items"):
+                    return existing["items"][0]
             market = get_market_for_stock(normalize_stock_code(stock_code))
             if market not in VALID_MARKETS:
                 return None
@@ -58,15 +73,30 @@ class AgentChatDecisionSignalService:
                     trigger_source="web:agent_chat",
                 ).to_dict()
             ) or {}
-            horizon = self._extract_horizon(content)
+            horizon = "swing" if isinstance(plan, dict) else self._extract_horizon(content)
+            structured_fields = {}
+            if isinstance(plan, dict):
+                structured_fields = {
+                    "entry_low": plan.get("entry_low"), "entry_high": plan.get("entry_high"),
+                    "stop_loss": plan.get("hard_stop"), "target_price": plan.get("target_price"),
+                    "watch_conditions": plan.get("cancellation_conditions"),
+                    "reason": plan.get("reason"), "plan_quality": "partial",
+                    "expires_at": plan.get("valid_until"),
+                    "data_quality_summary": {"level": "unknown" if plan.get("status") == "unavailable" else "medium"},
+                }
+                # An impossible entry range is evidence of rejection, not a valid
+                # order range. Preserve it in metadata, not canonical price fields.
+                if (plan.get("entry_low") and plan.get("entry_high")
+                        and plan["entry_low"] > plan["entry_high"]):
+                    structured_fields["entry_low"] = structured_fields["entry_high"] = None
             result = self.signal_service.create_signal({
                 "stock_code": stock_code,
                 "market": market,
                 "source_type": "agent",
                 "source_agent": (backend or "agent_chat")[:64],
-                "trace_id": f"chat:{session_id}:{assistant_message_id}"[:64],
+                "trace_id": trace_id,
                 "decision_profile": "balanced",
-                "market_phase": phase_summary.get("phase"),
+                "market_phase": plan.get("market_phase", phase_summary.get("phase")) if isinstance(plan, dict) else phase_summary.get("phase"),
                 "trigger_source": "web:agent_chat",
                 "action": action,
                 "action_label": localize_action_label(action, "zh"),
@@ -76,7 +106,7 @@ class AgentChatDecisionSignalService:
                 "plan_quality": "minimal",
                 "metadata": {
                     "profile_source": "auto_default",
-                    "signal_generation_version": "agent-chat-extractor-v1",
+                    "signal_generation_version": "agent-chat-plan-v2" if isinstance(plan, dict) else "agent-chat-extractor-v1",
                     "session_id": session_id,
                     "user_message_id": user_message_id,
                     "assistant_message_id": assistant_message_id,
@@ -85,7 +115,12 @@ class AgentChatDecisionSignalService:
                     "holding_state": "unknown",
                     "declared_horizon": horizon,
                     "market_phase_summary": phase_summary,
+                    **({"trade_plan": plan, "scoring_schema_version": decision_payload.get("schema_version"),
+                        "direction_score": decision_payload.get("dimension_weighted_score"),
+                        "holding_action": decision_payload.get("actions", {}).get("has_position"),
+                        "action_scope": "new_entry"} if isinstance(plan, dict) else {}),
                 },
+                **structured_fields,
             })
             return result.get("item") if isinstance(result, dict) else None
         except Exception as exc:

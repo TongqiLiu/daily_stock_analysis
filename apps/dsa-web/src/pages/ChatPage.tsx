@@ -46,6 +46,10 @@ const QUICK_QUESTIONS: Array<{
   skill: string;
   stockContext?: ActiveStockContext;
 }> = [
+  { label: '价格行为看 SPY 的结构与失效位', skill: 'price_action', stockContext: { stock_code: 'SPY', stock_name: 'SPDR S&P 500 ETF' } },
+  { label: 'VCP 看 NVDA 是否形成突破候选', skill: 'vcp_breakout_trader', stockContext: { stock_code: 'NVDA', stock_name: 'NVIDIA' } },
+  { label: '价值投资看贵州茅台的安全边际', skill: 'value_investing', stockContext: { stock_code: '600519', stock_name: '贵州茅台' } },
+  { label: '综合判断腾讯 hk00700', skill: 'multi_strategy_consensus', stockContext: { stock_code: 'HK00700', stock_name: '腾讯控股' } },
   { label: '用缠论分析茅台', skill: 'chan_theory', stockContext: { stock_code: '600519', stock_name: '贵州茅台' } },
   { label: '波浪理论看宁德时代', skill: 'wave_theory', stockContext: { stock_code: '300750', stock_name: '宁德时代' } },
   { label: '分析比亚迪趋势', skill: 'bull_trend', stockContext: { stock_code: '002594', stock_name: '比亚迪' } },
@@ -54,7 +58,7 @@ const QUICK_QUESTIONS: Array<{
   { label: 'Serenity读 ADBE 研报', skill: 'serenity_research', stockContext: { stock_code: 'ADBE', stock_name: 'Adobe' } },
   { label: '分析腾讯 hk00700', skill: 'bull_trend', stockContext: { stock_code: 'HK00700', stock_name: '腾讯控股' } },
   { label: '用情绪周期分析东方财富', skill: 'emotion_cycle', stockContext: { stock_code: '300059', stock_name: '东方财富' } },
-  { label: 'EMA200回踩看 SPY', skill: 'ema5_200_setup', stockContext: { stock_code: 'SPY', stock_name: 'SPDR S&P 500 ETF' } },
+  { label: '5分钟 ORB + EMA200 看 SPY', skill: 'ema5_200_setup', stockContext: { stock_code: 'SPY', stock_name: 'SPDR S&P 500 ETF' } },
   { label: 'VCP H1/H2 看 NVDA', skill: 'vcp_h1_h2_buy', stockContext: { stock_code: 'NVDA', stock_name: 'NVIDIA' } },
 ];
 
@@ -66,10 +70,10 @@ const PROMPT_TEMPLATES = [
     prompt: `请用多策略联合框架快速分析 {stock} 的当前交易价值。
 
 范围约束：
-- 只基于本轮工具返回的行情、K线、均线、量价和情绪数据判断。
+- 只基于本轮工具返回的行情、K线、均线、量价、情绪和可核验的回测摘要判断；回测注明样本、区间和适用策略，不把整体股票回测当作单项技能胜率。
 - 不额外展开新闻、研报、期权、组合快照或长篇基本面；缺失就写“数据缺失，无法判断”。
 - 日线为主；周线只做方向判断；无 4H 数据时不要推断 4H。
-- 常规输出控制在 900 字以内；如需列 12 项策略评分，每项关键依据不超过 18 字。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
+- 模型正文控制在 900 字以内；13 项证据明细与五维综合得分由评分工具和后端输出，不手工复写，权威评分区块不计入字数。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
 - 关键执行项必须加粗并带语义标识：**🟢 建议动作/入场/加仓**、**🟣 仓位与单笔最大风险**、**🔴 止损/失效条件**、**🟡 止盈/减仓**。数据不足时也要加粗标出，不能编造价格或比例。
 
 请输出：
@@ -81,7 +85,7 @@ const PROMPT_TEMPLATES = [
 6. 具体交易计划：入场/加仓条件、减仓条件、止损位、止盈位。
 7. 一句话最终判断。
 
-另设“仓位与分批执行”一节：先说明仓位比例只能代表计划仓位、不能冒充账户占比；给出首仓/加仓/减仓比例、关键触发价位、硬止损和 1R/2R 止盈。只允许盈利且结构确认后金字塔加仓，禁止下跌摊平；斐波那契位仅可作为回踩确认区。`,
+另设“仓位与分批执行”一节：按账户单笔风险预算和入场到止损的距离计算规模；缺少账户净值、风险预算或止损位时，只给计算方法与条件，不给固定仓位、股数或首仓/加仓/减仓比例。给出有证据支持的触发价位、失效条件与减仓计划，1R/2R 仅作辅助。只允许盈利且结构确认后金字塔加仓，禁止下跌摊平；斐波那契位仅可作为回踩确认区。`,
     skills: ['multi_strategy_consensus'],
   },
   {
@@ -92,11 +96,11 @@ const PROMPT_TEMPLATES = [
 
 范围约束：
 - 仍使用多策略联合框架，但只服务于持仓决策，不展开完整长报告。
-- 只基于当前价格、成本价、日线结构、支撑压力、量价和多策略综合方向判断。
+- 只基于当前价格、成本价、日线结构、支撑压力、量价、多策略综合方向和可核验的回测摘要判断；整体股票回测不能当作单项技能胜率。
 - 如果股数或成本价未填写，不要查询组合快照、不要从历史对话推断，直接写“成本数据缺失，无法判断成本位置”。
 - 不额外展开新闻、研报、期权、基本面长分析；缺失就写“数据缺失，无法判断”。
 - 日线为主；周线只做方向判断；无 4H 数据时不要推断 4H。
-- 常规输出控制在 900 字以内；如需列 12 项策略评分，每项关键依据不超过 18 字。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
+- 模型正文控制在 900 字以内；13 项证据明细与五维综合得分由评分工具和后端输出，不手工复写，权威评分区块不计入字数。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
 - 关键执行项必须加粗并带语义标识：**🟢 持仓动作/加仓**、**🟣 仓位与单笔最大风险**、**🔴 止损/失效条件**、**🟡 止盈/减仓**。成本、仓位或账户数据缺失时必须加粗标出，禁止伪精确。
 
 输出结构：
@@ -108,19 +112,20 @@ const PROMPT_TEMPLATES = [
 6. 减仓方案：压力位、冲高回落处理、放量突破后的持有条件。
 7. 最终计划：给出具体执行步骤。
 
-另设“仓位与分批执行”一节：仓位比例只能代表计划仓位、不能冒充账户占比；明确首仓/加仓/减仓比例、关键触发价位、硬止损和 1R/2R 止盈。只允许盈利且结构确认后金字塔加仓，禁止下跌摊平；斐波那契位仅可作为回踩确认区。`,
+另设“仓位与分批执行”一节：按账户单笔风险预算和入场到止损的距离计算规模；缺少账户净值、风险预算、持仓或止损位时，只给计算方法与条件，不给固定仓位、股数或首仓/加仓/减仓比例。给出有证据支持的触发价位、失效条件与减仓计划，1R/2R 仅作辅助。只允许盈利且结构确认后金字塔加仓，禁止下跌摊平；斐波那契位仅可作为回踩确认区。`,
     skills: ['multi_strategy_consensus'],
   },
   {
     id: 'value-investing',
     title: '价投分析',
-    description: '商业模式、护城河、估值风险',
+    description: '财报证据、情景估值、安全边际',
     prompt: `请从中长期投资角度分析 {stock}，只判断是否值得继续跟踪、持有或等待更好价格。
 
 范围约束：
-- 使用价值投资框架，但不要展开短线多周期图表，也不要额外搜索新闻或研报。
-- 只基于工具返回的估值、基本面和趋势风控数据；缺失字段直接写“数据缺失，无法判断”。
-- 美股估值历史分位缺失时，不要给极端结论，只做定性判断。
+- 使用价值投资框架，不展开短线多周期图表。先获取财报、估值和公司披露，必要时搜索公告或研报，并区分一手披露、第三方摘要和模型假设。
+- 给关键财务数据标明来源、报告期和单位；缺失或不可核验的字段直接写“数据缺失，无法判断”，不得凭模型知识补齐护城河、管理层或盈利数据。
+- 历史 PE 分位只作估值背景，不能替代内在价值；估值所需输入不足时不得给合理买入价。
+- 有充分数据时列熊/基准/牛假设、估值区间及安全边际；假设必须可复核。股票价格回测不能证明价投策略胜率。
 - 输出控制在 1000 字以内；表格每行关键依据不超过 20 字。
 
 请重点分析：
@@ -137,7 +142,8 @@ const PROMPT_TEMPLATES = [
 - 反方逻辑：
 - 估值风险：
 - 关键跟踪指标：
-- 合理买入区间：
+- 合理买入区间与适用假设（证据不足则说明缺口）：
+- 仓位边界（缺少账户净值、现有持仓和风险预算时不给账户比例）：
 - 不值得继续持有的条件：`,
     skills: ['value_investing'],
   },
@@ -155,8 +161,9 @@ const PROMPT_TEMPLATES = [
 5. 明确哪里说明判断错误。
 6. 不额外展开新闻、研报、期权、组合快照或长篇基本面；缺失就写“数据缺失，无法判断”。
 7. 日线为主；周线只做方向判断；无 4H 数据时不要推断 4H。
-8. 常规输出控制在 900 字以内；如需列 12 项策略评分，每项关键依据不超过 18 字。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
+8. 模型正文控制在 900 字以内；13 项证据明细与五维综合得分由评分工具和后端输出，不手工复写，权威评分区块不计入字数。若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图、替代数浪和确认/弱化/证伪位，该章节不计入字数。
 9. 关键执行项必须加粗并带语义标识：**🟢 建议动作/入场/加仓**、**🟣 仓位与单笔最大风险**、**🔴 止损/失效条件**、**🟡 止盈/减仓**；数据不足也要显式强调。
+10. 引用回测时注明样本、区间和适用策略，整体股票回测不能当作单项技能胜率。
 
 输出格式：
 
@@ -194,10 +201,10 @@ const PROMPT_TEMPLATES = [
 用一句话说明：现在应该买入、等待、持有、减仓、止损，还是只观察。
 
 六、仓位与分批执行
-- 明确仓位比例仅指计划仓位，不是账户净值占比；未读取账户风险预算时不得估算股数。
-- 首仓 / 加仓 / 减仓比例：
+- 按账户单笔风险预算和入场到止损距离计算规模；缺少账户净值、风险预算、持仓或止损位时只给方法，不给固定比例或股数。
+- 首仓 / 加仓 / 减仓条件（数据齐全后才计算规模）：
 - 金字塔加仓的确认价位与禁止条件：只允许盈利且结构确认后加仓，禁止下跌摊平。
-- 硬止损、1R / 2R 分批止盈、余仓移动止盈：
+- 结构失效位、减仓条件和余仓移动止盈；1R / 2R 仅作辅助：
 - 斐波那契回踩区：只作为确认区，不是自动买点。`,
     skills: ['multi_strategy_consensus'],
   },
@@ -268,6 +275,11 @@ const getChatEmphasisTone = (children: React.ReactNode): string | undefined => {
 };
 
 const CHAT_MARKDOWN_COMPONENTS = {
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div className="chat-table-scroll" role="region" aria-label="分析表格，可横向滚动" tabIndex={0}>
+      <table>{children}</table>
+    </div>
+  ),
   strong: ({ children }: { children?: React.ReactNode }) => {
     const tone = getChatEmphasisTone(children);
     return <strong className={tone ? `chat-key-emphasis ${tone}` : undefined}>{children}</strong>;
@@ -437,6 +449,7 @@ const ChatPage: React.FC = () => {
   const [defaultSkillIds, setDefaultSkillIds] = useState<string[]>([]);
   const [showSkillDesc, setShowSkillDesc] = useState<string | null>(null);
   const [mobileSkillPickerOpen, setMobileSkillPickerOpen] = useState(false);
+  const [advancedSkillsOpen, setAdvancedSkillsOpen] = useState(false);
   const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -804,10 +817,16 @@ const ChatPage: React.FC = () => {
 
   const availableSkillIds = useMemo(() => new Set(skills.map((skill) => skill.id)), [skills]);
   const quickQuestions = useMemo(
-    () => QUICK_QUESTIONS.filter((question) => availableSkillIds.size === 0 || availableSkillIds.has(question.skill)),
-    [availableSkillIds],
+    () => QUICK_QUESTIONS.filter((question) => availableSkillIds.size === 0 || skills.some(
+      (skill) => skill.id === question.skill && skill.catalog_group !== 'advanced',
+    )),
+    [availableSkillIds, skills],
   );
   const selectedSkillIdSet = useMemo(() => new Set(selectedSkillIds), [selectedSkillIds]);
+  const advancedSkills = useMemo(() => skills.filter((skill) => skill.catalog_group === 'advanced'), [skills]);
+  const visibleSkills = useMemo(() => skills.filter(
+    (skill) => skill.catalog_group !== 'advanced' || advancedSkillsOpen || selectedSkillIdSet.has(skill.id),
+  ), [advancedSkillsOpen, selectedSkillIdSet, skills]);
   const skillLimitReached = selectedSkillIds.length >= MAX_SELECTED_SKILLS;
   const promptTemplates = useMemo(
     () => PROMPT_TEMPLATES.filter(
@@ -1709,9 +1728,9 @@ const ChatPage: React.FC = () => {
                   )}
                   action={(
                     <div className="flex max-w-lg flex-wrap justify-center gap-2">
-                      {quickQuestions.map((q, i) => (
+                      {quickQuestions.map((q) => (
                         <button
-                          key={i}
+                          key={`${q.skill}:${q.label}`}
                           onClick={() => handleQuickQuestion(q)}
                           disabled={!agentAvailable}
                           className="quick-question-btn disabled:cursor-not-allowed disabled:opacity-60"
@@ -1810,7 +1829,7 @@ const ChatPage: React.FC = () => {
                             导出
                           </button>
                         </div>
-                        <div className="chat-prose pr-20 sm:pr-24">
+                        <div className="chat-prose sm:pr-24">
                           <Markdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
                             {msg.content}
                           </Markdown>
@@ -2012,7 +2031,7 @@ const ChatPage: React.FC = () => {
                     )}
                   >
                     <span className="text-xs text-muted-text font-medium uppercase tracking-wider flex-shrink-0 mt-1">
-                      策略
+                      {t('chat.coreSkills')}
                     </span>
                     <label className="flex items-center gap-1.5 text-sm cursor-pointer group mt-0.5">
                       <input
@@ -2029,7 +2048,7 @@ const ChatPage: React.FC = () => {
                         通用分析
                       </span>
                     </label>
-                    {skills.map((s) => {
+                    {visibleSkills.map((s) => {
                       const checked = selectedSkillIdSet.has(s.id);
                       const disabled = !checked && skillLimitReached && s.id !== EXCLUSIVE_META_SKILL_ID;
                       return (
@@ -2038,6 +2057,8 @@ const ChatPage: React.FC = () => {
                           className={`flex items-center gap-1.5 cursor-pointer group relative mt-0.5 ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
                           onMouseEnter={() => setShowSkillDesc(s.id)}
                           onMouseLeave={() => setShowSkillDesc(null)}
+                          onFocus={() => setShowSkillDesc(s.id)}
+                          onBlur={() => setShowSkillDesc(null)}
                         >
                           <input
                             type="checkbox"
@@ -2045,6 +2066,7 @@ const ChatPage: React.FC = () => {
                             value={s.id}
                             checked={checked}
                             disabled={disabled}
+                            aria-describedby={showSkillDesc === s.id && s.description ? `skill-description-${s.id}` : undefined}
                             onChange={() => toggleSkillSelection(s.id)}
                             className="chat-skill-checkbox"
                           />
@@ -2052,9 +2074,12 @@ const ChatPage: React.FC = () => {
                             className={`transition-colors text-sm ${checked ? 'text-foreground font-medium' : 'text-secondary-text group-hover:text-foreground'}`}
                           >
                             {s.name}
+                            {s.catalog_group === 'advanced' ? (
+                              <span aria-hidden="true" className="ml-1 text-[10px] text-muted-text">{t('chat.advancedSkillBadge')}</span>
+                            ) : null}
                           </span>
                           {showSkillDesc === s.id && s.description && (
-                            <div className="skill-desc-tooltip">
+                            <div id={`skill-description-${s.id}`} role="tooltip" className="skill-desc-tooltip">
                               <p className="skill-title">{s.name}</p>
                               <p>{s.description}</p>
                             </div>
@@ -2062,7 +2087,20 @@ const ChatPage: React.FC = () => {
                         </label>
                       );
                     })}
+                    {advancedSkills.length > 0 ? (
+                      <button
+                        type="button"
+                        aria-expanded={advancedSkillsOpen}
+                        aria-controls="chat-skill-picker-panel"
+                        onClick={() => setAdvancedSkillsOpen((open) => !open)}
+                        className="mt-0.5 flex items-center gap-1 text-xs text-muted-text transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                      >
+                        {t(advancedSkillsOpen ? 'chat.hideAdvancedSkills' : 'chat.showAdvancedSkills')} ({advancedSkills.length})
+                        <ChevronDown className={cn('h-3 w-3 transition-transform', advancedSkillsOpen && 'rotate-180')} aria-hidden="true" />
+                      </button>
+                    ) : null}
                   </div>
+                  <p className="text-[11px] leading-5 text-muted-text">{t('chat.skillCatalogHint')}</p>
                 </div>
               )}
 

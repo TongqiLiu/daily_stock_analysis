@@ -276,6 +276,23 @@ class AgentModelsEndpointTestCase(unittest.TestCase):
 
 
 class AgentSkillsEndpointTestCase(unittest.TestCase):
+    def test_catalog_default_prefers_core_without_changing_pipeline_defaults(self) -> None:
+        from src.agent.skills.base import SkillManager
+        from src.agent.skills.defaults import get_primary_default_skill_id
+
+        manager = SkillManager()
+        manager.load_builtin_skills()
+        pipeline_default = get_primary_default_skill_id(manager.list_skills())
+        with patch("src.agent.factory.get_skill_manager", return_value=manager):
+            payload = agent._build_skills_response(_build_config()).model_dump()
+
+        self.assertEqual(payload["default_skill_id"], "multi_strategy_consensus")
+        self.assertEqual(get_primary_default_skill_id(manager.list_skills()), pipeline_default)
+        self.assertEqual(
+            next(item for item in payload["skills"] if item["id"] == payload["default_skill_id"])["catalog_group"],
+            "core",
+        )
+
     def test_skills_endpoint_returns_skill_metadata_shape(self) -> None:
         config = _build_config()
         skill_manager = SimpleNamespace(
@@ -284,6 +301,7 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
                     name="bull_trend",
                     display_name="多头趋势",
                     description="趋势跟随",
+                    catalog_group="core",
                     user_invocable=True,
                     default_priority=20,
                     default_active=True,
@@ -315,6 +333,7 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
 
         self.assertEqual(payload["default_skill_id"], "bull_trend")
         self.assertEqual([item["id"] for item in payload["skills"]], ["bull_trend", "chan_theory"])
+        self.assertEqual([item["catalog_group"] for item in payload["skills"]], ["core", "advanced"])
 
     def test_legacy_strategies_endpoint_preserves_legacy_field_names(self) -> None:
         config = _build_config()
@@ -346,6 +365,7 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
                     "id": "bull_trend",
                     "name": "多头趋势",
                     "description": "趋势跟随",
+                    "catalog_group": "advanced",
                 }
             ],
         )

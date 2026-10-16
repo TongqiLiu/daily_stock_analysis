@@ -399,6 +399,46 @@ def _render_multi_strategy_position_section(payload: Dict[str, Any]) -> list[str
     plan = payload.get("position_plan")
     if not isinstance(plan, dict):
         return []
+    if isinstance(payload.get("trade_plan"), dict):
+        trade = payload["trade_plan"]
+        number = _format_multi_strategy_number
+        cell = _markdown_table_cell
+        fraction = trade.get("risk_budget_fraction")
+        risk_label = f"{fraction * 100:g}% 的本笔风险预算" if isinstance(fraction, (int, float)) else "—"
+        lines = ["", "#### 2.1 仓位与分批执行（日线波段计划）", "",
+                 "> **风险份额不是账户资金比例；缺预算不编造股数。评分不是上涨概率。**", "",
+                 "| 关键项 | 本轮唯一执行口径 |", "|---|---|",
+                 f"| **当前动作** | {cell(trade.get('reason'))} |",
+                 f"| 买点类型 / 状态 | {cell(trade.get('setup_label') or '未触发')} / {cell(trade.get('status'))} |",
+                 f"| 触发条件 | {cell(trade.get('trigger_condition'))}；未触发不是已成立 |",
+                 f"| **🟢 入场区间** | {number(trade.get('entry_low'))} – {number(trade.get('entry_high'))} |",
+                 f"| **🟡 最高可接受买价** | {number(trade.get('max_entry_price'))}；超过即放弃 |",
+                 f"| **🔴 结构失效 / 硬止损** | {number(trade.get('structure_low'))} / {number(trade.get('hard_stop'))} |",
+                 f"| 拟成交参考 / 单股R | {number(trade.get('entry_reference'))} / {number(trade.get('risk_per_share'))}；成交价变化必须重算 |",
+                 f"| 首次风险 / 股数 | {risk_label} / 预算未提供，不计算股数 |",
+                 f"| 上方目标 / 盈亏比 | {number(trade.get('target_price'))} / {number(trade.get('reward_risk_ratio'))}；无上方阻力的突破使用结构跟踪，不虚构目标 |",
+                 f"| 有效交易日 | {cell(trade.get('valid_session'))}；仅该交易日有效 |",
+                 f"| 验证状态 | {cell(trade.get('validation_status'))}；未启用类型只是候选 |",
+                 f"| 数据来源 / 已完成日线 | {cell(trade.get('source'))} / {cell(trade.get('signal_date'))} |",
+                 f"| 复权 / 计划版本 | {cell(trade.get('adjustment'))} / {cell(trade.get('version'))} |",
+                 "", "- **定仓：**" + cell(trade.get("account_sizing_formula")),
+                 "- **取消：**" + "；".join(cell(x) for x in trade.get("cancellation_conditions", [])),
+                 "- **加仓：**" + cell(trade.get("add_rule")),
+                 "- **事件风险：**" + cell(trade.get("event_warning")),
+                 "- **已有仓位：**本表是新增交易计划，不自动覆盖原持仓止损；按已验证结构与账户总风险管理，亏损不摊平。"]
+        for target in trade.get("take_profit_tranches", []):
+            lines.append(f"- {cell(target['stage'])} 观察位：{number(target['price'])}；不是自动卖点。")
+        candidate = trade.get("candidate_evaluation")
+        if isinstance(candidate, dict):
+            lines.append("- **新增买点验收：**" + cell(candidate.get("setup_label") or "未触发")
+                         + "；" + cell(candidate.get("reason")) + "。未通过验收不按新规则试仓。")
+            if candidate.get("hard_stop"):
+                lines.append("- **未启用候选参考（不是买入建议）：**区间 "
+                             + number(candidate.get("entry_low")) + "–" + number(candidate.get("entry_high"))
+                             + "；最高买价 " + number(candidate.get("max_entry_price"))
+                             + "；硬止损 " + number(candidate.get("hard_stop"))
+                             + "；风险份额 " + number(candidate.get("risk_budget_fraction")) + " × 本笔总风险预算。")
+        return lines
 
     lines = [
         "",
@@ -611,7 +651,7 @@ def _render_multi_strategy_score_section(
         f"- 维度覆盖：{available_dimensions} / {dimension_count}",
     ]
     if blockers:
-        lines.extend(["- 决策阻断：" + "；".join(
+        lines.extend([("- 全局证据提醒（局部买点另行验收）：" if payload.get("trade_plan") else "- 决策阻断：") + "；".join(
             _markdown_table_cell(item.get("message"))
             for item in blockers
             if isinstance(item, dict) and item.get("message")
@@ -631,7 +671,7 @@ def _render_multi_strategy_score_section(
         current_price = _format_multi_strategy_number(market_structure.get("current_price"))
         invalidation = _format_multi_strategy_number(market_structure.get("invalidation_level"))
         lines.extend([
-            "| 当前价格 | 当前位置 | 突破/破位状态 | 硬失效位 |",
+            "| 计划参考价（信号收盘或已验证现价） | 位置 | 突破/破位状态 | 硬失效位 |" if payload.get("trade_plan") else "| 当前价格 | 当前位置 | 突破/破位状态 | 硬失效位 |",
             "|---:|---|---|---:|",
             "| "
             + " | ".join([
@@ -731,7 +771,11 @@ def _render_multi_strategy_score_section(
                 + " |"
             )
 
-    if isinstance(price_action_payload, dict) and price_action_payload.get("status") == "ok":
+    if isinstance(payload.get("trade_plan"), dict):
+        lines.extend(["", "#### 3.1 价格行为与周期边界", "",
+                      "日线入场、结构失效与1R/2R以第2.1节的同一快照计划为唯一执行口径。",
+                      "日内VWAP与强阳线回落仅作各自周期的观察证据，不是日线首仓必备条件或自动卖点；缺失不填中性分。"])
+    elif isinstance(price_action_payload, dict) and price_action_payload.get("status") == "ok":
         context = price_action_payload.get("context") if isinstance(price_action_payload.get("context"), dict) else {}
         signal = price_action_payload.get("signal") if isinstance(price_action_payload.get("signal"), dict) else {}
         structure = price_action_payload.get("structure") if isinstance(price_action_payload.get("structure"), dict) else {}
@@ -988,7 +1032,25 @@ def _append_multi_strategy_score_section(
         flags=re.DOTALL,
     )
     narrative = narrative.replace(start_marker, "").replace(end_marker, "").rstrip()
+    if isinstance(payload.get("trade_plan"), dict):
+        # Execution instructions have a single structured owner. Model commentary
+        # may explain evidence, but cannot add a second stop, entry, or action.
+        narrative = _strip_independent_execution_commentary(narrative)
     return f"{section}\n\n{narrative}" if narrative else section
+
+
+def _strip_independent_execution_commentary(content: str) -> str:
+    """Drop execution paragraphs, never parse them back into a trading plan."""
+    execution_terms = re.compile(
+        r"仓位|股数|硬止损|硬失效|保护区|买价|试仓|入场|回补|加仓|减仓|清仓|止损|止盈|"
+        r"买入|卖出|退出|观望|不要买|不要动|禁止新增|条件式交易|交易计划|操作建议|综合结论|综合判断|"
+        r"\b(?:buy|sell|entry|stop.loss|take.profit|position.sizing)\b", re.IGNORECASE,
+    )
+    blocks = re.split(r"\n\s*\n", content)
+    kept = [block for block in blocks if not execution_terms.search(block)]
+    if len(kept) != len(blocks):
+        kept.append("> 模型正文中的独立执行建议已省略；入场、止损、风险份额及持仓边界以系统计划为准。")
+    return "\n\n".join(kept).strip()
 
 
 def _wave_three_output_issues(content: str) -> List[str]:
@@ -1056,6 +1118,7 @@ def _wave_three_output_issues(content: str) -> List[str]:
 def _validate_multi_strategy_final_answer(
     content: str,
     messages: List[Dict[str, Any]],
+    expected_stock_code: Optional[str] = None,
 ) -> tuple[bool, str, str]:
     """Validate that the final report faithfully uses the deterministic score result."""
     payload = _latest_multi_strategy_score_payload(messages)
@@ -1072,6 +1135,14 @@ def _validate_multi_strategy_final_answer(
             "重新调用 calculate_multi_strategy_score 后再输出报告。"
         )
 
+    if expected_stock_code:
+        from data_provider.base import normalize_stock_code
+        plan = payload.get("trade_plan")
+        if not isinstance(plan, dict) or normalize_stock_code(str(plan.get("stock_code") or "")) != normalize_stock_code(expected_stock_code):
+            return False, "缺少本轮匹配标的的结构化交易计划", (
+                f"[系统校验] 请重新调用calculate_multi_strategy_score，传stock_code={expected_stock_code}、timeframe=daily。"
+                "不允许复用历史计划或手填价格。"
+            )
     expected_score = f"{float(payload['weighted_score']):.1f}"
     expected_numerator = format(float(payload.get("weighted_numerator")), ".10g")
     expected_weight = format(float(payload.get("included_weight")), ".10g")
@@ -1590,6 +1661,7 @@ def run_agent_loop(
                 score_ok, score_issue, retry_message = _validate_multi_strategy_final_answer(
                     final_content,
                     messages[initial_message_count:],
+                    expected_stock_code=getattr(stock_scope, "expected_stock_code", None),
                 )
                 if not score_ok:
                     last_multi_strategy_issue = score_issue

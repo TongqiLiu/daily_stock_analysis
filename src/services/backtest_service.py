@@ -660,6 +660,22 @@ class BacktestService:
             self.get_summary(scope="overall", code=None, eval_window_days=eval_window_days)
         )
 
+    def get_available_eval_windows(self, *, code: Optional[str] = None) -> List[int]:
+        """Return available horizons for the configured engine; never mix engines."""
+        return self.repo.get_distinct_eval_windows(
+            code=self._normalize_code(code),
+            engine_version=str(getattr(get_config(), "backtest_engine_version", "v1")),
+        )
+
+    def get_evidence_profile(self, *, code: Optional[str], eval_window_days: int) -> Dict[str, Any]:
+        """Return read-only sample coverage and simulated long profitability."""
+        if isinstance(eval_window_days, bool) or not isinstance(eval_window_days, int) or eval_window_days <= 0:
+            raise ValueError("eval_window_days must be a positive integer")
+        return self.repo.get_evidence_profile(
+            code=self._normalize_code(code), eval_window_days=eval_window_days,
+            engine_version=str(getattr(get_config(), "backtest_engine_version", "v1")),
+        )
+
     def get_stock_summary(self, code: str, *, eval_window_days: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Return per-stock backtest metrics normalized for Agent memory consumers."""
         return self._normalize_learning_summary(

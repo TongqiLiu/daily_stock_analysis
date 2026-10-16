@@ -3377,6 +3377,31 @@ describe('HomePage', () => {
     expect(trigger).toHaveFocus();
   });
 
+  it('exposes advanced strategies through a keyboard reachable disclosure and preserves selection', async () => {
+    vi.mocked(agentApi.getSkills).mockResolvedValue({
+      default_skill_id: 'value_investing',
+      skills: [
+        { id: 'value_investing', name: '价值投资', description: '财报证据', catalog_group: 'core' },
+        { id: 'vcp_h1_h2_buy', name: 'VCP H1/H2', description: '进阶形态', catalog_group: 'advanced' },
+        { id: 'chan_theory', name: '缠论', description: '结构分析', catalog_group: 'advanced' },
+      ],
+    });
+    vi.mocked(historyApi.getList).mockResolvedValue({ total: 0, page: 1, limit: 20, items: [] });
+    render(<MemoryRouter><HomePage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: '策略' }));
+    expect(screen.getByRole('menuitemradio', { name: /价值投资/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitemradio', { name: /VCP H1\/H2/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'End' });
+    const disclosure = screen.getByRole('menuitem', { name: '展开进阶技能 (2)' });
+    expect(disclosure).toHaveFocus();
+    fireEvent.click(disclosure);
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /VCP H1\/H2/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'VCP H1/H2' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '收起进阶技能 (2)' }));
+    expect(screen.getByRole('menuitemradio', { name: /VCP H1\/H2/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('menuitemradio', { name: /缠论/ })).not.toBeInTheDocument();
+  });
+
   it('renders market review history reports with a dedicated markdown view', async () => {
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 1,

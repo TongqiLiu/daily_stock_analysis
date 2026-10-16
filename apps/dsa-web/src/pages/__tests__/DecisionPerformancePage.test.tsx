@@ -16,6 +16,8 @@ vi.mock('../../api/decisionSignals', () => ({
     listOutcomes: mockListOutcomes,
     runOutcomes: mockRunOutcomes,
     generatePostReview: mockGeneratePostReview,
+    list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+    get: vi.fn().mockResolvedValue({ metadata: {} }),
   },
 }));
 

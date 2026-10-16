@@ -3,7 +3,7 @@
 Valuation Percentile Service
 ============================
 拉取个股的 PE/PB/PS 历史，计算当前值在历史窗口（默认 5 年）中的百分位，
-配合中文评级（极低估/偏低估/合理/偏高估/极高估），用于长期价值投资类 skill。
+配合历史区间描述（历史极低/历史偏低/历史中位/历史偏高/历史极高），用于长期价值投资类 skill。
 
 数据源：
 - A 股：akshare.stock_zh_valuation_baidu（完整历史，~5 年日频）
@@ -16,8 +16,9 @@ Valuation Percentile Service
 """
 
 import logging
+import math
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -67,17 +68,17 @@ def _detect_market(stock_code: str) -> str:
 def _classify_rating(percentile: float) -> Tuple[str, str, str]:
     """
     根据当前值在历史中的百分位返回评级 (emoji, label, summary)。
-    百分位低 = 估值便宜（buyer's market）；百分位高 = 估值贵。
+    只描述相对历史位置，不代表内在价值或买卖信号。
     """
     if percentile <= 10:
-        return "🟢", "极低估", "处于历史极低区间，估值显著吸引力，关注布局机会"
+        return "🟢", "历史极低", "倍数处于自身历史极低区间，不代表内在低估；需核对盈利质量和结构变化"
     if percentile <= 30:
-        return "🟢", "偏低估", "估值低于历史平均，长期持有性价比较高"
+        return "🟢", "历史偏低", "倍数低于多数历史观测，不等于具备安全边际"
     if percentile < 70:
-        return "⚪", "合理", "估值处于历史中位区间，无明显高低估信号"
+        return "⚪", "历史中位", "倍数处于历史中位区间，不能据此判断合理价值"
     if percentile < 90:
-        return "🔴", "偏高估", "估值高于历史平均，长期持有需谨慎"
-    return "🔴", "极高估", "处于历史极高区间，警惕估值回归风险"
+        return "🔴", "历史偏高", "倍数高于多数历史观测，需核对增长、利率和业务结构变化"
+    return "🔴", "历史极高", "倍数处于自身历史极高区间，不是独立减仓信号"
 
 
 class ValuationPercentileService:
@@ -121,7 +122,13 @@ class ValuationPercentileService:
                 "note": f"unsupported metric: {metric}; supported: pe / pb / ps",
             }
 
-        lookback_years = max(1, min(int(lookback_years or 5), 10))
+        try:
+            lookback_years = int(lookback_years)
+        except (TypeError, ValueError, OverflowError):
+            lookback_years = 0
+        if lookback_years not in _BAIDU_PERIOD_MAP:
+            return {"status": "error", "stock_code": stock_code, "metric": metric,
+                    "note": "lookback_years must be one of 1, 3, 5, 10"}
         today = date.today().isoformat()
         cache_key = f"{stock_code}|{metric}|{lookback_years}|{today}"
 
@@ -152,6 +159,9 @@ class ValuationPercentileService:
             }
 
         if result is not None:
+            result.setdefault("retrieved_at", datetime.now(timezone.utc).isoformat())
+            result.setdefault("as_of", None)
+            result["interpretation"] = "relative_history_only_not_intrinsic_value"
             self._cache[cache_key] = (now, result)
         return result
 
@@ -202,20 +212,48 @@ class ValuationPercentileService:
                 "note": "数据源返回空，可能股票代码不在覆盖范围",
             }
 
-        values = df["value"].dropna().astype(float)
-        if len(values) < 30:
-            return {
-                "status": "partial",
-                "stock_code": stock_code,
-                "market": "cn",
-                "metric": metric,
-                "current": round(float(values.iloc[-1]), 2) if len(values) else None,
-                "samples": int(len(values)),
-                "note": "样本数 < 30，分位数估算不可靠，仅供参考",
-            }
+        import pandas as pd
+
+        base = {
+            "stock_code": stock_code, "market": "cn", "metric": metric,
+            "source": "akshare.stock_zh_valuation_baidu", "lookback_years": lookback_years,
+            "current_percentile": None,
+        }
+        if "date" not in df.columns:
+            return {**base, "status": "partial", "current": None, "samples": 0,
+                    "note": "缺少历史观测日期，无法确认最新值和回看窗口"}
+        frame = df[["date", "value"]].copy()
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce", utc=True)
+        frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+        today = pd.Timestamp(datetime.now(timezone.utc).date(), tz="UTC")
+        start_date = today - pd.DateOffset(years=lookback_years)
+        frame = frame.loc[frame["date"].between(start_date, today)].sort_values("date")
+        if frame.empty:
+            return {**base, "status": "unavailable", "current": None, "samples": 0,
+                    "note": "所请求窗口没有带有效日期的历史数据"}
+        if (frame.groupby("date")["value"].nunique(dropna=False) > 1).any():
+            return {**base, "status": "partial", "current": None, "samples": 0,
+                    "note": "同一天有冲突估值，不能把重复或冲突记录当成独立样本"}
+        frame = frame.drop_duplicates("date", keep="last")
+        latest = frame.iloc[-1]
+        current = float(latest["value"])
+        usable = frame["value"].map(lambda value: math.isfinite(value) and value > 0)
+        values = frame.loc[usable, "value"]
+        base.update({
+            "as_of": latest["date"].date().isoformat(),
+            "history_start": frame.iloc[0]["date"].date().isoformat(),
+            "history_end": latest["date"].date().isoformat(),
+            "history_coverage_years": round((latest["date"] - frame.iloc[0]["date"]).days / 365.25, 2),
+            "samples": int(len(values)), "excluded_nonpositive_or_invalid": int((~usable).sum()),
+        })
+        if not math.isfinite(current) or current <= 0:
+            return {**base, "status": "partial", "current": None,
+                    "note": "最新估值非正或无效（亏损/负净资产等），不能用更早的正值替代当前值"}
+        if len(values) < 30 or (today - latest["date"]).days > 31:
+            return {**base, "status": "partial", "current": round(current, 2),
+                    "note": "有效样本不足 30 或最新历史观测已超过 31 天，不提供当前分位"}
 
         sorted_values = values.sort_values().reset_index(drop=True)
-        current = float(values.iloc[-1])
 
         # 当前值在排序后的位置（含相等的部分）
         current_pos = int((sorted_values <= current).sum())
@@ -232,6 +270,7 @@ class ValuationPercentileService:
         }
 
         return {
+            **base,
             "status": "ok",
             "stock_code": stock_code,
             "market": "cn",
@@ -324,18 +363,26 @@ class ValuationPercentileService:
         note: str,
         fallback_from: Optional[str] = None,
     ) -> Dict[str, Any]:
+        try:
+            number = float(current)
+        except (ValueError, TypeError, OverflowError):
+            number = float("nan")
+        if not math.isfinite(number) or number <= 0 or isinstance(current, bool):
+            return {"status": "unavailable", "stock_code": stock_code, "market": "us",
+                    "metric": metric, "source": source, "current": None,
+                    "current_percentile": None, "note": "当前估值非正或无效，不支持倍数分位判断"}
         return {
             "status": "partial",
             "stock_code": stock_code,
             "market": "us",
             "metric": metric,
-            "current": round(float(current), 2),
+            "current": round(number, 2),
             "current_percentile": None,
             "rating": "数据有限",
             "rating_emoji": "⚪",
             "rating_summary": (
-                "美股仅取到当前值，未接入历史分位数据源。建议结合行业平均与公司"
-                "5 年 PE/PB 范围（LLM 内置知识或新闻搜索）作辅助判断，不做百分位定级。"
+                "美股仅取到当前值，未接入历史分位数据源；禁止用模型记忆补历史或行业均值。"
+                "如需比较，须另取带来源、期间和可比口径的证据，不做百分位定级。"
             ),
             "samples": 1,
             "source": source,

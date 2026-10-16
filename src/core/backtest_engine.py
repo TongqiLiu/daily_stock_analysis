@@ -155,6 +155,67 @@ class BacktestEngine:
         return "cash"
 
     @classmethod
+    def evaluate_swing_plan(cls, *, plan: dict, history: Any, signal_index: int,
+                            horizon: int = 10, cost_bps: float = 10.0) -> dict:
+        """First-entry simulation, independent of legacy direction outcomes.
+
+        Next-open fills only; same-bar uncertainty uses the adverse ordering.
+        Ratcheted structure stops become effective on the following bar.
+        R is the initial per-share price risk, not ATR or account equity.
+        """
+        from src.services.swing_trade_plan import price_plan_for_entry, valid_important_lows
+        from src.agent.tools.analysis_tools import analyze_price_action_frame
+
+        if horizon < 1 or cost_bps < 0:
+            raise ValueError("invalid_replay_parameters")
+        base = {"filled": False, "net_r": 0.0, "exit_index": signal_index,
+                "horizon": horizon, "cost_bps": cost_bps}
+        if signal_index + horizon >= len(history):
+            return {**base, "reason": "insufficient_forward_bars"}
+        opening = history.iloc[signal_index + 1]
+        priced = price_plan_for_entry(plan, float(opening["open"]),
+                                      session=opening["date"], enabled=True)
+        if not priced.get("new_position_allowed"):
+            return {**base, "reason": priced.get("status", "not_triggered")}
+        entry, stop = float(opening["open"]), float(priced["hard_stop"])
+        risk = entry - stop
+        mae, mfe, ambiguous = 0.0, 0.0, False
+        stop_path = []
+        exit_index = signal_index + horizon
+        reason = "window_close"
+        exit_price = float(history.iloc[exit_index]["close"])
+        for i in range(signal_index + 1, signal_index + horizon + 1):
+            bar = history.iloc[i]
+            open_price, low, high = (float(bar[key]) for key in ("open", "low", "high"))
+            stop_path.append({"date": bar["date"].isoformat(), "stop": stop})
+            if open_price <= stop:
+                exit_price, exit_index, reason = open_price, i, "gap_stop"
+                mae = min(mae, (open_price - entry) / risk)
+                break
+            if low <= stop:
+                exit_price, exit_index, reason = stop, i, "hard_stop"
+                mae = min(mae, (stop - entry) / risk)
+                # We do not count an unknown pre/post-stop intraday high as profit.
+                ambiguous = high > entry
+                break
+            mae = min(mae, (low - entry) / risk)
+            mfe = max(mfe, (high - entry) / risk)
+            pa = analyze_price_action_frame(history.iloc[:i + 1], stock_code=plan["stock_code"], source=plan["source"])
+            lows = valid_important_lows(history.iloc[:i + 1], pa)
+            selected = max(lows, key=lambda item: item["date"], default=None)
+            candidate = float(selected["price"]) - .5 * pa["levels"]["atr14"] if selected else None
+            if isinstance(candidate, (float, int)) and stop < candidate < float(bar["close"]):
+                stop = candidate
+        costs = (entry + exit_price) * cost_bps / 10000
+        return {**base, "filled": True, "reason": reason, "entry_price": entry,
+                "entry_date": opening["date"].isoformat(), "initial_stop": priced["hard_stop"],
+                "initial_risk": risk, "exit_price": exit_price, "exit_index": exit_index,
+                "exit_date": history.iloc[exit_index]["date"].isoformat(),
+                "gross_r": (exit_price - entry) / risk, "net_r": (exit_price - entry - costs) / risk,
+                "mae_r": mae, "mfe_r": mfe, "same_bar_order_ambiguous": ambiguous,
+                "stop_path": stop_path}
+
+    @classmethod
     def evaluate_single(
         cls,
         *,

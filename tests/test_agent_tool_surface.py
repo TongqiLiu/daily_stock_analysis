@@ -811,7 +811,7 @@ def test_default_production_registry_has_supported_declared_policies() -> None:
     assert registry.validate_tool_policies(strict=True) == []
 
 
-def test_default_production_registry_only_exposes_bounded_tools_to_codex() -> None:
+def test_default_production_registry_cooperative_surface_stays_explicit() -> None:
     from src.agent.factory import get_tool_registry
 
     safe_names = {
@@ -826,6 +826,9 @@ def test_default_production_registry_only_exposes_bounded_tools_to_codex() -> No
         "get_analysis_context",
         "get_skill_backtest_summary",
         "get_strategy_backtest_summary",
+        "get_stock_backtest_summary",
+        "get_option_strategy_snapshot",
+        "get_option_strategy_analysis",
     }
 
 
@@ -893,6 +896,31 @@ def test_future_scope_context_fields_do_not_block_undeclared_tools() -> None:
     )
 
     assert result["ok"] is True
+
+
+def test_stock_backtest_summary_honors_cancellation_after_database_read(monkeypatch) -> None:
+    from src.agent.tools import backtest_tools
+
+    cancel_event = threading.Event()
+
+    class _BacktestService:
+        def get_summary(self, **_kwargs):
+            cancel_event.set()
+            return {"scope": "stock", "eval_window_days": 10}
+
+    monkeypatch.setattr(backtest_tools, "_get_backtest_service", lambda: _BacktestService())
+    result = ToolSurface(
+        _single_tool_registry(backtest_tools.get_stock_backtest_summary_tool)
+    ).execute_tool(
+        "get_stock_backtest_summary",
+        {"stock_code": "AAPL"},
+        ToolAccessContext(
+            stock_scope=StockScope(expected_stock_code="AAPL", allowed_stock_codes={"AAPL"}),
+            cancel_event=cancel_event,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == "cancelled"
 
 
 def test_timeout_does_not_return_while_handler_is_still_running() -> None:

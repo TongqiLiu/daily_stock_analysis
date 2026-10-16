@@ -23,6 +23,8 @@ AkShare 的业绩预告、快报是按 `date=YYYYMMDD` 查询的全市场表，�
 - 美股：配置 `LONGBRIDGE_*` 后可优先使用 Longbridge，YFinance 保留实时主链 fallback；Finnhub、AlphaVantage 只在已有主源报价后补充字段或参与日线链，不能在 Longbridge/YFinance 全部失败时独立返回实时报价。
 - 热点题材：选股的热点实现参考 AlphaSift，默认走 EastMoney provider，并使用本地 last-good cache 降低实时接口失败影响。
 
+富途 OpenD 是独立于 Python SDK 的本地网关。仅启动客户端 GUI 不代表 `FUTU_OPEND_HOST:FUTU_OPEND_PORT` 已监听；默认地址为 `127.0.0.1:11111`。行情与期权工具会在连接前探测该 TCP 端口，未监听时跳过富途并返回缺失/不可用，不会反复创建 SDK 连接；已有行情上下文在下一次请求发现网关消失时关闭。要恢复富途数据，请确认 OpenD 已登录、API 服务已开启且监听地址与配置一致；否则可暂时关闭 `FUTU_ENABLED`，使用其他已配置数据源。端口可连只证明网关可达，不保证行情权限、期权链权限或数据一定可用。
+
 ## 已接入数据源矩阵
 
 | 场景 | 已接入源 | 默认使用方式 | 失败处理 |

@@ -2438,6 +2438,29 @@ textarea {
   border: 1px solid var(--chat-prose-border-strong);
 }
 
+.chat-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-table-scroll table {
+  width: 100%;
+  min-width: 32rem;
+  border-collapse: collapse;
+}
+
+.chat-table-scroll :is(th, td):first-child {
+  min-width: 7rem;
+}
+
+@media (max-width: 639px) {
+  .chat-message-actions {
+    position: static;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+}
+
 .chat-prose th {
   background: hsl(var(--elevated) / 0.92);
   font-weight: 500;

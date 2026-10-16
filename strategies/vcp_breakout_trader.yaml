@@ -1,12 +1,14 @@
 # VCP / Bull-Flag Breakout Trader Setup
 
 name: vcp_breakout_trader
-display_name: VCP突破交易员
+display_name: 🚀 VCP突破交易员
 description: 基于 VCP_BREAKOUT_TRADER 最终优化版日线主图指标的突破交易判断：VCP/牛旗准备区、higher lows、Low-Cheat、20日枢轴放量突破、过度延展、10%风险过滤与结构失败。
+catalog_group: core
 category: pattern
 core_rules: [1, 2, 4, 5]
 required_tools:
   - analyze_vcp_breakout_trader
+  - get_stock_backtest_summary
 aliases: [VCP突破, VCP交易员, 牛旗突破, 旗形突破, higher lows, Low-Cheat, LC, vcp_breakout_trader]
 default_priority: 35
 user_invocable: true

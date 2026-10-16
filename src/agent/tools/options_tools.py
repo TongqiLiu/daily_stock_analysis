@@ -12,6 +12,7 @@ import os
 from datetime import datetime
 from typing import Any, Optional
 
+from data_provider.futu_connection import open_futu_quote_context
 from src.agent.tools.registry import ToolDefinition, ToolParameter, ToolPolicy
 
 
@@ -260,7 +261,8 @@ def _handle_get_option_strategy_analysis(
     ctx = None
     try:
         legs, normalized_legs = _parse_futu_strategy_legs(legs_json)
-        ctx = OpenQuoteContext(
+        ctx = open_futu_quote_context(
+            OpenQuoteContext,
             host=os.getenv("FUTU_OPEND_HOST", "127.0.0.1"),
             port=int(os.getenv("FUTU_OPEND_PORT", "11111")),
         )
@@ -441,7 +443,8 @@ def _get_futu_snapshot(
         futu_code = f"US.{futu_code}"
     ctx = None
     try:
-        ctx = OpenQuoteContext(
+        ctx = open_futu_quote_context(
+            OpenQuoteContext,
             host=os.getenv("FUTU_OPEND_HOST", "127.0.0.1"),
             port=int(os.getenv("FUTU_OPEND_PORT", "11111")),
         )

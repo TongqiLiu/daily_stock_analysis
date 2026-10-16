@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import and_, delete, desc, func, or_, select
+from sqlalchemy import and_, case, delete, desc, func, or_, select
 
 from src.core.backtest_engine import OVERALL_SENTINEL_CODE
 from src.services.stock_code_utils import resolve_daily_stock_identity
@@ -477,6 +477,57 @@ class BacktestRepository:
                 .order_by(BacktestResult.eval_window_days)
             ).scalars().all()
             return [int(w) for w in rows if w is not None]
+
+    def get_evidence_profile(
+        self, *, code: Optional[str], eval_window_days: int, engine_version: str,
+    ) -> Dict[str, Any]:
+        """Aggregate actual rows for Agent evidence, without relying on cached rollups.
+
+        Profitability has a separate denominator from directional outcomes, and
+        cash recommendations must not dilute the mean return of simulated longs.
+        """
+        row = BacktestResult
+        completed = row.eval_status == "completed"
+        long_return = and_(completed, row.position_recommendation == "long", row.simulated_return_pct.is_not(None))
+        profit = and_(long_return, row.simulated_return_pct > 0)
+        loss = and_(long_return, row.simulated_return_pct < 0)
+        conditions = self._build_result_conditions(
+            code=code, eval_window_days=eval_window_days, engine_version=engine_version,
+            analysis_date_from=None, analysis_date_to=None, days=None,
+        )
+        with self.db.get_session() as session:
+            result = session.execute(select(
+                func.count().label("total_evaluations"),
+                func.count(func.distinct(row.code)).label("distinct_stock_count"),
+                func.min(row.analysis_date).label("analysis_date_from"),
+                func.max(row.analysis_date).label("analysis_date_to"),
+                func.max(row.evaluated_at).label("last_evaluated_at"),
+                func.count(case((completed, 1))).label("completed_count"),
+                func.count(case((row.eval_status == "insufficient_data", 1))).label("insufficient_count"),
+                func.count(case((row.eval_status == "error", 1))).label("error_count"),
+                func.count(case((and_(completed, row.position_recommendation == "cash"), 1))).label("cash_count"),
+                func.count(case((and_(completed, row.position_recommendation == "long"), 1))).label("long_count"),
+                func.count(case((long_return, 1))).label("long_return_count"),
+                func.count(case((profit, 1))).label("profitable_long_count"),
+                func.count(case((loss, 1))).label("losing_long_count"),
+                func.avg(case((long_return, row.simulated_return_pct))).label("avg_long_simulated_return_pct"),
+                func.avg(case((profit, row.simulated_return_pct))).label("avg_long_profit_pct"),
+                func.avg(case((loss, row.simulated_return_pct))).label("avg_long_loss_pct"),
+            ).where(and_(*conditions))).mappings().one()
+            profile = dict(result)
+        for key in ("analysis_date_from", "analysis_date_to", "last_evaluated_at"):
+            value = profile[key]
+            profile[key] = value.isoformat() if value is not None else None
+        for key in ("avg_long_simulated_return_pct", "avg_long_profit_pct", "avg_long_loss_pct"):
+            if profile[key] is not None:
+                profile[key] = round(profile[key], 4)
+        denominator = profile["long_return_count"]
+        profile["profitable_long_rate_pct"] = (
+            round(profile["profitable_long_count"] / denominator * 100, 2) if denominator else None
+        )
+        profile["eval_window_days"] = eval_window_days
+        profile["engine_version"] = engine_version
+        return profile
 
     @staticmethod
     def _build_result_conditions(

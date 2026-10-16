@@ -2,8 +2,9 @@
 # Productized from haskaomni/serenity-skill for the DSA chat page.
 
 name: serenity_research
-display_name: Serenity投研
+display_name: 🔎 Serenity投研
 description: Serenity 买方投研框架：优先读取最新研报/评级与公开情报，再用买方 memo、增长概率、TAM-Adj-PEG、GF-DMA 和 news-to-financial-statement 交叉验证，输出可跟踪的投资假设。
+catalog_group: core
 category: framework
 core_rules: [1, 2, 5, 6]
 required_tools:
@@ -16,6 +17,7 @@ required_tools:
   - get_daily_history
   - analyze_trend
   - calculate_ma
+  - get_stock_backtest_summary
 aliases: [Serenity, Serenity投研, 买方研报, 买方memo, 研报解读, 最新研报, serenity-alpha, TAM-Adj-PEG, GF-DMA]
 default_priority: 24
 user_invocable: true

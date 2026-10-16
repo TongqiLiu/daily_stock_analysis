@@ -11,10 +11,12 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Dict, Iterable, List, Optional
 
 from src.agent.tools.registry import ToolRegistry
@@ -104,6 +106,10 @@ class ToolAccessContext:
     max_result_bytes: Optional[int] = None
     redact_result: bool = False
     audit_context: Dict[str, Any] = field(default_factory=dict)
+    # Runtime-owned request policy; captured before dispatch threads and never
+    # accepted as LLM tool arguments. None inherits the current local context.
+    require_fresh_market_data: Optional[bool] = None
+    frozen_target_date: Optional[date] = None
 
 
 class ToolExecutionCancelled(Exception):
@@ -118,6 +124,26 @@ _ACTIVE_TOOL_CONTEXT: contextvars.ContextVar[Optional[ToolAccessContext]] = cont
     "active_tool_access_context",
     default=None,
 )
+
+# This capability is bound only by the spawned worker after setsid(), never
+# decoded from tool arguments, audit_context or serialized caller context.
+_OWNED_TOOL_PROCESS_PID: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "owned_tool_process_pid", default=None,
+)
+
+
+def _bind_owned_tool_process() -> contextvars.Token:
+    if os.getpgrp() != os.getpid():
+        raise RuntimeError("tool execution does not own its process group")
+    return _OWNED_TOOL_PROCESS_PID.set(os.getpid())
+
+
+def _reset_owned_tool_process(token: contextvars.Token) -> None:
+    _OWNED_TOOL_PROCESS_PID.reset(token)
+
+
+def is_owned_tool_process() -> bool:
+    return _OWNED_TOOL_PROCESS_PID.get() == os.getpid()
 
 
 def bind_tool_execution_context(context: ToolAccessContext) -> contextvars.Token:

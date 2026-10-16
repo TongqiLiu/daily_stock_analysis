@@ -23,6 +23,7 @@ def _daily_bars(*, failed_breakout: bool = False) -> pd.DataFrame:
             high = 131.0
             close = 128.0
         rows.append({
+            "date": pd.bdate_range("2025-01-02", periods=60)[index].date(),
             "open": close - 0.4,
             "high": high,
             "low": low,
@@ -65,7 +66,7 @@ def _daily_bars_with_impulse_origin() -> pd.DataFrame:
             high = close + 0.5
             low = close - 0.5
         rows.append({
-            "date": f"2026-06-{index + 1:02d}",
+            "date": pd.bdate_range("2025-01-02", periods=60)[index].date(),
             "open": open_price,
             "high": high,
             "low": low,
@@ -83,7 +84,7 @@ def test_price_action_returns_breakout_candidate_without_confirming_second_entry
         "src.services.intraday_history_loader.load_intraday_history",
         return_value=(_intraday_bars(), "test_intraday"),
     ):
-        result = _handle_analyze_price_action("US.TEST", days=120)
+        result = _handle_analyze_price_action("TEST", days=120)
 
     assert result["status"] == "ok"
     assert result["signal"]["type"] == "bull_breakout_candidate"
@@ -106,7 +107,7 @@ def test_price_action_identifies_failed_breakout_candidate():
         "src.services.intraday_history_loader.load_intraday_history",
         return_value=(None, "none"),
     ):
-        result = _handle_analyze_price_action("US.TEST")
+        result = _handle_analyze_price_action("TEST")
 
     assert result["status"] == "ok"
     assert result["signal"]["type"] == "failed_bull_breakout_candidate"
@@ -131,7 +132,7 @@ def test_price_action_rejects_stale_intraday_vwap():
         "src.services.intraday_history_loader.load_intraday_history",
         return_value=(stale_bars, "stale_provider"),
     ):
-        result = _handle_analyze_price_action("US.TEST")
+        result = _handle_analyze_price_action("TEST")
 
     intraday_vwap = result["risk_management"]["intraday_vwap"]
     assert intraday_vwap["status"] == "unavailable"
@@ -147,7 +148,7 @@ def test_price_action_returns_structure_stop_and_trend_bar_trailing_levels():
         "src.services.intraday_history_loader.load_intraday_history",
         return_value=(_intraday_bars(), "test_intraday"),
     ):
-        result = _handle_analyze_price_action("US.TEST")
+        result = _handle_analyze_price_action("TEST")
 
     invalidation = result["risk_management"]["long_invalidation"]
     trend_bar = result["risk_management"]["trend_bar_trailing"]

@@ -151,6 +151,35 @@ class AgentChatExecutor:
             error_code=backend_result.error_code,
             usage=backend_result.usage,
         )
+        decision_payload = getattr(backend_result, "decision_payload", None)
+        from src.agent.runner import _requires_deterministic_multi_strategy_score
+        if (result.success and _requires_deterministic_multi_strategy_score([
+                {"role": "system", "content": turn.prepared.system_prompt}])
+                and getattr(turn.prepared.stock_scope, "expected_stock_code", None)
+                and not (isinstance(decision_payload, dict) and isinstance(decision_payload.get("trade_plan"), dict))):
+            result.success = False
+            result.error_code = "trade_plan_missing"
+            result.error = "本轮未生成匹配标的的结构化交易计划，请重试；不从模型正文重建。"
+        if result.success and isinstance(decision_payload, dict) and decision_payload.get("trade_plan"):
+            from data_provider.base import normalize_stock_code
+            from src.agent.runner import _append_multi_strategy_score_section
+
+            plan_code = normalize_stock_code(str(decision_payload["trade_plan"].get("stock_code") or ""))
+            expected = normalize_stock_code(str(getattr(turn.prepared.stock_scope, "expected_stock_code", "") or ""))
+            if expected and plan_code == expected:
+                # LiteLLM's shared runner already rendered this exact payload.
+                if self.backend.runtime_owns_loop:
+                    result.content = _append_multi_strategy_score_section(result.content, decision_payload)
+            else:
+                result.success = False
+                result.error_code = "stock_scope_mismatch"
+                result.error = "交易计划标的与本轮问股标的不一致，未保存为有效决策。"
+                decision_payload = None
+
+        if cancel_event is not None and cancel_event.is_set() and result.success:
+            result.success = False
+            result.error_code = "cancelled"
+            result.error = "本次分析已停止。"
 
         cancelled_without_terminal_note = bool(
             not self.backend.runtime_owns_loop
@@ -171,6 +200,7 @@ class AgentChatExecutor:
                 assistant_message_id=assistant_message_id,
                 backend=result.backend,
                 model=result.model,
+                decision_payload=decision_payload,
             )
             if not self.backend.runtime_owns_loop:
                 persist_provider_trace_turns(

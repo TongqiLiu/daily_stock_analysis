@@ -50,6 +50,7 @@ class Skill:
         default_active: Whether this skill participates in the default activation set.
         default_router: Whether this skill participates in router fallback selection.
         default_priority: Ordering hint for defaults / selectors (lower comes first).
+        catalog_group: User-facing selector group — "core" or "advanced".
         market_regimes: Optional market regime tags used by the skill router.
         execution_context: Inline/fork execution hint from frontmatter.
         subagent_type: Optional subagent type hint from frontmatter.
@@ -77,6 +78,7 @@ class Skill:
     execution_context: str = "inline"
     subagent_type: str = ""
     preferred_model: str = ""
+    catalog_group: str = "advanced"
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?(.*)$", re.DOTALL)
@@ -113,6 +115,13 @@ def _coerce_int(value: object, default: int = 100) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_catalog_group(value: object) -> str:
+    group = str(value or "advanced").strip().lower()
+    if group not in {"core", "advanced"}:
+        raise ValueError(f"Invalid skill catalog_group: {group!r}")
+    return group
 
 
 def _parse_skill_frontmatter(raw_text: str) -> tuple[Dict[str, object], str]:
@@ -199,6 +208,7 @@ def load_skill_from_yaml(filepath: Union[str, Path]) -> Skill:
         execution_context=str(data.get("context", "inline")).strip() or "inline",
         subagent_type=str(data.get("agent", "")).strip(),
         preferred_model=str(data.get("model", "")).strip(),
+        catalog_group=_parse_catalog_group(data.get("catalog_group")),
     )
 
 
@@ -268,6 +278,9 @@ def load_skill_from_markdown(filepath: Union[str, Path]) -> Skill:
         execution_context=str(metadata.get("context", "inline")).strip() or "inline",
         subagent_type=str(metadata.get("agent", "")).strip(),
         preferred_model=str(metadata.get("model", "")).strip(),
+        catalog_group=_parse_catalog_group(
+            metadata.get("catalog-group", metadata.get("catalog_group"))
+        ),
     )
 
 
@@ -496,6 +509,9 @@ class SkillManager:
                 )
                 idx += 1
 
+        from src.agent.skills.evidence_policy import get_shared_skill_evidence_policy
+
+        parts.append(get_shared_skill_evidence_policy(active))
         return "\n".join(parts)
 
     def get_required_tools(self) -> List[str]:

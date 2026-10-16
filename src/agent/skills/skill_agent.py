@@ -18,6 +18,7 @@ from src.agent.agents.base_agent import BaseAgent
 from src.agent.protocols import AgentContext, AgentOpinion
 from src.agent.runner import try_parse_json
 from src.agent.skills.defaults import build_skill_agent_name
+from src.agent.skills.evidence_policy import get_shared_skill_evidence_policy
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,8 @@ You are a **Skill Evaluation Agent** applying the **{display}** skill.
 
 ## Skill Instructions
 {instructions}
+
+{get_shared_skill_evidence_policy([self._skill])}
 
 ## Task
 Evaluate whether the current stock conditions satisfy this skill's entry

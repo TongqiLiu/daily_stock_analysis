@@ -10,12 +10,13 @@ import remarkGfm from 'remark-gfm';
 import type { DecisionSignalHorizon, DecisionSignalOutcomeEvalStatus, DecisionSignalOutcomeItem, DecisionSignalOutcomeListResponse, DecisionSignalOutcomeStatsBucket, DecisionSignalOutcomeStatsResponse, DecisionSignalOutcomeValue, DecisionSignalPostReviewResponse } from '../types/decisionSignals';
 import { getDecisionActionLabel } from '../utils/decisionAction';
 import { formatDateTime } from '../utils/format';
+import { OutcomePlanSnapshot, RecentSwingPlans } from '../components/decision-signals/SwingPlanHistory';
 
 type BreakdownKey = 'horizon' | 'action' | 'market_phase' | 'source_type' | 'data_quality_level';
 type PerformanceScope = 'all' | 'agent';
 
 const BREAKDOWNS: Array<{ key: BreakdownKey; title: string; description: string }> = [
-  { key: 'horizon', title: '按回测周期', description: '比较 T+1、T+3、T+5、T+10 的胜率衰减。' },
+  { key: 'horizon', title: '按回测周期', description: '比较 T+1、T+3、T+5、T+10 的方向命中率衰减。' },
   { key: 'action', title: '按问股动作', description: '识别买入、持有、减仓等结论是否存在系统性偏差。' },
   { key: 'market_phase', title: '按市场阶段', description: '比较盘前、盘中和盘后分析的可验证性。' },
   { key: 'source_type', title: '按来源', description: '分开观察问股、报告和告警，避免混淆口径。' },
@@ -90,6 +91,7 @@ const DecisionPerformancePage: React.FC = () => {
   const [outcomeStatus, setOutcomeStatus] = useState<DecisionSignalOutcomeEvalStatus | ''>('');
   const [outcomeValue, setOutcomeValue] = useState<DecisionSignalOutcomeValue | ''>('');
   const outcomeRequestId = useRef(0);
+  const [openOutcomeIds, setOpenOutcomeIds] = useState<Set<number>>(new Set());
 
   const loadOutcomeDetails = useCallback(async () => {
     const requestId = ++outcomeRequestId.current;
@@ -175,7 +177,7 @@ const DecisionPerformancePage: React.FC = () => {
       <PageHeader
         eyebrow="ASK QUALITY"
         title="问股决策表现中心"
-        description="汇总结构化 DecisionSignal 的确定性后验结果；可切换到“仅问股”隔离对话信号，不混入传统报告文本回测。"
+        description="这里统计方向命中率，不是成交胜率；未模拟成交、止损、成本的结果不能解释为交易收益。首仓交易回放独立验收，不混入此处。"
         actions={(
           <>
             <button type="button" className="btn-secondary inline-flex items-center gap-2" onClick={() => void load()} disabled={loading}>
@@ -225,25 +227,25 @@ const DecisionPerformancePage: React.FC = () => {
         <EmptyState
           icon={<Target className="h-7 w-7" />}
           title="暂无可统计的问股结果"
-          description="先沉淀结构化问股信号；在未来交易日数据充足后，点击“结算待成熟样本”生成胜率和拆分结果。"
+          description="先沉淀结构化问股信号；在未来交易日数据充足后，点击“结算待成熟样本”生成方向命中率和拆分结果。"
         />
       ) : (
         <>
           <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
             <StatCard label="结果记录" value={stats.total} hint={`引擎 ${stats.engineVersion}`} icon={<BarChart3 className="h-5 w-5" />} />
             <StatCard label="已结算" value={stats.completed} hint={`覆盖率 ${formatPct(coverage)}`} tone="primary" icon={<CheckCircle2 className="h-5 w-5" />} />
-            <StatCard label="方向胜率" value={formatPct(stats.hitRatePct)} hint={`命中 ${stats.hit} / 未命中 ${stats.miss}`} tone={stats.hitRatePct != null && stats.hitRatePct >= 50 ? 'success' : 'danger'} icon={<Target className="h-5 w-5" />} />
+            <StatCard label="方向命中率" value={formatPct(stats.hitRatePct)} hint={`命中 ${stats.hit} / 未命中 ${stats.miss}`} tone={stats.hitRatePct != null && stats.hitRatePct >= 50 ? 'success' : 'danger'} icon={<Target className="h-5 w-5" />} />
             <StatCard label="平均区间涨跌" value={formatPct(stats.avgStockReturnPct)} hint="标的收益，不代表组合收益" tone="primary" />
             <StatCard label="平均不利波动" value={formatPct(stats.avgAdverseExcursionPct)} hint="按建议方向计算 MAE" tone="warning" />
             <StatCard label="最大不利波动" value={formatPct(stats.maxAdverseExcursionPct)} hint="样本内最坏回撤" tone="danger" />
-            <StatCard label="中性样本" value={stats.neutral} hint="不纳入胜率分母" tone="warning" />
+            <StatCard label="中性样本" value={stats.neutral} hint="不纳入方向命中率分母" tone="warning" />
             <StatCard label="无法结算" value={stats.unable} hint="优先排查数据/时点缺口" tone="warning" icon={<ShieldAlert className="h-5 w-5" />} />
           </div>
 
-          <Card title="如何用这张表优化问股" subtitle="先看样本与覆盖，再看胜率；不要直接按单次结果改提示词或策略权重。" padding="md">
+          <Card title="如何用这张表优化问股" subtitle="先看样本与覆盖，再看方向命中率；不要直接按单次结果改提示词或策略权重。" padding="md">
             <div className="grid gap-3 text-sm text-secondary-text md:grid-cols-3">
               <p><strong className="text-foreground">1. 样本不足：</strong>先增加可回测信号覆盖，避免凭几次对错优化流程。</p>
-              <p><strong className="text-foreground">2. 某类动作低胜率：</strong>检查动作门槛、失效位和数据质量，不直接压低全部评分。</p>
+              <p><strong className="text-foreground">2. 某类动作低方向命中率：</strong>检查动作门槛、失效位和数据质量，不直接压低全部评分。</p>
               <p><strong className="text-foreground">3. 无法结算偏高：</strong>优先补交易日、市场阶段和行情数据链路。</p>
             </div>
           </Card>
@@ -270,7 +272,7 @@ const DecisionPerformancePage: React.FC = () => {
                   {rows.length === 0 ? <p className="text-sm text-secondary-text">暂无该维度的已结算样本。</p> : (
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
-                        <thead className="border-b border-subtle text-left text-xs text-secondary-text"><tr><th className="pb-2 pr-3">维度</th><th className="pb-2 pr-3 text-right">样本</th><th className="pb-2 pr-3 text-right">已结算</th><th className="pb-2 pr-3 text-right">胜率</th><th className="pb-2 pr-3 text-right">平均涨跌</th><th className="pb-2 pr-3 text-right">平均不利</th><th className="pb-2 text-right">最坏不利</th></tr></thead>
+                        <thead className="border-b border-subtle text-left text-xs text-secondary-text"><tr><th className="pb-2 pr-3">维度</th><th className="pb-2 pr-3 text-right">样本</th><th className="pb-2 pr-3 text-right">已结算</th><th className="pb-2 pr-3 text-right">方向命中率</th><th className="pb-2 pr-3 text-right">平均涨跌</th><th className="pb-2 pr-3 text-right">平均不利</th><th className="pb-2 text-right">最坏不利</th></tr></thead>
                         <tbody>{rows.slice(0, 8).map((row) => <tr key={row.value} className="border-b border-subtle/70 last:border-0"><td className="py-2.5 pr-3 font-medium text-foreground">{labelForBucket(key, row, language)}</td><td className="py-2.5 pr-3 text-right">{row.total}</td><td className="py-2.5 pr-3 text-right">{row.completed}</td><td className="py-2.5 pr-3 text-right font-medium text-foreground">{formatPct(row.hitRatePct)}</td><td className="py-2.5 pr-3 text-right">{formatPct(row.avgStockReturnPct)}</td><td className="py-2.5 pr-3 text-right">{formatPct(row.avgAdverseExcursionPct)}</td><td className="py-2.5 text-right">{formatPct(row.maxAdverseExcursionPct)}</td></tr>)}</tbody>
                       </table>
                     </div>
@@ -282,7 +284,7 @@ const DecisionPerformancePage: React.FC = () => {
 
           <Card
             title="逐笔回测明细"
-            subtitle="每行是一条“信号 × 回测周期”记录。展开后可核对原始结论、计划价格、日线区间和无法结算原因；它才是判断胜率是否可信的审计底稿。"
+            subtitle="每行是一条“信号 × 回测周期”记录。展开后可核对原始结论、计划价格、日线区间和无法结算原因；它才是判断方向命中率是否可信的审计底稿。"
             padding="md"
           >
             <div className="mb-4 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
@@ -302,7 +304,7 @@ const DecisionPerformancePage: React.FC = () => {
               <p className="rounded-xl border border-subtle bg-elevated/30 px-4 py-6 text-sm text-secondary-text">当前筛选条件下没有逐笔结果。新的问股信号需要先产生，并等待对应交易日成熟。</p>
             ) : (
               <>
-                <div className="mb-3 flex items-center justify-between text-xs text-secondary-text"><span>共 {outcomes.total} 条，当前第 {outcomes.page} 页</span><span>胜率只由“命中 / 未命中”计算；中性与无法结算不进分母。</span></div>
+                <div className="mb-3 flex items-center justify-between text-xs text-secondary-text"><span>共 {outcomes.total} 条，当前第 {outcomes.page} 页</span><span>方向命中率只由“命中 / 未命中”计算；中性与无法结算不进分母。</span></div>
                 <div className="overflow-x-auto rounded-xl border border-subtle">
                   <table className="min-w-[1120px] w-full text-sm">
                     <thead className="border-b border-subtle bg-elevated/40 text-left text-xs text-secondary-text"><tr><th className="px-3 py-2.5">分析时点 / 标的</th><th className="px-3 py-2.5">结论</th><th className="px-3 py-2.5">回测</th><th className="px-3 py-2.5 text-right">起点 → 收盘</th><th className="px-3 py-2.5 text-right">区间涨跌</th><th className="px-3 py-2.5 text-right">不利波动</th><th className="px-3 py-2.5">结果</th><th className="px-3 py-2.5">审计</th></tr></thead>
@@ -315,7 +317,10 @@ const DecisionPerformancePage: React.FC = () => {
                         <td className="px-3 py-3 text-right font-medium text-foreground">{formatPct(row.stockReturnPct)}</td>
                         <td className="px-3 py-3 text-right text-warning">{formatPct(adverseExcursion(row))}</td>
                         <td className={`px-3 py-3 font-semibold ${outcomeTone(row)}`}><div>{outcomeLabel(row)}</div>{row.unableReason ? <div className="mt-1 max-w-40 text-xs font-normal text-secondary-text">{row.unableReason}</div> : null}</td>
-                        <td className="px-3 py-3"><details className="group min-w-64"><summary className="cursor-pointer text-xs font-medium text-primary hover:underline">查看原始结论与计划</summary><div className="mt-2 space-y-2 rounded-lg border border-subtle bg-elevated/30 p-2.5 text-xs text-secondary-text"><p className="whitespace-pre-wrap text-foreground">{row.reason || '未保存原始结论。'}</p><p>计划：入场 {formatPrice(row.entryLow)}–{formatPrice(row.entryHigh)} · 止损 {formatPrice(row.stopLoss)} · 目标 {formatPrice(row.targetPrice)}</p><p>日线区间：高 {formatPrice(row.maxHigh)} · 低 {formatPrice(row.minLow)}</p><p>数据质量：{row.dataQualityLevel || 'unknown'} · 信号 ID：{row.signalId}</p></div></details></td>
+        <td className="px-3 py-3"><details className="group min-w-64" onToggle={(event) => {
+          const open = event.currentTarget.open;
+          setOpenOutcomeIds((previous) => { const next = new Set(previous); if (open) next.add(row.id); else next.delete(row.id); return next; });
+        }}><summary className="cursor-pointer text-xs font-medium text-primary hover:underline">查看原始结论与计划</summary><div className="mt-2 space-y-2 rounded-lg border border-subtle bg-elevated/30 p-2.5 text-xs text-secondary-text"><p className="whitespace-pre-wrap text-foreground">{row.reason || '未保存原始结论。'}</p><p>计划：入场 {formatPrice(row.entryLow)}–{formatPrice(row.entryHigh)} · 止损 {formatPrice(row.stopLoss)} · 目标 {formatPrice(row.targetPrice)}</p><p>日线区间：高 {formatPrice(row.maxHigh)} · 低 {formatPrice(row.minLow)}</p><p>数据质量：{row.dataQualityLevel || 'unknown'} · 信号 ID：{row.signalId}</p><OutcomePlanSnapshot signalId={row.signalId} open={openOutcomeIds.has(row.id)} /></div></details></td>
                       </tr>
                     ))}</tbody>
                   </table>
@@ -326,6 +331,7 @@ const DecisionPerformancePage: React.FC = () => {
           </Card>
         </>
       )}
+      <RecentSwingPlans />
     </AppPage>
   );
 };

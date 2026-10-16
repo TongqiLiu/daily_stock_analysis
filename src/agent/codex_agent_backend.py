@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from src.agent.agent_backend import (
     AGENT_BACKEND_ERROR_CODES,
@@ -97,6 +97,10 @@ class CodexAgentBackend(AgentBackend):
         if request.progress_callback:
             request.progress_callback(stream_event("thinking", step=1, message="正在连接 Codex…"))
 
+        from src.agent.freshness import is_fresh_market_data_required
+        from src.services.history_loader import get_frozen_target_date
+
+        frozen_date = get_frozen_target_date()
         tool_context = ToolAccessContext(
             stock_scope=request.stock_scope,
             backend=self.backend_id,
@@ -106,6 +110,11 @@ class CodexAgentBackend(AgentBackend):
             cancel_event=request.cancel_event,
             max_result_bytes=MAX_TOOL_RESULT_BYTES,
             redact_result=True,
+            require_fresh_market_data=(
+                is_fresh_market_data_required()
+                or (request.stock_scope is not None and frozen_date is None)
+            ),
+            frozen_target_date=frozen_date,
         )
 
         def on_tool_event(event_type: str, record: ToolCallRecord) -> None:
@@ -146,6 +155,7 @@ class CodexAgentBackend(AgentBackend):
                     for item in self.tool_surface.list_tools(
                         "public",
                         cancellation_safe_only=True,
+                        process_isolated=True,
                     )
                 ]
                 if not tool_names:
@@ -232,6 +242,10 @@ class CodexAgentBackend(AgentBackend):
             success=bool(turn.final_text),
             final_answer=turn.final_text,
             tool_calls_log=tool_calls_log,
+            decision_payload=next((getattr(record, "decision_payload", None)
+                                   for record in reversed(client.tool_calls)
+                                   if record.turn_id == turn.turn_id and record.success
+                                   and getattr(record, "decision_payload", None)), None),
             model=model,
             backend=self.backend_id,
             usage=usage,

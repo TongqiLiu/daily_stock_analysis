@@ -10,6 +10,7 @@ Tools:
 import json
 import logging
 import math
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
@@ -24,11 +25,15 @@ _ANALYSIS_READ_POLICY = ToolPolicy.declared(
     permissions=["market_data:read"],
     scope_dimensions=["stock"],
 )
+# Pure calculations plus provider/DB reads; bounded cancellation relies on the
+# owned process runner, never on an interruptible Python thread.
+_CORE_ANALYSIS_READ_POLICY = replace(_ANALYSIS_READ_POLICY, process_cancellation_safe=True)
 
 _DETERMINISTIC_ANALYSIS_POLICY = ToolPolicy.declared(
     read_only=True,
     side_effects=[],
     permissions=[],
+    process_cancellation_safe=True,
 )
 
 
@@ -401,10 +406,8 @@ def _normalize_multi_strategy_market_structure(raw_structure: Any) -> dict:
 
     below_support = [level for level in supports if level <= current_price] if current_price else []
     above_resistance = [level for level in resistances if level >= current_price] if current_price else []
-    nearest_support = max(below_support) if below_support else (max(supports) if supports else None)
-    nearest_resistance = min(above_resistance) if above_resistance else (
-        min(resistances) if resistances else None
-    )
+    nearest_support = max(below_support) if below_support else None
+    nearest_resistance = min(above_resistance) if above_resistance else None
 
     price_location = "unknown"
     if current_price and resistances and current_price > max(resistances) * 1.01:
@@ -449,7 +452,6 @@ def _multi_strategy_execution_gate(market_structure: dict) -> dict:
     current = market_structure.get("current_price")
     invalidation = market_structure.get("invalidation_level")
     resistance = market_structure.get("nearest_resistance")
-    location = market_structure.get("price_location")
     if not isinstance(current, (int, float)) or current <= 0:
         return {
             "status": "unavailable",
@@ -477,7 +479,7 @@ def _multi_strategy_execution_gate(market_structure: dict) -> dict:
         else None
     )
     reward_risk = reward / risk if risk and risk > 0 and reward is not None else None
-    if location == "near_resistance" or (reward is not None and reward <= 0):
+    if reward is not None and reward <= 0:
         return {
             "status": "wait",
             "new_position_action": "watch",
@@ -683,6 +685,8 @@ def _handle_calculate_multi_strategy_score(
     scores_json: str,
     instrument_type: str = "standard",
     market_structure_json: Optional[str] = None,
+    stock_code: Optional[str] = None,
+    timeframe: str = "daily",
 ) -> dict:
     """Validate 13 strategy rows and calculate their weighted score deterministically."""
     try:
@@ -994,6 +998,92 @@ def _handle_calculate_multi_strategy_score(
         decision=decision,
         has_decision_blockers=bool(decision_blockers),
     )
+    # One executable plan owns the action. A bullish score alone is not an entry,
+    # but a validated plan must not simultaneously say "watch" and "open".
+    if position_plan.get("new_position_allowed"):
+        actions["no_position"] = "buy"
+        actions["no_position_label"] = "技术条件可试仓；按计划确认与风险预算执行"
+
+    trade_plan = None
+    if stock_code:
+        from src.config import get_config
+        from src.services.swing_trade_plan import load_live_swing_plan, normalize_enabled_setups, unavailable_plan
+
+        if timeframe != "daily":
+            return {"status": "invalid", "issues": ["swing timeframe must be daily"]}
+        enabled = normalize_enabled_setups(get_config().multi_strategy_enabled_setups)
+        try:
+            trade_plan = load_live_swing_plan(stock_code, enabled_setups=enabled)
+        except Exception as exc:
+            logger.warning("Daily swing plan unavailable for %s: %s", stock_code, exc)
+            trade_plan = unavailable_plan(stock_code, "snapshot_load_failed")
+        if leveraged:
+            trade_plan = unavailable_plan(stock_code, "leveraged_etf_entry_not_validated")
+        elif not enabled and trade_plan.get("legacy_structure"):
+            # Empty opt-in list is a real rollback to P0-corrected original policy,
+            # still using trusted prices. New candidate approval is never implied.
+            candidate = dict(trade_plan)
+            legacy_structure = _normalize_multi_strategy_market_structure(candidate["legacy_structure"])
+            legacy_execution = _multi_strategy_execution_gate(legacy_structure)
+            legacy_plan = _build_multi_strategy_position_plan(
+                legacy_structure, legacy_execution, decision=decision,
+                has_decision_blockers=bool(decision_blockers),
+            )
+            trade_plan.update(policy="legacy_corrected", candidate_evaluation={
+                key: candidate.get(key) for key in ("setup_type", "setup_label", "status", "reason", "validation_status",
+                    "entry_low", "entry_high", "hard_stop", "structure_low", "risk_budget_fraction", "max_entry_price", "target_price", "trigger_condition")
+            }, setup_type="legacy", setup_label="原入场政策（已修正执行门控）",
+                validation_status="legacy_policy_not_new_setup_approval", risk_budget_fraction=None,
+                status="armed" if legacy_plan["new_position_allowed"] else "wait",
+                reason=legacy_plan["reason"], new_position_allowed=False, action="watch")
+            trade_plan["trigger_condition"] = "原方向与证据门控通过；结构有效且上方目标盈亏比至少1.5，真实成交价重新检查"
+            current = legacy_structure.get("current_price")
+            stop = legacy_structure.get("invalidation_level")
+            target = legacy_structure.get("nearest_resistance")
+            trade_plan.update(entry_low=current, entry_reference=current, hard_stop=stop,
+                              target_price=target, entry_high=None, max_entry_price=None,
+                              risk_per_share=current-stop if current and stop else None,
+                              reward_risk_ratio=legacy_execution.get("reward_risk_ratio"),
+                              structure_low=stop + .5 * candidate["atr14"] if stop else None,
+                              take_profit_tranches=legacy_plan.get("take_profit_tranches", []))
+            if legacy_plan["new_position_allowed"] and target and stop:
+                ceiling = (target + 1.5 * stop) / 2.5
+                trade_plan.update(entry_high=ceiling, max_entry_price=ceiling)
+                if candidate.get("quote_timestamp") and candidate.get("verified_quote_price"):
+                    from src.services.swing_trade_plan import price_plan_for_entry
+                    trade_plan = price_plan_for_entry(
+                        trade_plan, candidate["verified_quote_price"], enabled=True,
+                        session=date.fromisoformat(candidate["market_session_date"]),
+                    )
+            else:
+                trade_plan["take_profit_tranches"] = []
+        # New entries require the server-generated snapshot. Overall score/quality
+        # stays visible as context and cannot replace or silently bypass this plan.
+        actions["no_position"] = trade_plan.get("action", "watch")
+        actions["no_position_label"] = trade_plan.get("reason", "等待可验证的交易计划")
+        direction_decision = decision
+        decision = "技术条件可试仓" if trade_plan.get("new_position_allowed") else "条件计划 / 暂不执行"
+        position_guidance = trade_plan.get("reason", "仅展示可验证的条件计划")
+        trade_plan["direction_decision"] = direction_decision
+        execution = {"status": trade_plan["status"], "reason": position_guidance,
+                     "reward_risk_ratio": trade_plan.get("reward_risk_ratio")}
+        market_structure = _normalize_multi_strategy_market_structure({
+            "current_price": trade_plan.get("entry_reference", trade_plan.get("signal_close")),
+            "support_levels": [trade_plan["structure_low"]] if trade_plan.get("structure_low") else [],
+            "resistance_levels": [trade_plan["target_price"]] if trade_plan.get("target_price") else [],
+            "invalidation_level": trade_plan.get("hard_stop"),
+            "evidence": "同一已完成日线快照的价格行为结构；不是模型自行填写的价格",
+        })
+        market_structure["source"] = trade_plan.get("source", "unavailable")
+        # Never carry forward the model-authored stop/exit from the old input.
+        # A new-entry snapshot is not the user's existing position contract.
+        actions["has_position"] = "hold"
+        actions["has_position_label"] = "沿用原持仓保护计划；原结构失效则退出，不自动加仓或亏损摊平"
+        compatible_plan = _build_multi_strategy_position_plan(
+            market_structure, execution, decision=direction_decision, has_decision_blockers=False,
+        )
+        position_plan = {**compatible_plan, **trade_plan, "tranches": [],
+                         "allocation_basis": "本笔风险预算，不是账户净值占比"}
 
     return {
         "status": "ok",
@@ -1020,6 +1110,7 @@ def _handle_calculate_multi_strategy_score(
         "execution": execution,
         "position_guidance": position_guidance,
         "position_plan": position_plan,
+        "trade_plan": trade_plan,
         "confidence": {
             "level": confidence_level,
             "label": confidence_label,
@@ -1058,8 +1149,9 @@ calculate_multi_strategy_score_tool = ToolDefinition(
         "and risk-aware position guidance deterministically. Pass scores_json as a JSON array in "
         "canonical strategy order; each row needs strategy, signal, strength, score, "
         "evidence_status, and reason. Missing evidence must use signal='不可评估', strength='-', "
-        "and score=null. Pass market_structure_json from analyze_trend when available; it adds "
-        "support/resistance levels to the authoritative report. Use instrument_type='leveraged_etf' "
+        "and score=null. Always pass stock_code for current daily-swing analysis: the server loads "
+        "completed OHLC and generates the authoritative plan. market_structure_json is legacy-only. "
+        "Use instrument_type='leveraged_etf' "
         "for leveraged ETFs."
     ),
     parameters=[
@@ -1092,10 +1184,14 @@ calculate_multi_strategy_score_tool = ToolDefinition(
             required=False,
             default=None,
         ),
+        ToolParameter(name="stock_code", type="string", required=False, default=None,
+                      description="Stock being scored. Required for daily-swing plans; server loads its own fresh OHLC snapshot."),
+        ToolParameter(name="timeframe", type="string", required=False, default="daily",
+                      enum=["daily"], description="Plan horizon; daily completed bars, not intraday confirmation."),
     ],
     handler=_handle_calculate_multi_strategy_score,
     category="analysis",
-    policy=_DETERMINISTIC_ANALYSIS_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 
@@ -1181,7 +1277,7 @@ analyze_trend_tool = ToolDefinition(
     ],
     handler=_handle_analyze_trend,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 
@@ -1273,7 +1369,7 @@ calculate_ma_tool = ToolDefinition(
     ],
     handler=_handle_calculate_ma,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 
@@ -1430,7 +1526,7 @@ get_volume_analysis_tool = ToolDefinition(
     ],
     handler=_handle_get_volume_analysis,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 
@@ -1637,7 +1733,7 @@ analyze_pattern_tool = ToolDefinition(
     ],
     handler=_handle_analyze_pattern,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 
@@ -1805,6 +1901,7 @@ def _handle_analyze_price_action(
     intentionally left for the model/user to confirm bar by bar.
     """
     from src.services.history_loader import load_history_df
+    from src.agent.freshness import is_fresh_market_data_required
 
     if not (stock_code and str(stock_code).strip()):
         return {"status": "error", "code": "missing_stock_code"}
@@ -1823,7 +1920,7 @@ def _handle_analyze_price_action(
         requested_days = 120
 
     try:
-        df, source = load_history_df(stock_code, days=requested_days)
+        df, source = load_history_df(stock_code, days=requested_days, force_refresh=is_fresh_market_data_required())
     except Exception as exc:
         logger.warning("Price action history load failed for %s: %s", stock_code, exc)
         return {
@@ -1848,7 +1945,35 @@ def _handle_analyze_price_action(
             "missing_columns": missing_columns,
         }
 
-    df = df.tail(requested_days).copy().reset_index(drop=True)
+    from src.core.trading_calendar import build_market_phase_context, get_market_for_stock
+    from src.services.history_loader import get_frozen_target_date
+    import pandas as pd
+    phase = build_market_phase_context(market=get_market_for_stock(stock_code))
+    if phase.warnings or phase.phase.value == "unknown" or "date" not in df:
+        return {"status": "unavailable", "code": "daily_completion_unverified"}
+    dates = pd.to_datetime(df["date"], errors="coerce").dt.date
+    if dates.isna().any():
+        return {"status": "unavailable", "code": "invalid_daily_dates"}
+    cutoff = min(phase.effective_daily_bar_date, get_frozen_target_date() or phase.effective_daily_bar_date)
+    df = df.loc[dates <= cutoff].tail(requested_days).copy().reset_index(drop=True)
+    intraday_vwap = _calculate_price_action_vwap(
+        stock_code, timeframe=normalized_intraday_timeframe,
+    )
+    result = analyze_price_action_frame(df, stock_code=stock_code, source=source, intraday_vwap=intraday_vwap)
+    result["completed_daily_bar_date"] = str(df.iloc[-1]["date"])[:10] if not df.empty else None
+    result["excluded_incomplete_bars"] = int((dates > cutoff).sum())
+    return result
+
+
+def analyze_price_action_frame(
+    df: Any, *, stock_code: str, source: str, intraday_vwap: Optional[dict] = None,
+) -> dict:
+    """Pure daily PA calculation shared by live plans and prefix-only replay.
+
+    The caller must supply ordered, validated, completed OHLC bars. No network,
+    database, clock or future-bar lookup is performed here.
+    """
+    df = df.copy().reset_index(drop=True)
     if len(df) < 30:
         return {
             "status": "partial",
@@ -2066,10 +2191,10 @@ def _handle_analyze_price_action(
             "reason": "近 20 日未识别到实体、收盘位置和波幅同时满足条件的强阳趋势 K。",
         }
 
-    intraday_vwap = _calculate_price_action_vwap(
-        stock_code,
-        timeframe=normalized_intraday_timeframe,
-    )
+    intraday_vwap = intraday_vwap or {
+        "status": "unavailable", "available": False,
+        "reason": "日线计划不请求日内 VWAP；日内证据独立评价。",
+    }
     data_gaps = []
     if intraday_vwap.get("status") != "ok":
         data_gaps.append("日内 VWAP 不可用，不能使用 VWAP 或 VWAP Bands 作为移动止盈依据。")
@@ -2102,6 +2227,11 @@ def _handle_analyze_price_action(
             "higher_lows": higher_lows,
             "lower_highs": lower_highs,
             "lower_lows": lower_lows,
+            "confirmed_pivot_highs": [
+                {"price": highs[i], "date": _price_action_bar_date(df, i),
+                 "confirmed_at": _price_action_bar_date(df, i + 2)}
+                for i in pivot_high_indices
+            ],
         },
         "levels": {
             "current_price": round(current, 4),
@@ -2176,7 +2306,7 @@ analyze_price_action_tool = ToolDefinition(
     ],
     handler=_handle_analyze_price_action,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 
@@ -2450,7 +2580,7 @@ analyze_relative_strength_tool = ToolDefinition(
     ],
     handler=_handle_analyze_relative_strength,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 
@@ -2666,13 +2796,97 @@ analyze_intraday_t_tool = ToolDefinition(
     ],
     handler=_handle_analyze_intraday_t,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
+
+
+def _load_vcp_completed_history(stock_code: str, days: int):
+    """Use the same completed-session boundary as volume confirmation.
+
+    VCP depends on volume contraction and breakout volume. An unfinished day
+    or missing volume must not silently become a confirmed setup.
+    """
+    import pandas as pd
+    from src.agent.freshness import is_fresh_market_data_required
+    from datetime import timedelta
+    from src.core.trading_calendar import build_market_phase_context, get_trading_dates
+    from src.services.history_loader import get_frozen_target_date, load_history_df
+    from src.services.stock_code_utils import resolve_daily_stock_identity
+
+    identity = resolve_daily_stock_identity(stock_code)
+    if identity is None or not identity.refill_code:
+        return None, {
+            "timeframe": "daily", "code": stock_code, "status": "unavailable",
+            "reason": "股票代码或市场无法通过共享标的规则验证",
+        }
+    df, source = load_history_df(
+        identity.refill_code, days=days + 5, force_refresh=is_fresh_market_data_required(),
+    )
+    metadata = {"source": source, "timeframe": "daily", "code": stock_code,
+                "normalized_code": identity.refill_code, "market": identity.market}
+    phase = build_market_phase_context(market=identity.market)
+    if phase.phase.value == "unknown" or phase.warnings:
+        return None, {**metadata, "status": "unavailable", "reason": "交易日完成状态无法验证"}
+    required = {"date", "open", "high", "low", "close", "volume"}
+    if df is None or df.empty or not required.issubset(df.columns):
+        return None, {**metadata, "status": "insufficient_data", "reason": "VCP 需要带日期的完整 OHLCV"}
+    cutoff = phase.effective_daily_bar_date
+    frozen = get_frozen_target_date()
+    if frozen is not None:
+        sessions = get_trading_dates(identity.market, frozen - timedelta(days=14), frozen)
+        if sessions is None or len(sessions) == 0:
+            return None, {**metadata, "status": "unavailable", "reason": "历史冻结日期的交易日无法验证"}
+        cutoff = min(cutoff, sessions[-1].date())
+    frame = df.copy()
+    dates = pd.to_datetime(frame["date"], format="mixed", errors="coerce").dt.date
+    if dates.isna().any():
+        return None, {**metadata, "status": "unavailable", "reason": "日线日期无效，无法验证完成状态"}
+    frame["date"] = dates
+    excluded = int((dates > cutoff).sum())
+    frame = frame.loc[dates <= cutoff].sort_values("date")
+    if frame.empty:
+        return None, {**metadata, "status": "insufficient_data", "reason": "没有可用的已完成日线"}
+    sessions = get_trading_dates(identity.market, frame.iloc[0]["date"], cutoff)
+    if sessions is None:
+        return None, {**metadata, "status": "unavailable", "reason": "历史日线的交易日无法验证"}
+    session_mask = frame["date"].isin(set(sessions.date))
+    excluded_non_session = int((~session_mask).sum())
+    frame = frame.loc[session_mask]
+    if frame.empty:
+        return None, {**metadata, "status": "insufficient_data", "reason": "没有可用的真实交易日日线"}
+    if frame.iloc[-1]["date"] != cutoff:
+        return None, {
+            **metadata, "status": "unavailable", "reason": "日线尚未更新至最近已完成交易日",
+            "as_of": str(frame.iloc[-1]["date"]), "expected_as_of": str(cutoff),
+        }
+    # Keep duplicates until conflict detection, but validate only the actual
+    # last `days` trading sessions consumed by the model. Old unused records
+    # cannot invalidate an otherwise complete current analysis window.
+    selected_dates = frame["date"].drop_duplicates().tail(days)
+    frame = frame.loc[frame["date"].isin(selected_dates)].copy()
+    numeric = frame[list(required - {"date"})].apply(pd.to_numeric, errors="coerce")
+    values_valid = numeric.map(lambda value: pd.notna(value) and math.isfinite(value)).all().all()
+    prices = numeric[["open", "high", "low", "close"]]
+    if (not values_valid or (prices <= 0).any().any() or (numeric["volume"] < 0).any()
+            or (numeric["high"] < prices.max(axis=1)).any()
+            or (numeric["low"] > prices.min(axis=1)).any()):
+        return None, {**metadata, "status": "unavailable", "reason": "OHLCV 缺失或无效，不能确认收缩与放量"}
+    frame[numeric.columns] = numeric
+    if frame.groupby("date")[list(numeric.columns)].nunique(dropna=False).gt(1).any().any():
+        return None, {**metadata, "status": "unavailable", "reason": "同交易日存在冲突 OHLCV，无法确认信号"}
+    frame = frame.drop_duplicates("date").tail(days).copy()
+    if frame["volume"].tail(20).sum() <= 0:
+        return None, {**metadata, "status": "unavailable", "reason": "近期交易日没有有效成交量，不能确认信号"}
+    frame["date"] = frame["date"].map(str)
+    return frame, {
+        **metadata, "daily_bar_status": "completed", "as_of": frame.iloc[-1]["date"],
+        "excluded_unclosed_or_future_bars": excluded,
+        "excluded_non_session_bars": excluded_non_session,
+    }
 
 
 def _handle_analyze_vcp_h1_h2_buy(stock_code: str, days: int = 260) -> dict:
     """Run deterministic daily VCP + H1/H2 buy setup checks."""
-    from src.services.history_loader import load_history_df
     from src.services.vcp_h1_h2_service import analyze_vcp_h1_h2_buy
 
     if not (stock_code and str(stock_code).strip()):
@@ -2684,13 +2898,11 @@ def _handle_analyze_vcp_h1_h2_buy(stock_code: str, days: int = 260) -> dict:
         requested_days = 260
 
     try:
-        df, source = load_history_df(stock_code, days=requested_days)
-        if df is None or df.empty:
-            return {
-                "error": f"No historical data available for VCP H1/H2 analysis on {stock_code}",
-                "timeframe": "daily",
-            }
-        result = analyze_vcp_h1_h2_buy(df, source=source, timeframe="daily")
+        df, metadata = _load_vcp_completed_history(stock_code, requested_days)
+        if df is None:
+            return metadata
+        result = analyze_vcp_h1_h2_buy(df, source=metadata["source"], timeframe="daily")
+        result.update(metadata)
         result["code"] = stock_code
         result["requested_days"] = requested_days
         return result
@@ -2731,7 +2943,6 @@ analyze_vcp_h1_h2_buy_tool = ToolDefinition(
 
 def _handle_analyze_vcp_breakout_trader(stock_code: str, days: int = 260) -> dict:
     """Run deterministic daily VCP / bull-flag breakout trader setup checks."""
-    from src.services.history_loader import load_history_df
     from src.services.vcp_breakout_trader_service import analyze_vcp_breakout_trader
 
     if not (stock_code and str(stock_code).strip()):
@@ -2743,13 +2954,11 @@ def _handle_analyze_vcp_breakout_trader(stock_code: str, days: int = 260) -> dic
         requested_days = 260
 
     try:
-        df, source = load_history_df(stock_code, days=requested_days)
-        if df is None or df.empty:
-            return {
-                "error": f"No historical data available for VCP breakout trader analysis on {stock_code}",
-                "timeframe": "daily",
-            }
-        result = analyze_vcp_breakout_trader(df, source=source, timeframe="daily")
+        df, metadata = _load_vcp_completed_history(stock_code, requested_days)
+        if df is None:
+            return metadata
+        result = analyze_vcp_breakout_trader(df, source=metadata["source"], timeframe="daily")
+        result.update(metadata)
         result["code"] = stock_code
         result["requested_days"] = requested_days
         return result
@@ -2784,7 +2993,7 @@ analyze_vcp_breakout_trader_tool = ToolDefinition(
     ],
     handler=_handle_analyze_vcp_breakout_trader,
     category="analysis",
-    policy=_ANALYSIS_READ_POLICY,
+    policy=_CORE_ANALYSIS_READ_POLICY,
 )
 
 

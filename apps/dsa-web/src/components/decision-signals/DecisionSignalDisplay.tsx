@@ -120,6 +120,54 @@ function asJsonViewerData(value: unknown): Record<string, unknown> | unknown[] |
   return null;
 }
 
+export const SwingTradePlanDetails: React.FC<{ metadata: unknown }> = ({ metadata }) => {
+  const { language } = useUiLanguage();
+  const object = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown> : null;
+  const raw = object?.trade_plan;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const plan = raw as Record<string, unknown>;
+  if (plan.version !== 'daily-swing-v1') return null;
+  const zh = language === 'zh';
+  const text = (key: string) => typeof plan[key] === 'string' ? plan[key] as string : '—';
+  const price = (key: string) => typeof plan[key] === 'number' && Number.isFinite(plan[key])
+    ? formatNumber(plan[key] as number) : '—';
+  const fraction = typeof plan.risk_budget_fraction === 'number' && Number.isFinite(plan.risk_budget_fraction) ? `${plan.risk_budget_fraction * 100}%` : '—';
+  const statusLabels: Record<string, string> = { ready: '技术条件可试仓', armed: '仅下一交易日条件计划', wait: '观望', validation_pending: '候选，尚未启用', not_triggered: '未触发', overpriced: '超价放弃', invalidated: '结构失效', expired: '已到期', unavailable: '关键证据不足', quote_unverified: '当前报价未验证' };
+  const candidate = plan.candidate_evaluation && typeof plan.candidate_evaluation === 'object'
+    ? plan.candidate_evaluation as Record<string, unknown> : null;
+  const candidateValue = (key: string) => candidate && (typeof candidate[key] === 'string' || typeof candidate[key] === 'number') ? String(candidate[key]) : '—';
+  const hasRange = typeof plan.entry_low === 'number' && typeof plan.entry_high === 'number' && plan.entry_low <= plan.entry_high;
+  const candidateRange = candidate && typeof candidate.entry_low === 'number' && typeof candidate.entry_high === 'number' && candidate.entry_low <= candidate.entry_high
+    ? `${candidateValue('entry_low')}–${candidateValue('entry_high')}` : zh ? '无可执行区间' : 'No executable range';
+  return <Card title={zh ? '日线波段执行计划' : 'Daily swing execution plan'} padding="sm" className="rounded-xl border-warning/30">
+    <div className="mb-3 flex flex-wrap gap-2">
+      <Badge variant={plan.new_position_allowed === true ? 'success' : ['invalidated', 'overpriced'].includes(text('status')) ? 'danger' : 'warning'}>{zh ? statusLabels[text('status')] || text('status') : text('status')}</Badge>
+      <Badge variant="info">{text('setup_label')}</Badge>
+      <span className="text-xs text-secondary-text">{text('version')} · {text('validation_status')}</span>
+    </div>
+    <p className="mb-3 break-words text-sm font-semibold">{text('reason')}</p>
+    <p className="mb-3 break-words text-xs text-secondary-text">{zh ? '触发条件：' : 'Trigger: '}{text('trigger_condition')}</p>
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <SignalMetric label={zh ? '入场区间' : 'Entry range'} value={hasRange ? `${price('entry_low')} – ${price('entry_high')}` : zh ? '无可执行区间' : 'No executable range'} tone={plan.new_position_allowed === true ? 'success' : 'warning'} />
+      <SignalMetric label={zh ? '最高买价 · 超过即放弃' : 'Entry ceiling · do not chase'} value={price('max_entry_price')} tone="warning" />
+      <SignalMetric label={zh ? '结构失效 / 硬止损' : 'Invalidation / hard stop'} value={`${price('structure_low')} / ${price('hard_stop')}`} tone="danger" />
+      <SignalMetric label={zh ? '本笔风险预算份额 · 非账户仓位' : 'Campaign risk fraction · not equity weight'} value={fraction} />
+      <SignalMetric label={zh ? '信号日 → 有效交易日' : 'Signal → valid session'} value={`${text('signal_date')} → ${text('valid_session')}`} />
+      <SignalMetric label={zh ? '来源 / 复权' : 'Source / adjustment'} value={`${text('source')} / ${text('adjustment')}`} />
+      <SignalMetric label={zh ? '单股R / 目标参考' : 'Per-share R / target reference'} value={`${price('risk_per_share')} / ${price('target_price')}`} />
+    </div>
+    {Array.isArray(plan.cancellation_conditions) ? <p className="mt-3 text-xs text-warning">{zh ? '取消条件：' : 'Cancel if: '}{plan.cancellation_conditions.filter((x): x is string => typeof x === 'string').join('；')}</p> : null}
+    {candidate ? <details className="mt-3 rounded-lg border border-warning/30 p-2 text-xs">
+      <summary className="cursor-pointer font-semibold text-warning">{zh ? '新买点候选 · 尚未启用，不是买入建议' : 'New setup candidate · disabled, not an entry recommendation'}</summary>
+      <p className="mt-2 break-words">{candidateValue('setup_label')} · {candidateValue('reason')}</p>
+      <p className="mt-2">{zh ? '候选区间 / 最高买价 / 硬止损' : 'Candidate range / ceiling / stop'}：{candidateRange} / {candidateValue('max_entry_price')} / {candidateValue('hard_stop')}</p>
+    </details> : null}
+    <p className="mt-3 break-words text-xs text-warning">{text('event_warning')}</p>
+    <p className="mt-2 text-xs text-secondary-text">{zh ? '预算未提供时不计算股数。候选不等于已成交；历史方向命中率不是该计划的交易胜率。' : 'No share count without a risk budget. A candidate is not a fill; direction accuracy is not trading win rate.'}</p>
+  </Card>;
+};
+
 function getActionLabel(item: DecisionSignalItem, t: (key: UiTextKey) => string): string {
   return getDecisionActionLabel(
     item.action,
@@ -382,6 +430,8 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
           <DetailRow label={t('decisionSignals.targetPrice')} value={formatNumber(item.targetPrice)} />
         </div>
       </Card>
+
+      <SwingTradePlanDetails metadata={item.metadata} />
 
       <Card padding="sm" className="rounded-xl">
         <div className="grid gap-3">

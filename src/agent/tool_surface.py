@@ -16,6 +16,7 @@ from src.agent.tools.execution import (
     bind_tool_execution_context,
     build_tool_audit,
     check_tool_execution,
+    is_owned_tool_process,
     redact_external_tool_result,
     redact_diagnostic_value,
     reset_tool_execution_context,
@@ -54,12 +55,19 @@ class ToolSurface:
         """Return an empty Phase 6a surface for protocol-only preflight work."""
         return cls(ToolRegistry())
 
-    def list_tools(self, format: str = "public", *, cancellation_safe_only: bool = False) -> list[dict]:
+    def list_tools(
+        self, format: str = "public", *, cancellation_safe_only: bool = False,
+        process_isolated: bool = False,
+    ) -> list[dict]:
         """List tools in a stable schema format."""
         normalized = (format or "public").strip().lower()
         tools = self._registry.list_tools()
         if cancellation_safe_only:
-            tools = [tool_def for tool_def in tools if tool_def.policy.cancellation_safe]
+            tools = [
+                tool_def for tool_def in tools
+                if tool_def.policy.cancellation_safe
+                or (process_isolated and tool_def.policy.process_cancellation_safe)
+            ]
         if normalized == "openai":
             return [tool_def.to_openai_tool() for tool_def in tools]
         if normalized == "public":
@@ -174,7 +182,10 @@ class ToolSurface:
         ):
             ctx = replace(ctx, deadline=time.monotonic() + float(timeout))
         controlled_execution = ctx.cancel_event is not None or ctx.deadline is not None
-        if controlled_execution and not tool_def.policy.cancellation_safe:
+        cancellation_supported = tool_def.policy.cancellation_safe or (
+            tool_def.policy.process_cancellation_safe and is_owned_tool_process()
+        )
+        if controlled_execution and not cancellation_supported:
             return self._error_result(
                 tool_name=tool_name,
                 code="cancellation_unsupported",

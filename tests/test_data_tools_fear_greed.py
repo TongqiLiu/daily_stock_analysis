@@ -68,6 +68,8 @@ class TestGetFearGreedIndexContract(unittest.TestCase):
         self.assertEqual(result["stock_code"], "TSLA")
         self.assertEqual(result["status"], "not_configured")
         self.assertIn("SZDT_AUTH_TOKEN", result["note"])
+        self.assertEqual(result["evidence_status"], "missing")
+        self.assertIsNone(result["score"])
 
     def test_unavailable_with_quota_reason(self) -> None:
         with patch(
@@ -80,8 +82,10 @@ class TestGetFearGreedIndexContract(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["reason_code"], "binding_quota_exhausted")
         self.assertIn("查询股票个数额度已用完", result["reason_detail"])
-        self.assertEqual(result["proxy_score"], 0.0)
-        self.assertEqual(result["proxy_label"], "中性(代理)")
+        self.assertIsNone(result["proxy_score"])
+        self.assertIsNone(result["proxy_label"])
+        self.assertEqual(result["evidence_status"], "missing")
+        self.assertIsNone(result["score"])
 
     def test_unavailable_unknown_reason(self) -> None:
         with patch(
@@ -92,7 +96,29 @@ class TestGetFearGreedIndexContract(unittest.TestCase):
 
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["reason_code"], "unknown")
-        self.assertEqual(result["proxy_score"], 0.0)
+        self.assertIsNone(result["proxy_score"])
+        self.assertEqual(result["evidence_status"], "missing")
+        self.assertIn("exclude missing evidence", result["suggested_action"])
+
+    def test_fetch_exception_remains_missing(self) -> None:
+        svc = _DummySvcOk()
+        with patch.object(svc, "get_fear_greed_context", side_effect=TimeoutError("timeout")), patch(
+            "src.agent.tools.data_tools._get_fear_greed_service", return_value=svc,
+        ):
+            result = _handle_get_fear_greed_index("TSLA")
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["evidence_status"], "missing")
+        self.assertIsNone(result["score"])
+
+    def test_real_neutral_score_is_not_missing(self) -> None:
+        svc = _DummySvcOk()
+        with patch.object(svc, "get_score", return_value=(0.0, "中性")), patch(
+            "src.agent.tools.data_tools._get_fear_greed_service", return_value=svc,
+        ):
+            result = _handle_get_fear_greed_index("TSLA")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["score"], 0.0)
+        self.assertNotIn("proxy_score", result)
 
     def test_ok_response(self) -> None:
         with patch(

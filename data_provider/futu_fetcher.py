@@ -22,6 +22,7 @@ from typing import Optional
 import pandas as pd
 
 from .base import BaseFetcher, STANDARD_COLUMNS
+from .futu_connection import futu_opend_reachable, open_futu_quote_context
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float
 from .us_index_mapping import is_us_stock_code
 
@@ -117,9 +118,28 @@ class FutuFetcher(BaseFetcher):
             return False
 
     def is_available_for_request(self, capability: str = "") -> bool:
-        return self._is_available()
+        if not self._is_available():
+            return False
+        host, port = self._connection_settings()
+        if futu_opend_reachable(host, port):
+            return True
+        # An existing SDK context keeps retrying in the background after OpenD
+        # disappears. Closing it stops that retry loop before the next request.
+        self.close()
+        return False
+
+    @staticmethod
+    def _connection_settings() -> tuple[str, int]:
+        host = (os.getenv("FUTU_OPEND_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            port = int((os.getenv("FUTU_OPEND_PORT") or "11111").strip())
+        except ValueError:
+            port = 11111
+        return host, port
 
     def _get_ctx(self):
+        if not self.is_available_for_request():
+            return None
         if self._ctx is not None:
             return self._ctx
 
@@ -131,15 +151,8 @@ class FutuFetcher(BaseFetcher):
             try:
                 from futu import OpenQuoteContext
 
-                host = (os.getenv("FUTU_OPEND_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-                port_raw = (os.getenv("FUTU_OPEND_PORT") or "11111").strip() or "11111"
-                try:
-                    port = int(port_raw)
-                except ValueError:
-                    logger.warning("[Futu] FUTU_OPEND_PORT=%r 非法，回退到 11111", port_raw)
-                    port = 11111
-
-                self._ctx = OpenQuoteContext(host=host, port=port)
+                host, port = self._connection_settings()
+                self._ctx = open_futu_quote_context(OpenQuoteContext, host, port)
                 logger.info("[Futu] OpenQuoteContext 初始化成功: %s:%s", host, port)
                 return self._ctx
             except Exception as exc:
@@ -156,6 +169,11 @@ class FutuFetcher(BaseFetcher):
                 logger.debug("[Futu] close() 失败: %s", exc)
             finally:
                 self._ctx = None
+
+    def _close_on_connection_failure(self, error: object) -> None:
+        """Discard a context whose SDK handshake failed or whose gateway vanished."""
+        if "connect timeout" in str(error).lower() or not self.is_available_for_request():
+            self.close()
 
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         if not self.is_available_for_request("realtime_quote"):
@@ -174,10 +192,13 @@ class FutuFetcher(BaseFetcher):
 
             ret, data = ctx.get_stock_quote([futu_code])
             if ret != RET_OK or data is None or data.empty:
+                if ret != RET_OK:
+                    self._close_on_connection_failure(data)
                 return None
             row = data.iloc[0]
         except Exception as exc:
             logger.debug("[Futu] get_stock_quote(%s) 失败: %s", futu_code, exc)
+            self._close_on_connection_failure(exc)
             return None
 
         price = safe_float(row.get("last_price"))
@@ -244,6 +265,7 @@ class FutuFetcher(BaseFetcher):
             return data.copy()
         except Exception as exc:
             logger.debug("[Futu] request_history_kline(%s) 失败: %s", futu_code, exc)
+            self._close_on_connection_failure(exc)
             raise
 
     def get_weekly_data(self, stock_code: str, weeks: int = 104) -> pd.DataFrame:
@@ -291,6 +313,7 @@ class FutuFetcher(BaseFetcher):
             return normalized.tail(weeks).reset_index(drop=True)
         except Exception as exc:
             logger.debug("[Futu] request_weekly_kline(%s) 失败: %s", futu_code, exc)
+            self._close_on_connection_failure(exc)
             raise
 
     def get_intraday_data(
@@ -400,6 +423,7 @@ class FutuFetcher(BaseFetcher):
             return normalized[required]
         except Exception as exc:
             logger.debug("[Futu] request_intraday_kline(%s) 失败: %s", futu_code, exc)
+            self._close_on_connection_failure(exc)
             raise
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
@@ -431,4 +455,5 @@ class FutuFetcher(BaseFetcher):
         normalized["volume"] = pd.to_numeric(normalized["volume"], errors="coerce").fillna(0).astype(int)
 
         normalized["date"] = normalized["date"].astype(str).str.slice(0, 10)
+        normalized.attrs["price_adjustment"] = "forward"
         return normalized[STANDARD_COLUMNS]

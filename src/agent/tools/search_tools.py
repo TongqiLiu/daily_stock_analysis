@@ -19,6 +19,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from src.agent.news_evidence import record_news_evidence
+from src.agent.tools.execution import (
+    ToolExecutionCancelled,
+    ToolExecutionDeadlineExceeded,
+    check_tool_execution,
+)
 from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
 logger = logging.getLogger(__name__)
@@ -31,18 +36,21 @@ _NEWS_READ_POLICY = ToolPolicy.declared(
     side_effects=["network_read", "db_write_cache"],
     permissions=["news:read"],
     scope_dimensions=["stock"],
+    process_cancellation_safe=True,
 )
 _INTEL_READ_POLICY = ToolPolicy.declared(
     read_only=True,
     side_effects=["network_read", "db_write_cache"],
     permissions=["intel:read"],
     scope_dimensions=["stock"],
+    process_cancellation_safe=True,
 )
 _RESEARCH_READ_POLICY = ToolPolicy.declared(
     read_only=True,
     side_effects=["network_read"],
     permissions=["research:read"],
     scope_dimensions=["stock"],
+    process_cancellation_safe=True,
 )
 
 
@@ -135,6 +143,7 @@ def _fetch_futu_news(
     request = Request(url, headers={"User-Agent": FUTU_USER_AGENT})
     with urlopen(request, timeout=timeout) as response:
         raw = response.read().decode("utf-8")
+    check_tool_execution()
     return json.loads(raw)
 
 
@@ -170,12 +179,14 @@ def _search_futu_public_news(stock_code: str, stock_name: str, *, limit: int) ->
     attempts = []
     last_error = ""
     for keyword in _futu_news_keyword_candidates(stock_code, stock_name):
+        check_tool_execution()
         try:
             payload = _fetch_futu_news(keyword, size=limit, lang="en", news_type=1)
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             last_error = str(exc)
             attempts.append({"keyword": keyword, "success": False, "error": last_error})
             continue
+        check_tool_execution()
         if str(payload.get("code")) != "0":
             last_error = str(payload.get("message") or "Futu news search returned non-zero code")
             attempts.append({"keyword": keyword, "success": False, "error": last_error})
@@ -274,6 +285,7 @@ def _persist_news_response(
     if not response or not getattr(response, "success", False) or not getattr(response, "results", None):
         return
 
+    check_tool_execution()
     code = _canonical_search_code(stock_code)
     try:
         saved_count = _get_db().save_news_intel(
@@ -290,6 +302,8 @@ def _persist_news_response(
             dimension,
             saved_count,
         )
+    except (ToolExecutionCancelled, ToolExecutionDeadlineExceeded):
+        raise
     except Exception as exc:
         logger.warning(
             "Agent news intel persistence failed for %s (dimension=%s): %s",
@@ -301,6 +315,7 @@ def _persist_news_response(
 
 def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
     """Search latest news for a stock."""
+    check_tool_execution()
     service = _get_search_service()
     query_code, query_name = _resolve_search_subject(stock_code, stock_name)
 
@@ -321,6 +336,7 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
         }
 
     response = service.search_stock_news(query_code, query_name, max_results=5)
+    check_tool_execution()
 
     if not response.success:
         fallback_result = _try_futu_public_news_fallback(query_code, query_name)
@@ -392,6 +408,7 @@ search_stock_news_tool = ToolDefinition(
 
 def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict:
     """Multi-dimensional intelligence search."""
+    check_tool_execution()
     service = _get_search_service()
     query_code, query_name = _resolve_search_subject(stock_code, stock_name)
 
@@ -403,6 +420,7 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
         stock_name=query_name,
         max_searches=6,
     )
+    check_tool_execution()
 
     if not intel_results:
         # 多维检索已发起但整体没有结果，同样必须记 0（见 _handle_search_stock_news）。
@@ -418,6 +436,7 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
     # Also return structured data
     dimensions = {}
     for dim_name, response in intel_results.items():
+        check_tool_execution()
         if response and response.success:
             evidence_count += len(response.results)
             _persist_news_response(
@@ -494,6 +513,7 @@ def _handle_search_research_reports(
     attempts = []
     last_error = ""
     for keyword in keyword_candidates:
+        check_tool_execution()
         try:
             payload = _fetch_futu_research(keyword, size=limit, lang=str(lang or "zh-CN"))
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
@@ -502,6 +522,7 @@ def _handle_search_research_reports(
             logger.warning("Futu research search failed for %s: %s", keyword, exc)
             continue
 
+        check_tool_execution()
         if str(payload.get("code")) != "0":
             last_error = str(payload.get("message") or "Futu research search returned non-zero code")
             attempts.append({"keyword": keyword, "success": False, "error": last_error})

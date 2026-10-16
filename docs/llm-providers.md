@@ -33,7 +33,7 @@ Phase 6a Tool Surface 是 AgentBackend 的唯一内部工具面：统一 DSA 工
 - DSA 使用 [Codex App Server v2](https://developers.openai.com/codex/app-server/) 的 JSONL stdio、ephemeral thread 和 experimental dynamic tools，并通过 `turn/interrupt` 处理 Chat 取消。2026-07-15 的验收版本为 `codex-cli 0.144.3`，不据此硬编码最低版本。
 - Codex 必须安装并登录在运行 DSA 后端的设备；DSA 不读取或保存 Codex 凭据。Docker、远程服务器与 Desktop 的 PATH 和登录态相互独立。
 - Phase 6 Codex App Server Agent 当前支持 macOS、Linux 和完整运行于 WSL 的 DSA 后端，暂不支持原生 Windows；这不影响 Phase 2 `codex_cli` GenerationBackend 的 Windows 支持。
-- Codex 当前只开放已保存分析上下文、全局回测汇总和策略回测汇总的只读查询；本期只验证这三个工具的独立进程、停止、超时和回收闭环。实时行情、新闻、市场热点、技术指标重算、个股回测明细和持仓工具未纳入本期验证，因此不会暴露给 Codex；需要这些能力时应选择「默认模型」。明确股票代码或 Web 唯一匹配的股票只为已开放的历史分析上下文工具建立股票范围，跨市场同名等歧义不会猜测。
+- Codex 工具面覆盖七个核心技能声明的行情、基本面/估值、价格与量能/VCP、日内、期权、新闻/研报和个股回测读取，仍受股票范围、数据权限及缺失证据门禁约束。阻塞读取及事务型数据缓存写入仅能在受控独立工具进程内执行；普通受控线程不会因此获得可取消能力。持仓业务写入、交易和通知发送不在此次开放范围。明确股票代码或 Web 唯一匹配的股票用于建立读取范围，跨市场同名等歧义不会猜测。
 - 问股历史的 LLM 压缩仅用于「默认模型」。Codex 始终使用最近 20 条用户可见对话，不会调用 `AGENT_LITELLM_MODEL` 生成摘要；用户已保存的压缩配置会保留，切回默认模型后继续生效。
 - 当前只支持 single-agent Chat，不支持 Codex Multi Agent / Codex Deep Research；现有 LiteLLM Multi Agent 和 Deep Research 不受影响。
 - cheap status 不发模型请求，只检查生产路径依赖的 App Server schema 能力且不绑定武断最低版本。仓库中的 `scripts/codex_app_server_gate_a.py` 仅用于维护者可行性验收，不是设置页按钮或生产 API；普通用户的第一个真实问题就是首次真实执行。

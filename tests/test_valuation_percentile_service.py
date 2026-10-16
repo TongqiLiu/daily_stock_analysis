@@ -58,37 +58,37 @@ class TestClassifyRating(unittest.TestCase):
     def test_extreme_low(self):
         emoji, label, _ = _classify_rating(5)
         self.assertEqual(emoji, "🟢")
-        self.assertEqual(label, "极低估")
+        self.assertEqual(label, "历史极低")
         emoji, label, _ = _classify_rating(10)
-        self.assertEqual(label, "极低估")
+        self.assertEqual(label, "历史极低")
 
     def test_low(self):
         emoji, label, _ = _classify_rating(20)
         self.assertEqual(emoji, "🟢")
-        self.assertEqual(label, "偏低估")
+        self.assertEqual(label, "历史偏低")
         _, label, _ = _classify_rating(30)
-        self.assertEqual(label, "偏低估")
+        self.assertEqual(label, "历史偏低")
 
     def test_fair(self):
         _, label, _ = _classify_rating(30.1)
-        self.assertEqual(label, "合理")
+        self.assertEqual(label, "历史中位")
         _, label, _ = _classify_rating(50)
-        self.assertEqual(label, "合理")
+        self.assertEqual(label, "历史中位")
         _, label, _ = _classify_rating(69.9)
-        self.assertEqual(label, "合理")
+        self.assertEqual(label, "历史中位")
 
     def test_high(self):
         _, label, _ = _classify_rating(70)
-        self.assertEqual(label, "偏高估")
+        self.assertEqual(label, "历史偏高")
         _, label, _ = _classify_rating(89.9)
-        self.assertEqual(label, "偏高估")
+        self.assertEqual(label, "历史偏高")
 
     def test_extreme_high(self):
         emoji, label, _ = _classify_rating(90)
         self.assertEqual(emoji, "🔴")
-        self.assertEqual(label, "极高估")
+        self.assertEqual(label, "历史极高")
         _, label, _ = _classify_rating(99)
-        self.assertEqual(label, "极高估")
+        self.assertEqual(label, "历史极高")
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ class TestClassifyRating(unittest.TestCase):
 def _make_baidu_df(values):
     """Build a fake DataFrame with date + value columns mimicking baidu API."""
     return pd.DataFrame({
-        "date": [f"2024-01-{i+1:02d}" for i in range(len(values))],
+        "date": pd.date_range(end=pd.Timestamp.now(tz="UTC").normalize(), periods=len(values)),
         "value": values,
     })
 
@@ -122,7 +122,7 @@ class TestAShareFlow(unittest.TestCase):
         self.assertEqual(result["samples"], 100)
         self.assertEqual(result["current"], 100.0)
         self.assertEqual(result["current_percentile"], 100.0)  # 100 是历史最高
-        self.assertEqual(result["rating"], "极高估")
+        self.assertEqual(result["rating"], "历史极高")
         self.assertIn("p5", result["percentiles"])
         self.assertIn("p95", result["percentiles"])
         fake_ak.stock_zh_valuation_baidu.assert_called_once_with(
@@ -141,7 +141,7 @@ class TestAShareFlow(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["current"], 5.0)
         self.assertLessEqual(result["current_percentile"], 30)
-        self.assertIn(result["rating"], ("极低估", "偏低估"))
+        self.assertIn(result["rating"], ("历史极低", "历史偏低"))
 
     def test_a_share_insufficient_samples(self):
         # 仅 10 个值，<30 → status='partial'
@@ -332,3 +332,92 @@ class TestCacheBehaviour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _history_result(frame, years=5):
+    fake_ak = MagicMock()
+    fake_ak.stock_zh_valuation_baidu.return_value = frame
+    with patch.dict(sys.modules, {"akshare": fake_ak}):
+        return ValuationPercentileService().get_valuation_data("600519", lookback_years=years)
+
+
+def test_history_is_sorted_by_observation_date_not_provider_row_order():
+    frame = _make_baidu_df(list(range(1, 101)))
+    result = _history_result(frame.iloc[::-1])
+    assert result["current"] == 100
+    assert result["current_percentile"] == 100
+    assert result["as_of"] == frame["date"].iloc[-1].date().isoformat()
+    assert result["history_coverage_years"] < 1
+    assert result["interpretation"] == "relative_history_only_not_intrinsic_value"
+
+
+def test_requested_window_and_identical_duplicates_do_not_inflate_sample_size():
+    recent = _make_baidu_df(list(range(1, 101)))
+    old = pd.DataFrame({"date": [pd.Timestamp.now(tz="UTC") - pd.DateOffset(years=6)], "value": [200]})
+    result = _history_result(pd.concat([old, recent, recent.tail(1)], ignore_index=True))
+    assert result["samples"] == 100
+    assert result["current"] == 100
+
+
+def test_conflicting_observations_on_same_date_do_not_produce_rank():
+    recent = _make_baidu_df(list(range(1, 101)))
+    duplicate = recent.tail(1).copy()
+    duplicate["value"] = 1
+    result = _history_result(pd.concat([recent, duplicate], ignore_index=True))
+    assert result["status"] == "partial"
+    assert result["current_percentile"] is None
+
+
+def test_invalid_latest_valuation_never_reuses_earlier_positive_observation():
+    for value in (0, -2, float("nan"), float("inf"), "invalid"):
+        result = _history_result(_make_baidu_df(list(range(1, 100)) + [value]))
+        assert result["status"] == "partial"
+        assert result["current"] is None
+        assert result["current_percentile"] is None
+
+
+def test_nonpositive_and_infinite_history_are_excluded_from_denominator():
+    frame = _make_baidu_df([-10, 0, float("inf")] + list(range(1, 101)))
+    result = _history_result(frame)
+    assert result["samples"] == 100
+    assert result["excluded_nonpositive_or_invalid"] == 3
+    assert result["current_percentile"] == 100
+
+
+def test_missing_dates_cannot_support_current_historical_rank():
+    result = _history_result(pd.DataFrame({"value": list(range(1, 101))}))
+    assert result["status"] == "partial"
+    assert result["current_percentile"] is None
+
+
+def test_stale_history_is_not_called_current():
+    frame = _make_baidu_df(list(range(1, 101)))
+    frame["date"] -= pd.Timedelta(days=40)
+    result = _history_result(frame)
+    assert result["status"] == "partial"
+    assert result["current_percentile"] is None
+
+
+def test_unsupported_lookback_does_not_silently_claim_wrong_number_of_years():
+    for years in (2, 6, 0, "invalid"):
+        result = ValuationPercentileService().get_valuation_data("600519", lookback_years=years)
+        assert result["status"] == "error"
+
+
+def test_us_nonfinite_negative_or_zero_ratio_returns_missing_value():
+    import json
+    for value in (float("nan"), float("inf"), -1, 0, True):
+        with patch.dict(sys.modules, {"yfinance": SimpleNamespace(Ticker=lambda _: SimpleNamespace(info={"trailingPE": value}))}):
+            result = ValuationPercentileService().get_valuation_data("TEST")
+        assert result["status"] == "unavailable"
+        assert result["current"] is None
+        json.dumps(result, allow_nan=False)
+
+
+def test_us_missing_history_never_prompts_model_memory_as_evidence():
+    with patch.dict(sys.modules, {"yfinance": SimpleNamespace(Ticker=lambda _: SimpleNamespace(info={"trailingPE": 25}))}):
+        result = ValuationPercentileService().get_valuation_data("TEST")
+    assert result["current_percentile"] is None
+    assert result["as_of"] is None
+    assert result["retrieved_at"]
+    assert "禁止用模型记忆" in result["rating_summary"]

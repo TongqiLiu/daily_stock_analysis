@@ -27,7 +27,7 @@ import logging
 import os
 import time
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -41,6 +41,18 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_STATIC_INFO_TTL = 86400  # 24h
 _DEFAULT_CONNECTION_COOLDOWN_SECONDS = 15
+
+
+def _quote_timestamp_iso(value: Any) -> Optional[str]:
+    """SDK datetime is from_timestamp(..., None): naive *host-local*, not UTC.
+
+    Source: longbridge/openapi python/src/time.rs, PyOffsetDateTimeWrapper.
+    Never replace a missing provider timestamp with the request time.
+    """
+    from datetime import datetime as datetime_type
+    if not isinstance(value, datetime_type):
+        return None
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def _static_info_ttl_seconds() -> int:
@@ -853,6 +865,7 @@ class LongbridgeFetcher(BaseFetcher):
             pb_ratio=pb_ratio,
             total_mv=total_mv,
             circ_mv=circ_mv,
+            provider_timestamp=_quote_timestamp_iso(getattr(q, "timestamp", None)),
         )
 
         logger.info(
@@ -1009,4 +1022,5 @@ class LongbridgeFetcher(BaseFetcher):
             if col not in df.columns:
                 df[col] = None
 
+        df.attrs["price_adjustment"] = "forward"
         return df[STANDARD_COLUMNS]

@@ -470,7 +470,20 @@ def _build_tool_registry(category_timeout_map):
     from src.agent.tools.backtest_tools import ALL_BACKTEST_TOOLS
     from src.agent.tools.value_analysis_tools import ALL_VALUE_ANALYSIS_TOOLS
     from src.agent.tools.options_tools import ALL_OPTIONS_TOOLS
-    from src.agent.tools.fxmacrodata_tools import ALL_FXMACRODATA_TOOLS
+    # FXMacroData is a supplementary macro-data integration.  Its client is
+    # deliberately optional at runtime: a partially upgraded local environment
+    # must not prevent every ask-stock request from being accepted.
+    try:
+        from src.agent.tools.fxmacrodata_tools import ALL_FXMACRODATA_TOOLS
+    except ModuleNotFoundError as exc:
+        if exc.name != "fxmacrodata_public":
+            raise
+        logger.warning(
+            "[AgentFactory] FXMacroData client is unavailable; "
+            "continuing without FXMacroData tools. Install requirements.txt "
+            "to enable the optional integration."
+        )
+        ALL_FXMACRODATA_TOOLS = []
 
     registry = ToolRegistry(category_timeout_map=category_timeout_map or None)
     for tool_fn in (
@@ -480,8 +493,8 @@ def _build_tool_registry(category_timeout_map):
         + ALL_SEARCH_TOOLS
         + ALL_MARKET_TOOLS
         + ALL_BACKTEST_TOOLS
-    + ALL_VALUE_ANALYSIS_TOOLS
-    + ALL_FXMACRODATA_TOOLS
+        + ALL_VALUE_ANALYSIS_TOOLS
+        + ALL_FXMACRODATA_TOOLS
     ):
         registry.register(tool_fn)
     return registry

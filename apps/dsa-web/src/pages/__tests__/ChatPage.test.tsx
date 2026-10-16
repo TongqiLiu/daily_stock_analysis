@@ -835,6 +835,19 @@ describe('ChatPage', () => {
     expect(screen.getByText('🟡 1R')).toHaveClass('chat-key-emphasis--caution');
   });
 
+  it('keeps execution tables in a keyboard-accessible horizontal scroll region', async () => {
+    mockStoreState.messages = [{
+      id: 'assistant-swing-table', role: 'assistant',
+      content: '| 关键项 | 本轮唯一执行口径 |\n|---|---|\n| **🔴 硬止损** | 100 |',
+    }];
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+    const region = await screen.findByRole('region', { name: '分析表格，可横向滚动' });
+    expect(region).toHaveClass('chat-table-scroll');
+    expect(region).toHaveAttribute('tabindex', '0');
+    expect(region.querySelector('table')).toHaveTextContent('硬止损');
+    expect(screen.getByText('🔴 硬止损')).toHaveClass('chat-key-emphasis--risk');
+  });
+
   it('copies the current conversation from the input toolbar', async () => {
     mockStoreState.messages = [
       { id: 'user-1', role: 'user', content: '请分析 600519' },
@@ -1012,6 +1025,63 @@ describe('ChatPage', () => {
 
     expect(await screen.findByRole('checkbox', { name: '期权策略分析' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: '期权策略分析' })).not.toBeChecked();
+  });
+
+  it('keeps value investing in core and preserves advanced selections when collapsed', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'value_investing', name: '价值投资', description: '财报证据与安全边际', catalog_group: 'core' },
+        { id: 'vcp_h1_h2_buy', name: 'VCP H1/H2', description: '进阶形态', catalog_group: 'advanced' },
+        { id: 'chan_theory', name: '缠论', description: '进阶结构', catalog_group: 'advanced' },
+      ],
+      default_skill_id: 'value_investing',
+    });
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    const value = await screen.findByRole('checkbox', { name: '价值投资' });
+    expect(value).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: 'VCP H1/H2' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '用缠论分析茅台' })).not.toBeInTheDocument();
+    const disclosure = screen.getByRole('button', { name: '展开进阶技能 (2)' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(disclosure);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'VCP H1/H2' }));
+    fireEvent.click(screen.getByRole('button', { name: '收起进阶技能 (2)' }));
+    expect(screen.getByRole('checkbox', { name: 'VCP H1/H2' })).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: '缠论' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), { target: { value: '分析 NVDA' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(mockStartStream).toHaveBeenCalledWith(
+      expect.objectContaining({ skills: ['value_investing', 'vcp_h1_h2_buy'] }), expect.any(Object),
+    ));
+  });
+
+  it('restores an advanced skill from session history without opening the catalog', async () => {
+    mockStoreState.selectedSkillIds = ['chan_theory'];
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'value_investing', name: '价值投资', description: '财报证据', catalog_group: 'core' },
+        { id: 'chan_theory', name: '缠论', description: '结构分析', catalog_group: 'advanced' },
+      ],
+      default_skill_id: 'value_investing',
+    });
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+    expect(await screen.findByRole('checkbox', { name: '缠论' })).toBeChecked();
+    expect(screen.getByRole('button', { name: '展开进阶技能 (1)' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('value template requires auditable financial evidence instead of forbidding research', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [{ id: 'value_investing', name: '价值投资', description: '财报证据', catalog_group: 'core' }],
+      default_skill_id: 'value_investing',
+    });
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: '套用提示词模板 价投分析' }));
+    const prompt = (screen.getByPlaceholderText(/分析 600519/) as HTMLTextAreaElement).value;
+    expect(prompt).toContain('来源、报告期和单位');
+    expect(prompt).toContain('股票价格回测不能证明价投策略胜率');
+    expect(prompt).not.toContain('不要额外搜索新闻或研报');
+    expect(prompt).toContain('输入不足时不得给合理买入价');
   });
 
   it('prefers multi-strategy consensus as default when available', async () => {
@@ -1231,7 +1301,9 @@ describe('ChatPage', () => {
 
     const input = screen.getByPlaceholderText(/分析 600519/) as HTMLTextAreaElement;
     expect(input.value).toContain('请用多策略联合框架快速分析 {股票代码} 的当前交易价值');
-    expect(input.value).toContain('常规输出控制在 900 字以内');
+    expect(input.value).toContain('模型正文控制在 900 字以内');
+    expect(input.value).toContain('13 项证据明细与五维综合得分由评分工具和后端输出');
+    expect(input.value).toContain('只给计算方法与条件，不给固定仓位');
     expect(input.value).toContain('若判定为第 3 浪候选/启动，必须追加带日期价位的浪型图');
     expect(screen.getByRole('checkbox', { name: '⚡ 多策略联合' })).toBeChecked();
     expect(mockStartStream).not.toHaveBeenCalled();

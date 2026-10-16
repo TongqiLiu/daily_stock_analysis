@@ -75,9 +75,9 @@ Web 启用步骤：打开「设置 → Agent 设置 → 问股生成方式」，
 
 - Codex 必须安装并登录在**运行 DSA 后端的设备**上；DSA 不读取或保存 Codex 凭据，App Server 进程使用 Codex 自身登录态。Docker、远程服务器和 Desktop 的 PATH / 登录态彼此独立。在 Desktop 中从 Finder/Dock 启动时，后端只继承 Desktop 构造的真实 PATH；若状态提示找不到 Codex，请将 Codex CLI 安装到后端 PATH 可见位置并完全重启 DSA，不要只在另一个终端窗口验证。
 - Phase 6 的 Codex App Server Agent 当前支持 macOS、Linux，以及 DSA 后端完整运行于 WSL 的环境；原生 Windows 后端会在状态检查和 transport 启动前明确拒绝。此限制不影响 Phase 2 `GENERATION_BACKEND=codex_cli` 已有的 Windows 生成能力。
-- Codex 当前只开放已保存分析上下文、全局回测汇总和策略回测汇总的只读查询。本期只验证并承诺这三个工具的独立进程、停止、超时和回收闭环；实时行情、新闻、市场热点、技术指标重算、个股回测明细和持仓工具未纳入本期验证，因此不会出现在 Codex 的工具列表中。需要这些能力时，请在 Web 中选择「默认模型」。明确股票代码或 Web 已选择的唯一股票只会为已开放的历史分析上下文工具建立股票范围；遇到同名歧义时不会猜测。
+- Codex 工具面覆盖[七个核心技能](ask-stock-skills.md)声明的行情、财务/估值、技术分析、日内、期权、新闻/研报和个股回测读取。数据源权限与股票范围仍须满足；缺失数据不会由模型补齐。阻塞读取与事务型数据缓存写入仅在受控独立工具进程执行，取消后回收进程；不开放持仓业务写入、交易或通知发送。明确代码或 Web 唯一匹配建立股票范围，遇到同名歧义不会猜测。
 - 该能力不是离线模型。股票代码、问题、新闻、持仓上下文和脱敏后的工具结果可能由 Codex 自身配置的服务处理。
-- Codex 问股会传递当前激活的交易 Skill 指令。省略选择时沿用会话已保存选择（新会话使用默认技能），显式空列表清除会话选择并回到默认技能。Skill 只用于解读三个只读工具返回的已保存数据，不能增加工具权限；所需数据或能力不足时必须说明缺失项，不能声称完整执行了技能。
+- Codex 问股会传递当前激活的交易 Skill 指令。省略选择时沿用会话已保存选择（新会话使用默认技能），显式空列表清除会话选择并回到默认技能。Skill 用于解读已开放工具返回的数据，不能增加工具权限；所需数据或能力不足时必须说明缺失项，不能声称完整执行了技能。
 - 当前只支持 single-agent Chat；不支持 Codex Multi Agent 或 Codex Deep Research。现有 LiteLLM Multi Agent 与 Deep Research 不受影响。
 - 每次 Chat 都创建新的 ephemeral App Server thread；DSA 继续保存原有可见会话历史，并在下一轮注入，但不会注入 LiteLLM provider trace。Web 客户端不会收到 chain-of-thought、原始 JSON-RPC、stderr 或完整工具参数/结果；Codex 只接收完成该轮分析所需的脱敏工具结果。
 - 用户停止问股时，页面会先显示“正在停止”。DSA 会中断 Codex turn，并结束、回收本轮独立运行的工具进程；只有确认 Codex 与工具进程均已退出后，原问股请求才返回最终“已停止”。超时和客户端断开也遵守同一清理边界，不会在后台仍有本轮任务时提前宣告结束。该契约仅作用于 Codex，不改变默认 LiteLLM Agent 的执行方式。

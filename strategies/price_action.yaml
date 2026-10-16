@@ -1,12 +1,14 @@
 # Brooks-inspired Price Action Skill / 价格行为学
 
 name: price_action
-display_name: 价格行为学
+display_name: 📊 价格行为学
 description: 基于日线趋势/区间、HH/HL/LH/LL、突破与失败突破、重要低点、ATR 缓冲止损、强阳 K 与真实日内 VWAP 移动止盈做确定性价格行为分析；不把候选形态伪装成确认信号。
+catalog_group: core
 category: pattern
 core_rules: [1, 2, 4, 5]
 required_tools:
   - analyze_price_action
+  - get_stock_backtest_summary
 default_priority: 33
 user_invocable: true
 default_active: false

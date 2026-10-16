@@ -4,7 +4,7 @@
 
 name: fear_greed_sentiment
 display_name: 😱 贪恐情绪
-description: 基于 szdt.tech 个股贪恐指数（-100~100）的逆向情绪分析。极度贪婪警示高位回撤，极度恐慌提示反向布局窗口。需 SZDT_AUTH_TOKEN，未配置时静默跳过。
+description: 基于 szdt.tech 个股贪恐指数（-100~100）的逆向情绪分析。极度贪婪警示高位回撤，极度恐慌提示反向布局窗口。未配置或不可用时明确标为证据缺失。
 category: sentiment
 core_rules: [1, 4, 5]
 required_tools:
@@ -49,14 +49,14 @@ instructions: |
 
   - **趋势状态**：贪恐"极度贪婪" + MA5>MA10>MA20 趋势完好 → 警告"趋势仍可持有但加仓需谨慎"；趋势已破位 → 强烈卖出
   - **量价**：贪恐"极度恐慌" + 缩量企稳 → 加权确认；放量下挫 → 仍未到位
-  - **历史时序**：如果工具返回了近期分值变化（暂未实现，先用趋势近 5 日表现替代），观察情绪是否在修复
+  - **历史时序**：如果工具返回了近期分值变化（必须有真实历史分值，不能用近 5 日价格表现替代），观察情绪是否在修复
 
   ## 四、工具失败处理
 
   - 工具返回 `status='not_configured'` → 在报告中标注「贪恐指数未启用（SZDT_AUTH_TOKEN 未配置）」，仅基于趋势 / 量价分析
   - 工具返回 `status='unavailable'` → 展示 `reason_code` / `reason_detail`（例如 `binding_quota_exhausted`），并给出 `suggested_action`
   - 工具返回 `status='error'` → 标注「贪恐指数获取失败」，继续基于其他工具分析
-  - 失败时可引用 `proxy_score`（默认 0）作为情绪中性占位，明确标注「代理分，非真实贪恐值」
+  - 失败时标记 `evidence_status=missing`、评分 `null` 并排除计分；禁止使用 `proxy_score`、默认 0 或中性占位
 
   ## 五、输出结构（精简）
 

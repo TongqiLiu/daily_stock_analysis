@@ -44,6 +44,8 @@ export interface SkillInfo {
   id: string;
   name: string;
   description: string;
+  // Optional so clients can still connect to servers before catalog grouping.
+  catalog_group?: 'core' | 'advanced';
 }
 
 export interface SkillsResponse {

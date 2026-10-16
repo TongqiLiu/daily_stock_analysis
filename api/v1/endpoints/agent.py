@@ -8,7 +8,7 @@ import json
 import logging
 import threading
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -155,6 +155,7 @@ class SkillInfo(BaseModel):
     id: str
     name: str
     description: str
+    catalog_group: Literal["core", "advanced"] = "advanced"
 
 class SkillsResponse(BaseModel):
     skills: List[SkillInfo]
@@ -234,12 +235,21 @@ def _build_skills_response(config) -> SkillsResponse:
         ),
     )
     skills = [
-        SkillInfo(id=skill.name, name=skill.display_name, description=skill.description)
+        SkillInfo(
+            id=skill.name,
+            name=skill.display_name,
+            description=skill.description,
+            catalog_group=getattr(skill, "catalog_group", "advanced"),
+        )
         for skill in available_skills
+    ]
+    core_skills = [
+        skill for skill in available_skills
+        if getattr(skill, "catalog_group", "advanced") == "core"
     ]
     return SkillsResponse(
         skills=skills,
-        default_skill_id=get_primary_default_skill_id(available_skills),
+        default_skill_id=get_primary_default_skill_id(core_skills or available_skills),
     )
 
 

@@ -297,6 +297,7 @@ const HomePage: React.FC = () => {
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
   const [strategyMenuOpen, setStrategyMenuOpen] = useState(false);
+  const [advancedStrategiesOpen, setAdvancedStrategiesOpen] = useState(false);
   const [runFlowDrawer, setRunFlowDrawer] = useState<RunFlowDrawerState>({ open: false });
   const [duplicateBannerVisible, setDuplicateBannerVisible] = useState(false);
   const [sidebarWorkspaceTab, setSidebarWorkspaceTab] = useState<HomeWorkspaceTab>('history');
@@ -535,14 +536,18 @@ const HomePage: React.FC = () => {
   const strategyOptions = useMemo(
     () => [
       { id: '', name: t('home.defaultStrategyName'), description: t('home.defaultStrategyDescription') },
-      ...analysisSkills.map((skill) => ({
+      ...analysisSkills.filter((skill) => (
+        skill.catalog_group !== 'advanced' || advancedStrategiesOpen || skill.id === selectedStrategyId
+      )).map((skill) => ({
         id: skill.id,
         name: skill.name,
         description: skill.description,
       })),
     ],
-    [analysisSkills, t],
+    [advancedStrategiesOpen, analysisSkills, selectedStrategyId, t],
   );
+  const advancedStrategyCount = analysisSkills.filter((skill) => skill.catalog_group === 'advanced').length;
+  const strategyItemCount = strategyOptions.length + (advancedStrategyCount > 0 ? 1 : 0);
   const closeStrategyMenu = useCallback((restoreFocus = false) => {
     setStrategyMenuOpen(false);
     if (restoreFocus) {
@@ -554,20 +559,20 @@ const HomePage: React.FC = () => {
     setStrategyMenuOpen(false);
   }, []);
   const focusStrategyItem = useCallback((index: number) => {
-    const itemCount = strategyOptions.length;
+    const itemCount = strategyItemCount;
     if (itemCount === 0) {
       return;
     }
     const nextIndex = (index + itemCount) % itemCount;
     strategyItemRefs.current[nextIndex]?.focus();
-  }, [strategyOptions.length]);
+  }, [strategyItemCount]);
   const getSelectedStrategyIndex = useCallback(() => {
     const selectedIndex = strategyOptions.findIndex((option) => option.id === selectedStrategyId);
     return selectedIndex >= 0 ? selectedIndex : 0;
   }, [selectedStrategyId, strategyOptions]);
   useEffect(() => {
-    strategyItemRefs.current = strategyItemRefs.current.slice(0, strategyOptions.length);
-  }, [strategyOptions.length]);
+    strategyItemRefs.current = strategyItemRefs.current.slice(0, strategyItemCount);
+  }, [strategyItemCount]);
   useEffect(() => {
     if (!strategyMenuOpen) {
       return undefined;
@@ -584,16 +589,16 @@ const HomePage: React.FC = () => {
     }
 
     event.preventDefault();
-    const targetIndex = event.key === 'ArrowUp' ? strategyOptions.length - 1 : 0;
+    const targetIndex = event.key === 'ArrowUp' ? strategyItemCount - 1 : 0;
     if (strategyMenuOpen) {
       focusStrategyItem(targetIndex);
       return;
     }
     strategyInitialFocusIndexRef.current = targetIndex;
     setStrategyMenuOpen(true);
-  }, [focusStrategyItem, strategyMenuOpen, strategyOptions.length]);
+  }, [focusStrategyItem, strategyMenuOpen, strategyItemCount]);
   const handleStrategyMenuKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    const itemCount = strategyOptions.length;
+    const itemCount = strategyItemCount;
     if (itemCount === 0) {
       return;
     }
@@ -626,7 +631,7 @@ const HomePage: React.FC = () => {
       default:
         break;
     }
-  }, [closeStrategyMenu, focusStrategyItem, strategyOptions.length]);
+  }, [closeStrategyMenu, focusStrategyItem, strategyItemCount]);
   const setupNeedsAction = setupStatus ? !setupStatus.isComplete : false;
   const setupMissingLabels = useMemo(() => {
     if (!setupStatus) {
@@ -1592,6 +1597,19 @@ const HomePage: React.FC = () => {
                           </button>
                         );
                       })}
+                      {advancedStrategyCount > 0 ? (
+                        <button
+                          ref={(node) => { strategyItemRefs.current[strategyOptions.length] = node; }}
+                          type="button"
+                          role="menuitem"
+                          tabIndex={-1}
+                          aria-expanded={advancedStrategiesOpen}
+                          onClick={() => setAdvancedStrategiesOpen((open) => !open)}
+                          className="mt-1 w-full rounded-lg border-t border-subtle px-3 py-2 text-left text-xs text-muted-text transition-colors hover:bg-hover hover:text-foreground"
+                        >
+                          {t(advancedStrategiesOpen ? 'chat.hideAdvancedSkills' : 'chat.showAdvancedSkills')} ({advancedStrategyCount})
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

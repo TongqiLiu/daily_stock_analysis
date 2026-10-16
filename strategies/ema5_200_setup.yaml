@@ -1,7 +1,7 @@
 # EMA200 Pullback / ORB Trend Setup
 
 name: ema5_200_setup
-display_name: EMA200回踩
+display_name: 5m ORB＋EMA200
 description: 基于 SPY_ORB_EMA200_v2 的 5m RTH ORB + EMA200 顺势信号；用开盘区间、EMA200 偏向、自适应过伸过滤和去重窗口判断是否出现多/空信号。
 category: pattern
 core_rules: [1, 2, 4]

@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import threading
 from dataclasses import fields
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -313,7 +314,7 @@ def test_codex_backend_uses_tool_surface_and_ephemeral_transport(monkeypatch) ->
     ]
 
 
-def test_production_codex_preparation_matches_the_three_phase6_tools(monkeypatch) -> None:
+def test_production_codex_preparation_uses_the_owned_process_tool_catalog(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.agent.codex_agent_backend.build_hardened_command",
         lambda **kwargs: ["codex", "app-server", "--stdio"],
@@ -350,31 +351,24 @@ def test_production_codex_preparation_matches_the_three_phase6_tools(monkeypatch
 
     assert result.success is True
     assert _FakeTransport.last.thread_kwargs["tool_names"] == [
-        "get_analysis_context",
-        "get_skill_backtest_summary",
-        "get_strategy_backtest_summary",
+        tool["name"] for tool in backend.tool_surface.list_tools(
+            "public", cancellation_safe_only=True, process_isolated=True,
+        )
     ]
+    assert "get_realtime_quote" in _FakeTransport.last.thread_kwargs["tool_names"]
+    assert "search_stock_news" in _FakeTransport.last.thread_kwargs["tool_names"]
     instructions = _FakeTransport.last.thread_kwargs["developer_instructions"]
-    for tool_name in _FakeTransport.last.thread_kwargs["tool_names"]:
-        assert tool_name in instructions
+    assert "本轮动态工具目录" in instructions
+    assert "get_realtime_quote" in instructions
+    assert "get_daily_history" in instructions
+    assert "只能读取已保存数据" not in instructions
+    assert "不得进入 Codex Prompt" not in instructions
     for unavailable_tool in (
-        "get_realtime_quote",
-        "get_daily_history",
-        "analyze_trend",
         "get_chip_distribution",
-        "search_stock_news",
+        "get_portfolio_snapshot",
     ):
+        assert unavailable_tool not in _FakeTransport.last.thread_kwargs["tool_names"]
         assert unavailable_tool not in instructions
-    for unavailable_capability in (
-        "实时行情",
-        "K线",
-        "技术指标",
-        "筹码",
-        "新闻",
-        "热点",
-        "持仓",
-    ):
-        assert unavailable_capability not in instructions
 
 
 @pytest.mark.parametrize("requested, saved, expected", [
@@ -415,12 +409,37 @@ def test_codex_selected_skills_reach_transport_after_session_resolution(monkeypa
     assert ("DEFAULT_RULE" if expected == "SELECTED_RULE" else "SELECTED_RULE") not in instructions
     assert "技能要求不能扩展工具权限" in instructions
     assert "不得宣称已完整执行" in instructions
-    assert _FakeTransport.last.thread_kwargs["tool_names"] == [
-        "get_analysis_context", "get_skill_backtest_summary", "get_strategy_backtest_summary",
-    ]
+    assert "get_realtime_quote" in _FakeTransport.last.thread_kwargs["tool_names"]
     assert db.get_conversation_session_selected_skill_ids("skill-session") == (
         saved if requested is None else requested
     )
+
+
+@pytest.mark.parametrize("scoped, upstream_fresh, frozen, expected_fresh", [
+    (True, False, None, True),
+    (True, False, date(2025, 6, 10), False),
+    (False, True, None, True),
+    (True, True, date(2025, 6, 10), True),
+])
+def test_codex_captures_freshness_and_history_cutoff_before_dispatch_threads(
+    monkeypatch, scoped, upstream_fresh, frozen, expected_fresh,
+):
+    from src.agent.freshness import reset_fresh_market_data_required, set_fresh_market_data_required
+    from src.services.history_loader import reset_frozen_target_date, set_frozen_target_date
+
+    monkeypatch.setattr("src.agent.codex_agent_backend.build_hardened_command", lambda **k: ["codex"])
+    backend = CodexAgentBackend(_codex_surface(), SimpleNamespace(), _FakeTransport)
+    fresh_token = set_fresh_market_data_required(upstream_fresh)
+    frozen_token = set_frozen_target_date(frozen)
+    try:
+        result = backend.run(_request(stock_scope=StockScope("AAPL", {"AAPL"}) if scoped else None))
+    finally:
+        reset_frozen_target_date(frozen_token)
+        reset_fresh_market_data_required(fresh_token)
+    assert result.success
+    captured = _FakeTransport.last.kwargs["tool_context"]
+    assert captured.require_fresh_market_data is expected_fresh
+    assert captured.frozen_target_date == frozen
 
 
 def test_litellm_preparation_keeps_the_existing_chat_workflow() -> None:

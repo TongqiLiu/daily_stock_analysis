@@ -1,12 +1,14 @@
 # 3-Minute Intraday T-Trading
 
 name: intraday_t_trading
-display_name: 日内做T
+display_name: 🔄 日内做T
 description: 基于3分钟图的确认式高抛低吸规则；先区分强趋势与箱体，再用LH+EMA20失守判断高卖、HL+支撑+EMA20 reclaim判断低接，并校验1-1.5倍ATR空间和T仓上限。
+catalog_group: core
 category: pattern
 core_rules: [1, 2, 4]
 required_tools:
   - analyze_intraday_t
+  - get_stock_backtest_summary
 aliases: [日内做T, 做T, 日内, 高抛低吸, 3分钟图, intraday T]
 default_priority: 31
 user_invocable: true

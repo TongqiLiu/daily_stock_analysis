@@ -302,7 +302,7 @@ class YfinanceFetcher(BaseFetcher):
         keep_cols = ['code'] + STANDARD_COLUMNS
         existing_cols = [col for col in keep_cols if col in df.columns]
         df = df[existing_cols]
-
+        df.attrs["price_adjustment"] = "split_dividend_adjusted"
         return df
 
     def _fetch_yf_ticker_data(self, yf, yf_code: str, name: str, return_code: str) -> Optional[Dict[str, Any]]:
