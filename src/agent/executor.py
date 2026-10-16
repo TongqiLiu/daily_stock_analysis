@@ -26,7 +26,7 @@ from src.agent.llm_adapter import LLMToolAdapter
 from src.agent.provider_trace import persist_provider_trace_turns
 from src.agent.runner import run_agent_loop, parse_dashboard_json
 from src.agent.runtime_facts import AgentRuntimeFacts
-from src.agent.stock_scope import StockScope, resolve_stock_scope
+from src.agent.stock_scope import StockScope, StockScopeResolution, resolve_stock_scope
 from src.storage import get_db
 from src.agent.tools.registry import ToolRegistry
 from src.report_language import normalize_report_language
@@ -579,13 +579,17 @@ def prepare_agent_chat(
     include_provider_trace: bool,
     skill_execution_plan: str = "",
     strict_initial_stock_scope: bool = False,
+    scope_resolution: Optional[StockScopeResolution] = None,
+    db_manager=None,
+    source_snapshot: Optional[Dict[str, Any]] = None,
 ) -> PreparedAgentChat:
     """Build the existing Chat prompt order without choosing an Agent backend."""
-    scope_resolution = resolve_stock_scope(
-        message,
-        context,
-        strict_initial_scope=strict_initial_stock_scope,
-    )
+    if scope_resolution is None:
+        scope_resolution = resolve_stock_scope(
+            message,
+            context,
+            strict_initial_scope=strict_initial_stock_scope,
+        )
     effective_context = scope_resolution.effective_context
 
     skills_section = ""
@@ -616,7 +620,11 @@ def prepare_agent_chat(
 
     if include_provider_trace:
         history_messages = list(
-            build_agent_chat_context_bundle(session_id, context_llm_adapter, config).context_messages
+            build_agent_chat_context_bundle(
+                session_id, context_llm_adapter, config,
+                **({"db_manager": db_manager, "source_snapshot": source_snapshot}
+                   if source_snapshot is not None else {}),
+            ).context_messages
         )
     else:
         history_messages = list(
@@ -625,6 +633,8 @@ def prepare_agent_chat(
                 context_llm_adapter,
                 config,
                 allow_llm_compression=False,
+                **({"db_manager": db_manager, "source_snapshot": source_snapshot}
+                   if source_snapshot is not None else {}),
             )
         )
 
@@ -782,9 +792,13 @@ class AgentExecutor:
             AgentResult with the text response.
         """
         from src.agent.conversation import conversation_manager
+        from src.services.agent_chat_session_service import AgentChatSessionService
 
-        conversation_manager.get_or_create(session_id)
+        db, snapshot = conversation_manager.prepare_turn(session_id)
         config = getattr(self.llm_adapter, "_config", None) or get_config()
+        scope_resolution, disposition = AgentChatSessionService(db).prepare_compatibility_turn(
+            config, snapshot, message, context=context,
+        )
         prepared = prepare_agent_chat(
             message=message,
             session_id=session_id,
@@ -797,6 +811,9 @@ class AgentExecutor:
             use_legacy_default_prompt=self.use_legacy_default_prompt,
             use_codex_prompt=False,
             include_provider_trace=True,
+            db_manager=db,
+            source_snapshot=snapshot,
+            scope_resolution=scope_resolution,
         )
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": prepared.system_prompt},
@@ -807,7 +824,8 @@ class AgentExecutor:
         run_id = str(uuid.uuid4())
 
         # Persist the user turn immediately so the session appears in history during processing
-        user_message_id = conversation_manager.add_message(session_id, "user", message)
+        accepted = conversation_manager.commit_user_turn(db, snapshot, message, state_disposition=disposition)
+        user_message_id = accepted["user_message_id"]
 
         run_kwargs: Dict[str, Any] = {
             "progress_callback": progress_callback,
@@ -828,18 +846,23 @@ class AgentExecutor:
         if cancelled:
             logger.info("Skipping assistant persistence for cancelled session %s", session_id)
         elif result.success:
-            assistant_message_id = conversation_manager.add_message(session_id, "assistant", result.content)
-            self._persist_provider_trace(
-                session_id=session_id,
-                run_id=run_id,
-                messages=result.messages,
-                baseline_len=baseline_len,
-                user_message_id=user_message_id,
-                assistant_message_id=assistant_message_id,
+            assistant_message_id = conversation_manager.add_message(
+                session_id, "assistant", result.content, accepted_turn=accepted, db_manager=db,
             )
+            if assistant_message_id is not None:
+                self._persist_provider_trace(
+                    session_id=session_id,
+                    run_id=run_id,
+                    messages=result.messages,
+                    baseline_len=baseline_len,
+                    user_message_id=user_message_id,
+                    assistant_message_id=assistant_message_id,
+                    accepted_turn=accepted,
+                    db_factory=lambda: db,
+                )
         else:
             error_note = f"[分析失败] {result.error or '未知错误'}"
-            conversation_manager.add_message(session_id, "assistant", error_note)
+            conversation_manager.add_message(session_id, "assistant", error_note, accepted_turn=accepted, db_manager=db)
 
         return result
 
@@ -852,6 +875,8 @@ class AgentExecutor:
         baseline_len: int,
         user_message_id: int,
         assistant_message_id: int,
+        accepted_turn=None,
+        db_factory=None,
     ) -> None:
         persist_provider_trace_turns(
             session_id=session_id,
@@ -860,7 +885,8 @@ class AgentExecutor:
             baseline_len=baseline_len,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
-            db_factory=get_db,
+            db_factory=db_factory if db_factory is not None else get_db,
+            accepted_turn=accepted_turn,
             log=logger,
         )
 
@@ -887,7 +913,7 @@ class AgentExecutor:
             max_wall_clock_seconds=self.timeout_seconds,
             stock_scope=stock_scope,
             cancel_event=cancel_event,
-            require_fresh_market_data=stock_scope is not None,
+            require_fresh_market_data=bool(stock_scope and stock_scope.allowed_stock_codes),
             enforce_report_contracts=not parse_dashboard,
         )
 

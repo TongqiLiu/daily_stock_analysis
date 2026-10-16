@@ -57,15 +57,16 @@ daily_stock_analysis/
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
-| `ANSPIRE_API_KEYS` | [Anspire](https://open.anspire.cn/dsa?share_code=QFBC0FYC) API Key，一 Key 同时启用大模型和中文优化联网搜索，含本项目免费额度 | 推荐 |
+| `MODELFLARE_KEY` | [Modelflare](https://modelflare.dev/sign-up?utm_source=github&utm_campaign=daily_stock_analysis) API Key，自动补齐默认地址和模型 | 推荐 |
 | `AIHUBMIX_KEY` | [AIHubMix](https://inferera.com/?aff=CfMq) API Key，一 Key 切换使用全系模型，本项目可享 10% 优惠 | 推荐 |
 | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) 获取免费 Key | 可选 |
 | `ANTHROPIC_API_KEY` | Anthropic Claude API Key | 可选 |
 | `OPENAI_API_KEY` | OpenAI 兼容 API Key（支持 DeepSeek、通义千问等） | 可选 |
 | `OPENAI_BASE_URL` | OpenAI 兼容 API 地址（如 `https://api.deepseek.com`） | 可选 |
 | `OPENAI_MODEL` | 模型名称（如 `gemini-3.1-pro-preview`、`deepseek-v4-flash`、`gpt-5.5`） | 可选 |
+| `ANSPIRE_API_KEYS` | Anspire 搜索与 LLM 共用 Key 的 legacy 兼容入口；模型权限以控制台为准 | 可选 |
 
-> *注：以上模型 Key / 渠道至少配置一个；推荐优先从 Anspire 或 AIHubMix 这类一 Key 多模型服务开始。启动时配置校验会在缺少可用 AI 模型 Key 或模型渠道时给出明确错误提示。
+> *注：以上模型 Key / 渠道至少配置一个。Modelflare 只需填写 `MODELFLARE_KEY`，单渠道默认模型为 `openai/gpt-6.1-sol`（可通过 `LITELLM_MODEL` 覆盖），接入地址默认使用 `https://modelflare.dev/v1`，完整示例见 [LLM 配置指南](LLM_CONFIG_GUIDE.md#示例modelflare)。实际模型以账号权限为准。启动时配置校验会在缺少可用 AI 模型 Key 或模型渠道时给出明确错误提示。
 
 #### 通知渠道配置（可同时配置多个，全部推送）
 
@@ -205,7 +206,7 @@ daily_stock_analysis/
 
 如果你想快速开始，最少需要配置以下项：
 
-1. **AI 模型**：`ANSPIRE_API_KEYS`（一 Key 同时启用大模型和搜索）、`AIHUBMIX_KEY`（[AIHubmix](https://inferera.com/?aff=CfMq)，一 Key 多模型）、`GEMINI_API_KEY` 或 `OPENAI_API_KEY`
+1. **AI 模型**：按 [Modelflare Channels 示例](LLM_CONFIG_GUIDE.md#示例modelflare) 配置，或使用 `AIHUBMIX_KEY`（[AIHubmix](https://inferera.com/?aff=CfMq)，一 Key 多模型）、`GEMINI_API_KEY` 或 `OPENAI_API_KEY`
 2. **通知渠道**：至少配置一个，如 `WECHAT_WEBHOOK_URL` 或 `EMAIL_SENDER` + `EMAIL_PASSWORD`
 3. **股票列表**：`STOCK_LIST`（必填）
 4. **搜索 API**：`ANSPIRE_API_KEYS` 或 `SERPAPI_API_KEYS`（推荐，用于新闻与舆情搜索）
@@ -268,6 +269,12 @@ daily_stock_analysis/
 | `AGENT_CONTEXT_SUMMARY_TIMEOUT_S` | 可见历史摘要 LLM 调用超时秒数，范围 `10-600` | `90` | 否 |
 | `LITELLM_FALLBACK_MODELS` | 备选模型，逗号分隔 | - | 否 |
 | `LLM_CHANNELS` | 渠道名称列表（逗号分隔），配合 `LLM_{NAME}_*` 使用，详见 [LLM 配置指南](LLM_CONFIG_GUIDE.md) | - | 否 |
+| `MODELFLARE_KEY` | Modelflare 单 Key 接入，自动启用默认渠道；Actions 仅从 Secrets 读取 | - | 选用时 |
+| `LLM_MODELFLARE_API_KEY` | 高级渠道 Key，优先于 MODELFLARE_KEY；多 Key 可用 `LLM_MODELFLARE_API_KEYS` | - | 否 |
+| `LLM_MODELFLARE_PROTOCOL` | Modelflare 渠道协议，默认地址自动识别为 `openai` | `openai` | 否 |
+| `LLM_MODELFLARE_API_SURFACE` | Modelflare 渠道 API Surface，快速开始示例使用 `chat_completions` | `chat_completions` | 否 |
+| `LLM_MODELFLARE_BASE_URL` | Modelflare 接入地址，显式配置优先于默认值 | `https://modelflare.dev/v1` | 否 |
+| `LLM_MODELFLARE_MODELS` | 高级显式渠道模型列表；单 Modelflare 渠道可复用 LITELLM_MODEL | 单渠道自动推导 | 否 |
 | `LLM_HERMES_API_KEY` | Hermes reserved 本地 HTTP generation 的单一 API Key；只应来自 `.env`、运行时配置或 Secrets | - | Hermes 使用时必填 |
 | `LLM_HERMES_BASE_URL` | Hermes 本地 loopback `/v1` 地址；默认 `http://127.0.0.1:8642/v1`，不支持远程地址 | `http://127.0.0.1:8642/v1` | 否 |
 | `LLM_HERMES_MODELS` | Hermes 原始模型列表；Phase 3 默认 `hermes-agent`，运行时 route 为 `openai/hermes-agent`，不支持 Vision / stream / tools / Agent tools | `hermes-agent` | 否 |
@@ -295,7 +302,7 @@ daily_stock_analysis/
 
 > 生成后端状态说明：Web 设置页的快速检查只读取已保存配置、未保存草稿，并检查本地 CLI 可执行文件是否可见，不发起真实模型请求；JSON 冒烟测试是单独的显式操作，会使用服务端固定的 JSON 提示词和 schema 发起一次真实请求。`health_status` 与 `last_error_code/message` 只表示本次状态计算或冒烟测试结果，不是历史持久健康状态。
 
-> *注：`ANSPIRE_API_KEYS`、`AIHUBMIX_KEY`、`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 或 `OLLAMA_API_BASE` 至少配置一个。`ANSPIRE_API_KEYS` 与 `AIHUBMIX_KEY` 无需配置 `OPENAI_BASE_URL`，系统自动适配。
+> *注：至少配置一个可用的 `LLM_CHANNELS` / `LITELLM_CONFIG`，或 legacy provider Key / `OLLAMA_API_BASE`。Modelflare 通过 Channels 接入；已有 `ANSPIRE_API_KEYS` 与 `AIHUBMIX_KEY` 的 legacy 兼容入口仍无需配置 `OPENAI_BASE_URL`，系统自动适配。
 
 > 问股 single-agent 路径会在后台为 DeepSeek V4 thinking + tool-call 保存最近 3 条 provider trace，并按原时序回放 `reasoning_content` / tool 结果；该能力不新增配置项，不进入 Web 历史 API，Claude extended thinking 仅覆盖离线 plumbing，multi-agent trace 注入留作后续增强。
 
@@ -1679,7 +1686,8 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 - 🧾 **市场复盘历史可复用** - 大盘复盘任务会持久化到分析历史，`report_type` 为 `market_review`，可直接通过历史列表/详情打开对应 Markdown 或详情页，不会重新触发分析重算
 - 🧭 **市场位置卡片** - A 股普通分析报告会展示市场题材层和个股位置层，区分大盘主线、主关联题材、题材阶段、个股位置和缺失证据
 - 🧩 **输入数据块可见** - 普通分析报告会在历史详情、同步响应和 completed 任务状态中返回低敏 `AnalysisContextPack` overview，Web 报告页在策略点位和资讯之后默认折叠展示数据块状态、来源、缺失原因和降级摘要
-- 💬 **问股追问上下文** - 从历史报告进入问股后，后续追问会持续携带当前 `stock_code/stock_name`；切回或重载已有问股会话时，会从已加载的历史用户消息恢复基础当前标的；只有用户明确切换标的时才切换上下文，含比较/对比/vs/差异/相比等明确比较意图或多个非当前明确股票代码的问题不会污染当前标的
+- 💬 **问股主讨论对象** - 服务端接受明确代码或索引中唯一名称后保存对象；普通追问、刷新、重开和切回会话从服务端恢复。明确切股才更新主对象，比较只扩大本轮范围，首次比较不任选一只；报告跳转只是提示，不自行建立已确认状态。模型失败或停止不撤销已接受的对象。
+- 本轮没有已确认标的时允许通用问答，不要求调用被标的权限禁止的行情工具；存在明确标的时仍逐只要求本轮刷新行情与日线，比较也不能沿用其他股票的数据。
 - 📋 **问股对话复制** - 输入框旁的“复制”按钮会把当前用户与 AI 消息整理成 Markdown 后写入剪贴板；空会话时按钮禁用，复制成功后会短暂显示“已复制”
 - 🧠 **会话级 Skill 选择** - 问股会话会持久化当前 Skill 选择；刷新或切换会话时恢复各自选择，新会话继续使用服务器默认 Skill
 - ⏱️ **日内做T Skill** - 问股策略选择器提供「日内做T」，固定使用本轮3分钟K线计算 EMA20/EMA50、ATR14 与 HH/HL/LH/LL；强趋势少T，箱体才T，高卖要求 LH+EMA20 失守，低接要求支撑+HL+EMA20 reclaim，并校验至少 1 ATR、优选 1.5 ATR 的计划价差
@@ -1758,7 +1766,7 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 > 说明：`GET /api/v1/usage/dashboard` 复用 `llm_usage` 审计表，不新增配置项或数据库迁移。接口仅返回已落库的调用次数、Prompt/Completion/Total Token 聚合、模型维度用量和最近调用记录，不推导模型上下文窗口或 provider 元数据。
 > 说明（Issue #1520）：列表中的模型名展示字段仅来源于历史快照中的 `model_used`，仅用于历史回溯展示，不影响运行时模型模型路由（`litellm_model`、`llm_model_list`）、Provider、Base URL 与配置迁移/清理语义。回退方式为回退本次提交，现网历史查询/抽屉/接口链路兼容性保持不变。
 > 说明：历史详情、同步分析响应和 completed 任务状态会在 `report.details.analysis_context_pack_overview` 返回低敏输入数据块 overview；其中同步分析响应依赖本次已持久化的 `analysis_history.context_snapshot`，`SAVE_CONTEXT_SNAPSHOT=false` 时新记录不保证返回 overview。`details.context_snapshot` 会剥离该顶层字段，不返回完整 `AnalysisContextPack` 或 Prompt summary。
-> 说明：`POST /api/v1/agent/chat` 与 `POST /api/v1/agent/chat/stream` 会把前端传入的 `context.stock_code` 作为问股当前标的基线，并在 `context.report_language` 缺失时使用全局 `REPORT_LANGUAGE`；调用方显式提供的 `context.report_language` 保持优先。服务端会先重新判定 stock scope。前端从历史报告进入问股后会持续发送 active stock context；切回或重载已有会话时，会根据已加载的历史用户消息恢复基础 `{stock_code, stock_name: null}`。服务端会在每轮消息中重新判定 `maintain` / `switch` / `compare`：未明确切换时，带 `stock_code` 的股票工具调用只能访问当前标的；显式切换会清理旧标的历史摘要和预取数据；含比较/对比/vs/差异/相比等明确比较意图或多个非当前明确股票代码的问题允许本轮明确出现的多个代码，但不改写当前标的。若模型误把 TTM、PE、MACD、KDJ 等金融缩写、移动均线语境下的 `MA` 指标词，或 SH/SZ/BJ/HK/SS 等交易所片段当成股票代码调用工具，后端会返回不可重试的 `stock_scope_violation` 工具结果，而不会执行对应股票工具。工具名只解析注册表中的精确名称；任何 provider namespace 或 suffix 都不会路由到已有工具。
+> 问股状态：`POST /api/v1/agent/chat`、`/chat/stream` 由服务端会话快照确定主对象，不把 `context.stock_code` 当作事实；报告 hint 只有完整 canonical／股票或指数类型一致才复用。detail、accepted 和 non-stream 响应提供 `active_stock_context`（code/name/canonical/type）、`session_state_version`、`session_generation`；消息、显式 Skill 与股票在同一接受事务提交，执行消费该快照而不回写股票。明确切股清除旧对象的附带数据；比较只扩大本轮明确 scope。金融缩写／交易所片段误作股票参数仍被真实 scope guard 拒绝，工具名称仍精确匹配。缺少对象的普通策略问题使用空股票 scope，歧义或无法确认的切股返回普通澄清。`context.report_language` 仍优先于全局 `REPORT_LANGUAGE`。已知 generation 可随请求发送，冲突在 SSE 返回 `session_state_conflict`、non-stream 返回 409；请刷新后手动重试，不自动重发。旧 API 新字段全缺时 Web 显示未确认，不从文本推测；部分字段缺失是协议错误。旧历史和非破坏升级／回滚见 [LLM 配置指南](LLM_CONFIG_GUIDE.md#问股会话状态与升级)。
 
 > 问股流式终止：前端在任一后端运行时均显示「停止分析」。收到 `accepted` 后，客户端调用 `POST /api/v1/agent/chat/stream/{request_id}/cancel`，服务端向该活动请求的协作取消信号写入状态，但保持 SSE 至返回取消终态，从而避免将停止误报为网络失败；尚未 `accepted` 的请求会由浏览器取消连接，不写入用户问题或启动 Agent 执行。取消是尽力而为：已在进行中的供应商 HTTP 调用可能要等其自身超时或下一个协作取消点才真正结束，已完成的工具调用不会回滚，也不会自动恢复该次回答。
 > 说明：问股的 `multi_strategy_consensus` 是独占元 skill，不能与 Serenity 投研、价值投资等专项 skill 同时执行。Web 改选专项 skill 时会自动取消默认的多策略联合；API/旧客户端若提交冲突组合，后端会丢弃 `multi_strategy_consensus` 并保留专项 skill。多个专项 skill 会按请求顺序生成执行计划，先完成各自声明的必要工具，再逐项输出并综合；本轮最新请求和本轮 skills 选择优先于历史消息中未重申的范围限制。多策略联合的 13 项固定总权重为 10.0，其中价格行为学权重 0.8 并归入结构维度；它使用重要低点、ATR 缓冲保护、强阳 K 和真实 5m/15m VWAP 管理失效与移动止盈。分钟线优先 Longbridge、失败时降级 Futu OpenD，并返回来源、交易日和 as-of；数据过期或缺失时不得使用日线代理。评分工具会校验信号/强度/分数区间，按完整、部分、缺失报告证据覆盖率，并将缺失项从分子分母同时排除；最终答复若篡改工具得分、有效分母、决策或仓位会被运行时拦截重做。若判断第 3 浪候选/启动，报告必须附带日期价位浪型图、替代数浪、确认位、弱化位、硬证伪位和置信度；`get_weekly_history` 在 Futu OpenD 启用时优先读取原生周线，失败后回退到日线聚合，并显式标记来源、当前周未完成状态和回退原因；缩量突破、缺少周线或长期均线空头时不得给高置信度。
@@ -1769,7 +1777,7 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 
 > 量能口径：`get_volume_analysis`只使用交易日历可验证的已完成日线，返回`data_as_of`、`bar_completion`、剔除的未完成/未来日线数及均量实际样本数；均量不含被比较日。盘中返回的量能通常截至前一已完成交易日，不代表当前盘中量能。日历/日期不可验证时不返回可用于确认的量比，明确降级；冻结历史日期之后的数据不得参与计算。其他技术工具的数据仍应分别检查截止日期，不能将此工具的完成标记推广到所有工具。
 
-> Skill 会话状态：上述两个 Chat 请求中的顶层 `skills` 为三态字段，也是请求 Skill 选择的唯一权威来源。省略或传 `null` 时沿用该 `session_id` 已保存的选择；会话尚无状态时使用服务器运行时默认 Skill。传 `[]` 表示清空显式选择并使用现有通用/服务器默认执行语义；传非空列表时会按现有 Skill catalog 规则清理、去重并保存。非空列表中有效项与无效项混合时保留有效项；若全部条目均无效，则不会把归一化后的空结果视为显式 `[]`，而是沿用会话状态或运行时默认且不写入空状态。用于复用分析数据的 `context` 中即使残留 `skills` 或 `strategies`，服务端也会移除这些 legacy 字段，不能覆盖顶层三态或会话状态。用户消息与本轮显式 Skill 更新在同一事务中写入，成功后流式接口才发送 `accepted`。`GET /api/v1/agent/chat/sessions/{session_id}` 会在消息之外返回 `session_state.selected_skill_ids`：没有持久化状态时为 `null`，显式清空时为 `[]`，否则为保存的 Skill 列表。Web 端使用该字段恢复持久化选择；对于 `null`，页面可以显示服务器默认 Skill，但未操作直接追问时仍省略 `skills`，不会把历史会话静默转换为显式 Skill 会话。删除会话会同时删除对应状态。
+> Skill 会话状态：顶层 `skills` 是请求选择的唯一来源。省略／`null` 沿用已保存选择，未选择时使用运行时配置默认；显式 `[]` 保存清空并使用内置默认，不启用配置中的非空 Skill。非空列表按现有 catalog 清理去重，混合条目保留有效项，全无效则继承且不写空状态。`context.skills/strategies` 被移除。接受事务同时写消息、显式 Skill 与股票，成功才发 accepted；detail 的 `session_state.selected_skill_ids` 仍分别返回未选择 `null`、清空 `[]` 或已保存列表。Web 区分保存值与待提交草稿；未操作的追问省略选择，冲突不把草稿冒充已保存。删除会话同时删除状态。
 > 说明：`POST /api/v1/backtest/run` 新增 `analysis_date_from` / `analysis_date_to`（`YYYY-MM-DD`）请求参数用于按历史分析日期筛选候选；若 `analysis_date_from > analysis_date_to`，接口返回 400 `invalid_params`。
 > 说明：回测执行成功但无新入库结果时，`BacktestRunResponse.message` 返回可读诊断说明，`diagnostics` 返回排查上下文（示例：`empty_reason`、`analysis_date_from`、`analysis_date_to`、`eval_window_days`、`min_age_days`、`limit`）。
 > 说明：`GET /api/v1/backtest/results`、`GET /api/v1/backtest/performance`、`GET /api/v1/backtest/performance/{code}` 同步支持 `analysis_date_from`、`analysis_date_to`；不传时保持历史行为。

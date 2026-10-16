@@ -26,16 +26,13 @@ import {
 } from '../utils/chatFollowUp';
 import { isNearBottom } from '../utils/chatScroll';
 import { getReportText } from '../utils/reportLanguage';
-import { extractStockCodesFromMessage } from '../utils/chatStockCode';
 import { formatDateTime } from '../utils/format';
 import {
   findMatchingStockCode,
   includesStockCode,
-  normalizeStockCode,
   resolveRegisteredIndexCanonical,
 } from '../utils/stockCode';
 import { useStockIndex } from '../hooks/useStockIndex';
-import type { StockIndexItem } from '../types/stockIndex';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 
 // Quick question examples shown on empty state
@@ -240,10 +237,6 @@ const INPUT_MIN_HEIGHT = 44;
 const INPUT_RESIZE_STEP = 24;
 const CONTEXT_COMPRESSION_CONFIG_KEY = 'AGENT_CONTEXT_COMPRESSION_ENABLED';
 const CONVERSATION_COPY_KEY = '__conversation__';
-const STRONG_COMPARE_STOCK_MESSAGE_RE = /比较|对比|\bvs\b|和[^，。,.!?！？]{0,40}比/i;
-const WEAK_COMPARE_STOCK_MESSAGE_RE = /差异(?!化)|区别|不同|相比|对照|比一比/;
-const CHOICE_COMPARE_STOCK_MESSAGE_RE = /哪个|哪只|哪一个|谁更|更值得|更适合|怎么选|选哪|二选一/;
-const LINKED_COMPARE_STOCK_MESSAGE_RE = /(?:和|与|跟|同)[^，。,.!?！？]{0,40}(?:差异(?!化)|区别|不同|相比|对照|比一比)/;
 
 const getChatEmphasisTone = (children: React.ReactNode): string | undefined => {
   const text = React.Children.toArray(children).join('').replace(/\s+/g, '');
@@ -285,47 +278,6 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <strong className={tone ? `chat-key-emphasis ${tone}` : undefined}>{children}</strong>;
   },
 };
-const SWITCH_STOCK_MESSAGE_RE = /换成|改看|分析|看看|研究|诊断/;
-
-type ActiveStockResolution = {
-  context: ActiveStockContext;
-  useForCurrentSend: boolean;
-};
-
-const resolveUniqueStockNameContext = (
-  message: string,
-  index: StockIndexItem[],
-): ActiveStockContext | null => {
-  const normalizedMessage = message.trim().toLocaleLowerCase();
-  if (!normalizedMessage) return null;
-
-  const matches = new Map<string, ActiveStockContext>();
-  for (const item of index) {
-    if (!item.active) continue;
-    const terms = [item.nameZh, item.nameEn, ...(item.aliases || [])]
-      .map((term) => term?.trim())
-      .filter((term): term is string => Boolean(term))
-      .filter((term) => /[\u3400-\u9fff]/.test(term) ? term.length >= 2 : term.length >= 3);
-    if (!terms.some((term) => normalizedMessage.includes(term.toLocaleLowerCase()))) {
-      continue;
-    }
-    const stockCode = item.assetType === 'index'
-      ? item.canonicalCode
-      : normalizeStockCode(item.canonicalCode);
-    matches.set(stockCode, { stock_code: stockCode, stock_name: item.nameZh || null });
-  }
-
-  return matches.size === 1 ? [...matches.values()][0] : null;
-};
-
-const isRegisteredIndexCanonicalCode = (
-  code: string | null,
-  index: StockIndexItem[],
-): boolean => {
-  if (!code) return false;
-  return resolveRegisteredIndexCanonical(index, code) !== null;
-};
-
 const getMessageSkillNames = (msg: Message): string[] => {
   if (msg.skillNames?.length) return msg.skillNames;
   if (msg.skillName) return [msg.skillName];
@@ -352,92 +304,6 @@ const getStageDoneLabel = (step: ProgressStep): string => {
 const getPipelineBudgetSkippedLabel = (step: ProgressStep): string => {
   if (step.message) return step.message;
   return `${step.stage || 'pipeline'} skipped: insufficient budget`;
-};
-
-const isCompareStockMessage = (
-  message: string,
-  stockCodes: string[],
-  currentStockCode?: string | null,
-): boolean => {
-  if (STRONG_COMPARE_STOCK_MESSAGE_RE.test(message)) {
-    return true;
-  }
-  const current = currentStockCode ? normalizeStockCode(currentStockCode) : null;
-  const newStockCodes = current
-    ? stockCodes.filter((code) => code !== current)
-    : stockCodes;
-  if (newStockCodes.length >= 2) {
-    return true;
-  }
-  if (CHOICE_COMPARE_STOCK_MESSAGE_RE.test(message) && stockCodes.length >= 2) {
-    return true;
-  }
-  if (!WEAK_COMPARE_STOCK_MESSAGE_RE.test(message)) {
-    return false;
-  }
-  if (stockCodes.length >= 2) {
-    return true;
-  }
-  if (!currentStockCode) {
-    return false;
-  }
-  const hasNewStock = stockCodes.some((code) => code !== current);
-  return hasNewStock && LINKED_COMPARE_STOCK_MESSAGE_RE.test(message);
-};
-
-const resolveActiveStockContextFromMessage = (
-  message: string,
-  currentContext: ActiveStockContext | null,
-): ActiveStockResolution | null => {
-  const stockCodes = extractStockCodesFromMessage(message);
-  const stockCode = stockCodes[0] ?? null;
-  if (!stockCode) {
-    return null;
-  }
-
-  const isCompare = isCompareStockMessage(message, stockCodes, currentContext?.stock_code);
-  const isSwitch = SWITCH_STOCK_MESSAGE_RE.test(message);
-  const currentStockCode = currentContext?.stock_code
-    ? normalizeStockCode(currentContext.stock_code)
-    : null;
-  const newStockCodes = currentStockCode
-    ? stockCodes.filter((code) => code !== currentStockCode)
-    : stockCodes;
-  // Explicit switches can mention the old stock; use the single new code when present.
-  const targetStockCode = isSwitch && newStockCodes.length === 1
-    ? newStockCodes[0]
-    : stockCode;
-  const isDifferentStock = currentStockCode !== targetStockCode;
-
-  // Compare messages and implicit follow-ups must not rewrite the active stock context.
-  if (isCompare || (currentContext && !isSwitch)) {
-    return null;
-  }
-
-  return {
-    context: {
-      stock_code: targetStockCode,
-      stock_name: currentContext && !isDifferentStock
-        ? currentContext.stock_name
-        : null,
-    },
-    // Only explicit switches should affect the context sent with the current request.
-    useForCurrentSend: isSwitch && isDifferentStock,
-  };
-};
-
-const restoreActiveStockContextFromMessages = (messages: Message[]): ActiveStockContext | null => {
-  let restoredContext: ActiveStockContext | null = null;
-  for (const message of messages) {
-    if (message.role !== 'user') {
-      continue;
-    }
-    const resolution = resolveActiveStockContextFromMessage(message.content, restoredContext);
-    if (resolution) {
-      restoredContext = resolution.context;
-    }
-  }
-  return restoredContext;
 };
 
 const ChatPage: React.FC = () => {
@@ -471,11 +337,10 @@ const ChatPage: React.FC = () => {
   const [watchlistCodes, setWatchlistCodes] = useState<string[]>([]);
   const [isWatchlistActioning, setIsWatchlistActioning] = useState(false);
   const [watchlistMessage, setWatchlistMessage] = useState<string | null>(null);
-  const [activeStockCode, setActiveStockCode] = useState<string | null>(null);
-  const [activeStockContext, setActiveStockContext] = useState<ActiveStockContext | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentStatusResponse | null>(null);
   const [agentStatusError, setAgentStatusError] = useState<string | null>(null);
   const [agentStatusChecking, setAgentStatusChecking] = useState(true);
+  // The registry is used only to validate report hints, never to confirm Chat state.
   const { index: stockIndex, loading: stockIndexLoading } = useStockIndex();
   const watchlistMessageTimerRef = useRef<number | null>(null);
   const copyResetTimerRef = useRef<Partial<Record<string, number>>>({});
@@ -592,6 +457,8 @@ const ChatPage: React.FC = () => {
   const {
     messages,
     selectedSkillIds: sessionSelectedSkillIds,
+    activeStockContext,
+    stateContract,
     loading,
     progressSteps,
     sessionId,
@@ -605,6 +472,7 @@ const ChatPage: React.FC = () => {
     loadSessions,
     loadInitialSession,
     switchSession,
+    refreshSession,
     stopStream,
     stopSessionStream,
     startStream,
@@ -613,17 +481,7 @@ const ChatPage: React.FC = () => {
   } = useAgentChatStore();
   const selectedSkillIds = sessionSelectedSkillIds ?? defaultSkillIds;
 
-  useEffect(() => {
-    if (activeStockContext || messages.length === 0) {
-      return;
-    }
-    const restoredContext = restoreActiveStockContextFromMessages(messages);
-    if (!restoredContext) {
-      return;
-    }
-    setActiveStockContext(restoredContext);
-    setActiveStockCode(restoredContext.stock_code);
-  }, [activeStockContext, messages, sessionId]);
+  const activeStockCode = activeStockContext?.stock_code ?? null;
 
   const syncScrollState = useCallback(() => {
     const viewport = messagesViewportRef.current;
@@ -999,8 +857,6 @@ const ChatPage: React.FC = () => {
 
   const handleStartNewChat = useCallback(() => {
     followUpContextRef.current = null;
-    setActiveStockContext(null);
-    setActiveStockCode(null);
     requestScrollToBottom('auto');
     useAgentChatStore.getState().startNewChat();
     setSidebarOpen(false);
@@ -1012,8 +868,6 @@ const ChatPage: React.FC = () => {
       return;
     }
     followUpContextRef.current = null;
-    setActiveStockContext(null);
-    setActiveStockCode(null);
     pendingSessionScrollRef.current = targetSessionId;
     requestScrollToBottom('auto');
     void Promise.resolve(switchSession(targetSessionId)).finally(() => {
@@ -1050,7 +904,33 @@ const ChatPage: React.FC = () => {
 
   // Handle follow-up from report page: ?stock=600519&name=贵州茅台&recordId=xxx
   useEffect(() => {
-    const stock = sanitizeFollowUpStockCode(searchParams.get('stock'));
+    const rawStockCode = searchParams.get('stock');
+    if (!rawStockCode) {
+      // Nothing to follow up — only clear when there actually ARE stale query
+      // params. Skipping the empty case avoids redundant `replace: true`
+      // navigations on every effect re-run (the gate below legitimately re-runs
+      // as status/registry state settles), which would otherwise clobber
+      // subsequent RouterProvider navigation state asserted by other tests.
+      if (searchParams.size === 0) {
+        return;
+      }
+      setSearchParams({}, { replace: true });
+      return;
+    }
+
+    if (stockIndexLoading) {
+      return;
+    }
+    if (agentStatusChecking) {
+      return;
+    }
+
+    // Registry canonical first for explicit index follow-ups (sh000016 /
+    // 000016.SH / 930955.CSI / csi930955) so the report-follow-up canonical is
+    // preserved end-to-end; the sanitize contract is untouched and remains the
+    // stock fail-open when the registry is unavailable or the code unregistered.
+    const registryCanonical = resolveRegisteredIndexCanonical(stockIndex, rawStockCode);
+    const stock = registryCanonical ?? sanitizeFollowUpStockCode(rawStockCode);
     const name = sanitizeFollowUpStockName(searchParams.get('name'));
     const recordId = parseFollowUpRecordId(searchParams.get('recordId'));
 
@@ -1061,11 +941,6 @@ const ChatPage: React.FC = () => {
 
     const hydrationToken = ++followUpHydrationTokenRef.current;
     setInput(buildFollowUpPrompt(stock, name));
-    setActiveStockCode(stock);
-    setActiveStockContext({
-      stock_code: stock,
-      stock_name: name,
-    });
     followUpContextRef.current = {
       stock_code: stock,
       stock_name: name,
@@ -1077,6 +952,7 @@ const ChatPage: React.FC = () => {
       stockCode: stock,
       stockName: name,
       recordId,
+      index: stockIndex,
     }).then((context) => {
       if (!isMountedRef.current || followUpHydrationTokenRef.current !== hydrationToken) {
         return;
@@ -1088,7 +964,7 @@ const ChatPage: React.FC = () => {
       }
     });
     setSearchParams({}, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, stockIndex, stockIndexLoading, agentStatusChecking]);
 
   const handleSend = useCallback(
     async (
@@ -1097,7 +973,7 @@ const ChatPage: React.FC = () => {
       overrideStockContext?: ActiveStockContext,
     ) => {
       const msgText = (overrideMessage ?? input).trim();
-      if (!msgText || loading || stockIndexLoading || !agentAvailable || !agentStatus) return;
+      if (!msgText || loading || !agentAvailable || !agentStatus) return;
       lastSubmittedInputRef.current = msgText;
       if (overrideMessage !== undefined) {
         setInput(msgText);
@@ -1107,32 +983,9 @@ const ChatPage: React.FC = () => {
         requestedSkillIds ?? selectedSkillIds,
       );
       const usedSkillNames = usedSkillIds.length > 0 ? getSkillNames(usedSkillIds) : ['通用'];
-      const codexStockContext = agentStatus?.backend === 'codex_app_server'
-        ? overrideStockContext
-        : undefined;
-
-      let nextActiveStockContext = codexStockContext ?? activeStockContext;
-      let useActiveContextForThisSend = Boolean(codexStockContext);
-      const stockResolution = codexStockContext
-        ? null
-        : resolveActiveStockContextFromMessage(msgText, activeStockContext);
-      if (stockResolution) {
-        nextActiveStockContext = stockResolution.context;
-        useActiveContextForThisSend = stockResolution.useForCurrentSend;
-      } else if (
-        agentStatus?.backend === 'codex_app_server'
-        && !codexStockContext
-        && (!nextActiveStockContext || SWITCH_STOCK_MESSAGE_RE.test(msgText))
-      ) {
-        const nameContext = resolveUniqueStockNameContext(msgText, stockIndex);
-        if (nameContext) {
-          nextActiveStockContext = nameContext;
-          useActiveContextForThisSend = true;
-        }
-      }
-      const contextForSend = useActiveContextForThisSend
-        ? nextActiveStockContext
-        : followUpContextRef.current ?? nextActiveStockContext ?? undefined;
+      // Only report/shortcut hints accompany this request. Ordinary follow-ups
+      // rely on the server's accepted state, not a replay or a client-selected fact.
+      const contextForSend = overrideStockContext ?? followUpContextRef.current ?? undefined;
 
       const payload = {
         message: msgText,
@@ -1146,13 +999,10 @@ const ChatPage: React.FC = () => {
         skillNames: usedSkillNames,
         skillName: usedSkillNames.join('、'),
         onAccepted: () => {
+          if (useAgentChatStore.getState().sessionId !== sessionId) return;
           followUpHydrationTokenRef.current += 1;
           followUpContextRef.current = null;
           setIsFollowUpContextLoading(false);
-          if (nextActiveStockContext) {
-            setActiveStockContext(nextActiveStockContext);
-            setActiveStockCode(nextActiveStockContext.stock_code);
-          }
           setInput('');
           resetInputHeightToAuto();
           setMobileSkillPickerOpen(false);
@@ -1160,7 +1010,7 @@ const ChatPage: React.FC = () => {
         },
       });
     },
-    [activeStockContext, agentAvailable, agentStatus, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, resetInputHeightToAuto, selectedSkillIds, sessionId, sessionSelectedSkillIds, startStream, stockIndex, stockIndexLoading],
+    [agentAvailable, agentStatus, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, resetInputHeightToAuto, selectedSkillIds, sessionId, sessionSelectedSkillIds, startStream],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1908,6 +1758,11 @@ const ChatPage: React.FC = () => {
           <div className="border-t border-white/6 bg-card/88 p-4 md:p-6 relative z-20">
             <div className="space-y-3">
               {chatError ? <ApiErrorAlert error={chatError} /> : null}
+              {chatError?.code === 'session_state_conflict' && (
+                <Button variant="secondary" size="xsm" onClick={() => void refreshSession()}>
+                  {t('chat.refreshSession')}
+                </Button>
+              )}
               {terminalStatus === 'cancelled' ? (
                 <div role="status" className="rounded-xl border border-slate-500/20 bg-slate-500/5 px-4 py-3 text-sm">
                   {t('chat.analysisStopped')}
@@ -2143,23 +1998,28 @@ const ChatPage: React.FC = () => {
                 </div>
               ) : null}
 
-              {activeStockCode && !isRegisteredIndexCanonicalCode(activeStockCode, stockIndex) && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-text font-mono">{activeStockCode}</span>
-                  <Button
-                    variant="secondary"
-                    size="xsm"
-                    isLoading={isWatchlistActioning}
-                    onClick={() => void handleToggleWatchlist(activeStockCode)}
-                    className="text-[11px]"
-                  >
-                    {stockInWatchlist(activeStockCode) ? '从自选删除' : '加入自选'}
-                  </Button>
-                  {watchlistMessage && (
-                    <span className="text-[11px] text-secondary-text animate-in fade-in">{watchlistMessage}</span>
-                  )}
-                </div>
-              )}
+            <div className="text-xs text-muted-text" aria-label={t('chat.currentObjectLabel')}>
+              {activeStockContext
+                ? t('chat.currentObject', { object: `${activeStockContext.stock_name ? `${activeStockContext.stock_name} · ` : ''}${activeStockContext.stock_code}` })
+                : t(stateContract === 'legacy' ? 'chat.objectUnconfirmedLegacy' : 'chat.objectUnconfirmed')}
+            </div>
+            {activeStockCode && activeStockContext?.asset_type === 'stock' && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-text font-mono">{activeStockCode}</span>
+                <Button
+                  variant="secondary"
+                  size="xsm"
+                  isLoading={isWatchlistActioning}
+                  onClick={() => void handleToggleWatchlist(activeStockCode)}
+                  className="text-[11px]"
+                >
+                  {stockInWatchlist(activeStockCode) ? '从自选删除' : '加入自选'}
+                </Button>
+                {watchlistMessage && (
+                  <span className="text-[11px] text-secondary-text animate-in fade-in">{watchlistMessage}</span>
+                )}
+              </div>
+            )}
 
               <div className="flex items-end gap-3">
                 <div className="relative min-w-0 flex-1 pt-2">
@@ -2230,8 +2090,8 @@ const ChatPage: React.FC = () => {
                   <Button
                     variant="primary"
                     onClick={() => handleSend()}
-                    disabled={!input.trim() || loading || stockIndexLoading || !agentAvailable}
-                    isLoading={loading || stockIndexLoading}
+                    disabled={!input.trim() || loading || !agentAvailable}
+                    isLoading={loading}
                     className="btn-primary flex-shrink-0"
                   >
                     发送

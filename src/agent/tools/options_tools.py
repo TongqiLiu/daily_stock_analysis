@@ -22,6 +22,7 @@ _OPTIONS_POLICY = ToolPolicy.declared(
     permissions=["market_data:read", "derivatives_data:read"],
     scope_dimensions=["stock"],
     cancellation_safe=True,
+    supported_asset_types=("stock",),
 )
 
 

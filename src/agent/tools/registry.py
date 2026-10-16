@@ -50,6 +50,7 @@ class ToolPolicy:
     cancellation_safe: bool = False
     timeout_seconds: Optional[float] = None
     process_cancellation_safe: bool = False
+    supported_asset_types: Optional[tuple[str, ...]] = None
 
     def __post_init__(self) -> None:
         if self.process_cancellation_safe and (
@@ -73,6 +74,7 @@ class ToolPolicy:
         cancellation_safe: bool = False,
         timeout_seconds: Optional[float] = None,
         process_cancellation_safe: bool = False,
+        supported_asset_types: Optional[tuple[str, ...]] = None,
     ) -> "ToolPolicy":
         return cls(
             read_only=read_only,
@@ -83,6 +85,7 @@ class ToolPolicy:
             cancellation_safe=bool(cancellation_safe),
             timeout_seconds=timeout_seconds,
             process_cancellation_safe=bool(process_cancellation_safe),
+            supported_asset_types=supported_asset_types,
         )
 
     def to_public_dict(self) -> Dict[str, Any]:

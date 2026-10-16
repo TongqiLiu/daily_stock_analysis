@@ -24,6 +24,7 @@ _ANALYSIS_READ_POLICY = ToolPolicy.declared(
     side_effects=["network_read", "db_read"],
     permissions=["market_data:read"],
     scope_dimensions=["stock"],
+    supported_asset_types=("stock", "index"),
 )
 # Pure calculations plus provider/DB reads; bounded cancellation relies on the
 # owned process runner, never on an interruptible Python thread.
@@ -1381,6 +1382,7 @@ def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
     """Analyse volume-price patterns over recent trading days."""
     from src.services.history_loader import get_frozen_target_date, load_history_df
     from src.core.trading_calendar import build_market_phase_context, get_market_for_stock
+    from src.agent.tools.execution import get_tool_analysis_target
     import pandas as pd
 
     df, source = load_history_df(stock_code, days=max(days + 20, 60))
@@ -1390,7 +1392,12 @@ def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
 
     # Do not compare an unfinished session's cumulative volume with full days.
     # Calendar failures must not inherit the calendar helper's fail-open date.
-    phase = build_market_phase_context(market=get_market_for_stock(stock_code))
+    target = get_tool_analysis_target(stock_code)
+    market = (
+        {"SH": "cn", "SZ": "cn", "BJ": "cn", "CSI": "cn", "HK": "hk", "US": "us"}.get(target.exchange)
+        if target is not None else get_market_for_stock(stock_code)
+    )
+    phase = build_market_phase_context(market=market)
     if phase.phase.value == "unknown" or phase.warnings:
         return {
             "code": stock_code, "source": source, "status": "unavailable",

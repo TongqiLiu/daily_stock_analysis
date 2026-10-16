@@ -416,6 +416,8 @@ def test_codex_selected_skills_reach_transport_after_session_resolution(monkeypa
 
 
 @pytest.mark.parametrize("scoped, upstream_fresh, frozen, expected_fresh", [
+    ("empty", False, None, False),
+    ("empty", True, None, True),
     (True, False, None, True),
     (True, False, date(2025, 6, 10), False),
     (False, True, None, True),
@@ -432,7 +434,8 @@ def test_codex_captures_freshness_and_history_cutoff_before_dispatch_threads(
     fresh_token = set_fresh_market_data_required(upstream_fresh)
     frozen_token = set_frozen_target_date(frozen)
     try:
-        result = backend.run(_request(stock_scope=StockScope("AAPL", {"AAPL"}) if scoped else None))
+        scope = StockScope("", set(), strict=True) if scoped == "empty" else (StockScope("AAPL", {"AAPL"}) if scoped else None)
+        result = backend.run(_request(stock_scope=scope))
     finally:
         reset_frozen_target_date(frozen_token)
         reset_fresh_market_data_required(fresh_token)
@@ -440,6 +443,12 @@ def test_codex_captures_freshness_and_history_cutoff_before_dispatch_threads(
     captured = _FakeTransport.last.kwargs["tool_context"]
     assert captured.require_fresh_market_data is expected_fresh
     assert captured.frozen_target_date == frozen
+
+
+def test_litellm_empty_authoritative_scope_does_not_require_forbidden_stock_tools() -> None:
+    backend = LiteLLMAgentBackend(ToolRegistry(), _FinalAnswerAdapter())
+    result = backend.run(_request(stock_scope=StockScope("", set(), strict=True)))
+    assert result.success
 
 
 def test_litellm_preparation_keeps_the_existing_chat_workflow() -> None:

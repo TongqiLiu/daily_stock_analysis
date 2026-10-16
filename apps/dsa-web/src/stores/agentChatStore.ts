@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { agentApi, isAbortError } from '../api/agent';
-import type { ChatSessionItem, ChatStreamRequest } from '../api/agent';
+import { agentApi, decodeChatState, isAbortError } from '../api/agent';
+import type { ActiveStockContext, ChatSessionItem, ChatStateFields, ChatStreamRequest, DecodedChatState } from '../api/agent';
 import {
   createParsedApiError,
   getParsedApiError,
@@ -57,11 +57,12 @@ export interface StreamMeta {
   onAccepted?: (event: StreamAcceptedEvent) => void;
 }
 
-export interface StreamAcceptedEvent {
+export interface StreamAcceptedEvent extends ChatStateFields {
   type: 'accepted';
   backend: 'litellm' | 'codex_app_server';
   request_id: string;
   session_id: string;
+  session_state?: { selected_skill_ids: string[] | null };
 }
 
 type StreamTerminalStatus = 'cancelled' | 'timeout' | null;
@@ -115,7 +116,10 @@ function getStreamFailureError(
   event: StreamFailureEvent,
   fallbackMessage: string,
 ): ParsedApiError {
-  return getParsedApiError(
+  if (event.error_code === 'session_state_conflict') {
+    return getParsedApiError({ code: event.error_code, message: event.message });
+  }
+  const parsed = getParsedApiError(
     getFirstMeaningfulStreamError(
       event.error,
       event.message,
@@ -123,6 +127,7 @@ function getStreamFailureError(
       fallbackMessage,
     ),
   );
+  return event.error_code ? { ...parsed, code: event.error_code } : parsed;
 }
 
 function emptyViewStreamFields() {
@@ -178,6 +183,17 @@ function viewFieldsForSession(
 interface AgentChatState {
   messages: Message[];
   selectedSkillIds: string[] | null;
+  savedSkillIds: string[] | null;
+  activeStockContext: ActiveStockContext | null;
+  stateContract: 'unbound' | DecodedChatState['contract'];
+  sessionGeneration: string | null;
+  sessionStateVersion: number | null;
+  stateSource: 'detail' | 'accepted' | null;
+  sessionEpoch: number;
+  instanceBindingEpoch: number;
+  detailReadSequence: number;
+  skillDraftRevision: number;
+  skillDraftDirty: boolean;
   loading: boolean;
   progressSteps: ProgressStep[];
   sessionId: string;
@@ -201,7 +217,14 @@ interface AgentChatState {
   selectedSkillIdsBySession: Record<string, string[] | null>;
   /** Finished-session error/terminal banners retained until the session is viewed again. */
   sessionExtras: Record<string, SessionViewExtras>;
+  /** Server identity and unsent Skill drafts remain isolated per conversation. */
+  discussionBySession: Record<string, SessionDiscussionState>;
 }
+
+type SessionDiscussionState = Pick<AgentChatState,
+  'activeStockContext' | 'savedSkillIds' | 'selectedSkillIds' | 'stateContract'
+  | 'sessionGeneration' | 'sessionStateVersion' | 'stateSource'
+  | 'instanceBindingEpoch' | 'skillDraftRevision' | 'skillDraftDirty'>;
 
 interface AgentChatActions {
   setSelectedSkillIds: (skillIds: string[]) => void;
@@ -210,6 +233,7 @@ interface AgentChatActions {
   loadSessions: () => Promise<void>;
   loadInitialSession: () => Promise<void>;
   switchSession: (targetSessionId: string) => Promise<void>;
+  refreshSession: () => Promise<void>;
   startNewChat: () => void;
   stopStream: () => Promise<void>;
   stopSessionStream: (targetSessionId: string) => Promise<void>;
@@ -222,11 +246,111 @@ const getInitialSessionId = (): string =>
     ? localStorage.getItem(STORAGE_KEY_SESSION) || generateUUID()
     : generateUUID();
 
+const emptySessionState = {
+  activeStockContext: null, savedSkillIds: null, selectedSkillIds: null,
+  stateContract: 'unbound' as const, sessionGeneration: null, sessionStateVersion: null,
+  stateSource: null, skillDraftRevision: 0, skillDraftDirty: false,
+};
+const emptyStreamState = {
+  loading: false, progressSteps: [], abortController: null, activeRequestId: null,
+  serverCancellation: false, stopping: false, terminalStatus: null, stopError: false,
+};
+
+// null rejects the response. {} keeps the newer state but can still acknowledge
+// an accepted message from this owned request. Versions only compare within an instance.
+function mergeChatState(current: SessionDiscussionState, incoming: DecodedChatState,
+  source: 'detail' | 'accepted', bindingEpoch: number, draftRevision: number): Partial<SessionDiscussionState> | null {
+  const sameInstance = incoming.contract === 'authoritative'
+    && incoming.sessionGeneration !== null && incoming.sessionGeneration === current.sessionGeneration;
+  if (!sameInstance) {
+    if (bindingEpoch !== current.instanceBindingEpoch) return null;
+    if (source === 'accepted' && incoming.contract === 'authoritative' && current.sessionGeneration !== null) return null;
+  }
+  if (sameInstance && current.sessionStateVersion !== null && incoming.sessionStateVersion !== null) {
+    if (incoming.sessionStateVersion < current.sessionStateVersion) return source === 'detail' ? null : {};
+    if (source === 'accepted' && incoming.sessionStateVersion === current.sessionStateVersion
+      && current.stateSource === 'detail') return {};
+  }
+  const bindingChanged = current.sessionGeneration !== incoming.sessionGeneration
+    || (current.stateContract === 'authoritative' && incoming.contract === 'legacy');
+  return {
+    stateContract: incoming.contract,
+    activeStockContext: incoming.activeStockContext,
+    sessionGeneration: incoming.sessionGeneration,
+    sessionStateVersion: incoming.sessionStateVersion,
+    savedSkillIds: incoming.selectedSkillIds,
+    ...(draftRevision === current.skillDraftRevision && (source === 'accepted' || !current.skillDraftDirty)
+      ? { selectedSkillIds: incoming.selectedSkillIds, skillDraftDirty: false } : {}),
+    stateSource: source,
+    instanceBindingEpoch: current.instanceBindingEpoch + (bindingChanged ? 1 : 0),
+  };
+}
+
+function discussionForSession(state: AgentChatState, sessionId: string): SessionDiscussionState {
+  if (state.sessionId !== sessionId) {
+    return state.discussionBySession[sessionId] ?? { ...emptySessionState, instanceBindingEpoch: 0 };
+  }
+  const { activeStockContext, savedSkillIds, selectedSkillIds, stateContract, sessionGeneration,
+    sessionStateVersion, stateSource, instanceBindingEpoch, skillDraftRevision, skillDraftDirty } = state;
+  return { activeStockContext, savedSkillIds, selectedSkillIds, stateContract, sessionGeneration,
+    sessionStateVersion, stateSource, instanceBindingEpoch, skillDraftRevision, skillDraftDirty };
+}
+
+function storeDiscussionPatch(state: AgentChatState, sessionId: string,
+  patch: Partial<SessionDiscussionState>): Partial<AgentChatState> {
+  const next = { ...discussionForSession(state, sessionId), ...patch };
+  return {
+    discussionBySession: { ...state.discussionBySession, [sessionId]: next },
+    selectedSkillIdsBySession: { ...state.selectedSkillIdsBySession, [sessionId]: next.selectedSkillIds },
+    ...(state.sessionId === sessionId ? next : {}),
+  };
+}
+
 export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set, get) => {
-  const deliverServerCancellation = async (
-    requestId: string,
-    sessionId: string,
-  ): Promise<void> => {
+  const resetSession = (sessionId: string) => {
+    cacheCurrentSessionState();
+    const previous = get();
+    // Changing the visible conversation must not stop its background request.
+    const discussion = previous.discussionBySession[sessionId] ?? { ...emptySessionState, instanceBindingEpoch: 0 };
+    set({ ...discussion, sessionId,
+      ...viewFieldsForSession(previous.streamsBySession, previous.messagesBySession, previous.sessionExtras, sessionId),
+      sessionEpoch: previous.sessionEpoch + 1,
+      detailReadSequence: previous.detailReadSequence + 1 });
+    localStorage.setItem(STORAGE_KEY_SESSION, sessionId);
+  };
+  const readDetail = async () => {
+    const owner = get();
+    const sequence = owner.detailReadSequence + 1;
+    set({ detailReadSequence: sequence });
+    const ownsRead = () => get().sessionId === owner.sessionId
+      && get().sessionEpoch === owner.sessionEpoch && get().detailReadSequence === sequence;
+    try {
+      const detail = await agentApi.getChatSessionMessages(owner.sessionId);
+      if (!ownsRead() || detail.session_id !== owner.sessionId) return;
+      const decoded = decodeChatState(detail, 'detail');
+      const current = get();
+      const patch = mergeChatState(current, decoded, 'detail', owner.instanceBindingEpoch, owner.skillDraftRevision);
+      if (!patch) return;
+      const replacedInstance = current.sessionGeneration !== null
+        && current.sessionGeneration !== decoded.sessionGeneration;
+      if (replacedInstance) current.abortController?.abort();
+      const mapped = detail.messages.map((m) => ({ id: m.id, role: m.role, content: m.content,
+        createdAt: m.created_at ?? undefined }));
+      const cached = current.messagesBySession[owner.sessionId];
+      const messages = !replacedInstance && cached
+        && (current.streamsBySession[owner.sessionId] || cached.length > mapped.length) ? cached : mapped;
+      set((s) => {
+        const streams = { ...s.streamsBySession };
+        if (replacedInstance) delete streams[owner.sessionId];
+        return { ...storeDiscussionPatch(s, owner.sessionId, patch),
+          ...(replacedInstance ? emptyStreamState : {}), streamsBySession: streams,
+          messages, messagesBySession: { ...s.messagesBySession, [owner.sessionId]: messages }, chatError: null };
+      });
+    } catch (error) {
+      if (ownsRead()) set({ chatError: getParsedApiError(error) });
+    }
+  };
+  const deliverServerCancellation = async (requestId: string, sessionId: string): Promise<void> => {
     try {
       await agentApi.cancelChatStream(requestId);
     } catch {
@@ -261,6 +385,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       selectedSkillIdsBySession,
     } = get();
     set({
+      ...storeDiscussionPatch(get(), sessionId, {}),
       messagesBySession: messages.length > 0 || messagesBySession[sessionId]
         ? {
             ...messagesBySession,
@@ -302,7 +427,10 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
 
   return {
   messages: [],
-  selectedSkillIds: null,
+  ...emptySessionState,
+  sessionEpoch: 0,
+  instanceBindingEpoch: 0,
+  detailReadSequence: 0,
   loading: false,
   progressSteps: [],
   sessionId: getInitialSessionId(),
@@ -322,9 +450,11 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
   messagesBySession: {},
   selectedSkillIdsBySession: {},
   sessionExtras: {},
+  discussionBySession: {},
 
   setSelectedSkillIds: (skillIds) => set((s) => ({
     selectedSkillIds: skillIds,
+    skillDraftRevision: s.skillDraftRevision + 1, skillDraftDirty: true,
     selectedSkillIdsBySession: {
       ...s.selectedSkillIdsBySession,
       [s.sessionId]: skillIds,
@@ -350,47 +480,35 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
   },
 
   loadInitialSession: async () => {
-    const { hasInitialLoad } = get();
+    const { hasInitialLoad, sessionEpoch, instanceBindingEpoch, activeRequestId, sessionId } = get();
     if (hasInitialLoad) return;
+    const savedId = localStorage.getItem(STORAGE_KEY_SESSION);
     set({ hasInitialLoad: true, sessionsLoading: true });
 
     try {
       const sessionList = await agentApi.getChatSessions();
+      if (get().sessionEpoch !== sessionEpoch) return;
       set({ sessions: sessionList });
 
-      const savedId = localStorage.getItem(STORAGE_KEY_SESSION);
+      // A list can update presentation without owning a destructive restore.
+      // First acceptance changes the instance binding, not the route epoch;
+      // a newly started creation request must also keep its live stream.
+      const current = get();
+      if (current.instanceBindingEpoch !== instanceBindingEpoch
+        || current.sessionId !== sessionId || current.activeRequestId !== activeRequestId) return;
       if (savedId) {
         const sessionExists = sessionList.some((s) => s.session_id === savedId);
         if (sessionExists) {
-          const detail = await agentApi.getChatSessionMessages(savedId);
-          const mapped = detail.messages.map((m) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            createdAt: m.created_at ?? undefined,
-          }));
-          set((s) => ({
-            messages: mapped,
-            selectedSkillIds: detail.session_state.selected_skill_ids,
-            messagesBySession: {
-              ...s.messagesBySession,
-              [savedId]: mapped,
-            },
-            selectedSkillIdsBySession: {
-              ...s.selectedSkillIdsBySession,
-              [savedId]: detail.session_state.selected_skill_ids,
-            },
-          }));
+          if (get().sessionId !== savedId) resetSession(savedId);
+          await readDetail();
         } else {
-          const newId = generateUUID();
-          set({ sessionId: newId, selectedSkillIds: null });
-          localStorage.setItem(STORAGE_KEY_SESSION, newId);
+          resetSession(generateUUID());
         }
       } else {
         localStorage.setItem(STORAGE_KEY_SESSION, get().sessionId);
       }
-    } catch {
-      // Ignore
+    } catch (error) {
+      if (get().sessionEpoch === sessionEpoch) set({ chatError: getParsedApiError(error) });
     } finally {
       set({ sessionsLoading: false });
     }
@@ -399,99 +517,15 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
   switchSession: async (targetSessionId) => {
     const { sessionId, messages } = get();
     if (targetSessionId === sessionId && messages.length > 0) return;
-
-    cacheCurrentSessionState();
-
-    const {
-      streamsBySession,
-      messagesBySession,
-      selectedSkillIdsBySession,
-      sessionExtras,
-    } = get();
-    const cachedMessages = messagesBySession[targetSessionId];
-    const hasActiveStream = Boolean(streamsBySession[targetSessionId]);
-
-    // Do not abort the previous session's stream — it keeps running in the background.
-    set({
-      selectedSkillIds: selectedSkillIdsBySession[targetSessionId] ?? null,
-      sessionId: targetSessionId,
-      ...viewFieldsForSession(
-        streamsBySession,
-        messagesBySession,
-        sessionExtras,
-        targetSessionId,
-      ),
-    });
-    localStorage.setItem(STORAGE_KEY_SESSION, targetSessionId);
-
-    // Active streams own the freshest message cache and must not be replaced
-    // by an older persisted session snapshot.
-    if (hasActiveStream) {
-      return;
-    }
-
-    try {
-      const detail = await agentApi.getChatSessionMessages(targetSessionId);
-      if (get().sessionId !== targetSessionId) {
-        return;
-      }
-      // If a stream started while we were fetching, keep its live cache.
-      if (get().streamsBySession[targetSessionId]) {
-        return;
-      }
-      const mapped = detail.messages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        createdAt: m.created_at ?? undefined,
-      }));
-      // Prefer fresher in-memory cache when it has more turns than the API snapshot
-      // (e.g. a just-finished background stream that hasn't been re-fetched yet).
-      const localCached = get().messagesBySession[targetSessionId];
-      const useLocal = Boolean(
-        localCached
-        && localCached.length > mapped.length,
-      );
-      const nextMessages = useLocal ? localCached! : mapped;
-      set((s) => ({
-        messages: nextMessages,
-        selectedSkillIds: detail.session_state.selected_skill_ids,
-        messagesBySession: {
-          ...s.messagesBySession,
-          [targetSessionId]: nextMessages,
-        },
-        selectedSkillIdsBySession: {
-          ...s.selectedSkillIdsBySession,
-          [targetSessionId]: detail.session_state.selected_skill_ids,
-        },
-      }));
-    } catch {
-      // Keep whatever we already have in cache/view.
-      if (cachedMessages && get().sessionId === targetSessionId) {
-        set({ messages: cachedMessages });
-      }
-    }
+    resetSession(targetSessionId);
+    if (get().streamsBySession[targetSessionId]) return;
+    await readDetail();
   },
 
+  refreshSession: readDetail,
+
   startNewChat: () => {
-    // Keep any in-flight streams running in the background.
-    cacheCurrentSessionState();
-    const newId = generateUUID();
-    set((s) => ({
-      sessionId: newId,
-      messages: [],
-      selectedSkillIds: null,
-      messagesBySession: {
-        ...s.messagesBySession,
-        [newId]: [],
-      },
-      selectedSkillIdsBySession: {
-        ...s.selectedSkillIdsBySession,
-        [newId]: null,
-      },
-      ...emptyViewStreamFields(),
-    }));
-    localStorage.setItem(STORAGE_KEY_SESSION, newId);
+    resetSession(generateUUID());
   },
 
   stopStream: async () => {
@@ -508,6 +542,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
 
     // Only block if THIS session already has an in-flight stream.
     if (get().streamsBySession[streamSessionId]) return;
+    const { sessionGeneration, instanceBindingEpoch, skillDraftRevision } = discussionForSession(get(), streamSessionId);
 
     const ac = new AbortController();
     const requestId = payload.request_id || generateUUID();
@@ -626,7 +661,8 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
 
     try {
       const response = await agentApi.chatStream(
-        { ...payload, session_id: streamSessionId, request_id: requestId },
+        { ...payload, session_id: streamSessionId, request_id: requestId,
+          ...(sessionGeneration ? { session_generation: sessionGeneration } : {}) },
         { signal: ac.signal },
       );
       const reader = response.body!.getReader();
@@ -647,6 +683,10 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         if (!line.startsWith('data: ') || !ownsStream() || ac.signal.aborted) return;
 
         const event = JSON.parse(line.slice(6)) as ProgressStep;
+        if (event.type !== 'accepted' && (
+          (event.request_id !== undefined && event.request_id !== requestId)
+          || (event.session_id !== undefined && event.session_id !== streamSessionId)
+        )) return;
         if (event.type === 'accepted') {
           if (acceptedEvent) {
             throw protocolError('Agent stream emitted accepted more than once.');
@@ -658,6 +698,14 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           ) {
             throw protocolError('Agent stream emitted an invalid accepted event.');
           }
+          const decoded = decodeChatState(event, 'accepted');
+          const statePatch = mergeChatState(discussionForSession(get(), streamSessionId), decoded,
+            'accepted', instanceBindingEpoch, skillDraftRevision);
+          if (!statePatch) {
+            // This request belonged to an instance superseded by a valid detail.
+            ac.abort();
+            return;
+          }
           acceptedEvent = event as StreamAcceptedEvent;
           finalBackend = acceptedEvent.backend;
           // Both backends accept the server-side cooperative stop signal.  Keep
@@ -668,6 +716,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
             { ...userMessage, backend: acceptedEvent!.backend },
           ]);
           set((s) => ({
+            ...storeDiscussionPatch(s, streamSessionId, statePatch),
             sessions: s.sessions.some((x) => x.session_id === streamSessionId)
               ? s.sessions
               : [
@@ -683,6 +732,14 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           }));
           meta?.onAccepted?.(acceptedEvent);
           return;
+        }
+        if (event.type === 'error') {
+          patchOwnedStream({ stopError: false });
+          const failureEvent = event as unknown as StreamFailureEvent;
+          throw getStreamFailureError(
+            failureEvent,
+            streamFailureFallback(failureEvent, '分析出错'),
+          );
         }
         if (!acceptedEvent) {
           throw protocolError(`Agent stream emitted ${event.type || 'an unknown event'} before accepted.`);
@@ -707,15 +764,6 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           }
           finalContent = doneEvent.content ?? '';
           return;
-        }
-
-        if (event.type === 'error') {
-          patchOwnedStream({ stopError: false });
-          const failureEvent = event as unknown as StreamFailureEvent;
-          throw getStreamFailureError(
-            failureEvent,
-            streamFailureFallback(failureEvent, '分析出错'),
-          );
         }
 
         currentProgressSteps.push(event);

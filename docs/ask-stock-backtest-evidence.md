@@ -50,6 +50,7 @@
 - `get_stock_backtest_summary(stock_code)` 和 `get_strategy_backtest_summary()` 省略窗口时使用最新已有汇总的周期，返回 `requested_eval_window_days`、`effective_eval_window_days`、`window_selection` 与 `available_eval_window_days`。没有汇总但有明细时，明确选择最短已有周期；同次明细不会混用多个周期。
 - 明确请求 30 日，而只有 10 日记录时，保持 30 日并报告缺失，不静默替换。
 - `evidence_profile` 从实际明细只读聚合，包括覆盖日期、状态分母、做多收益分母、盈利/亏损幅度和均值。零样本的比例/均值为 `null`，不填 0 或 50%。
+- 问股已确认的标的身份贯穿汇总、可用周期、证据画像和逐笔明细，不能只约束汇总而让其他查询混入同码异市场数据。旧调用保持原接口兼容；指数不借用同码个股回测。
 - 旧汇总字段保持兼容；`win_rate_pct` 仍是方向结果比例。交易盈利另看 `profitable_long_rate_pct` 及 `long_return_count`，收益看 `avg_long_simulated_return_pct`，同时核对费用与缺失样本。
 - 每条近期明细保留 `eval_status`、周期、引擎、持仓方向、相同日线同时触价及评估时间，不能将行情不足当失败交易。
 - `methodology.replay_validation` 明确标记“本次只读工具没有重新重放”。输出 `observational` 只表示存在历史完成记录，不代表已经通过当前实现、样本外或实盘验证。

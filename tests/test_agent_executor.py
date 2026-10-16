@@ -303,9 +303,10 @@ def test_fresh_market_data_gate_accepts_network_refresh_before_final_answer() ->
     )
 
     assert result.success is True
-    assert [item["tool"] for item in result.tool_calls_log] == [
-        "get_realtime_quote",
+    # Independent market reads may finish in either order in the parallel runner.
+    assert sorted(item["tool"] for item in result.tool_calls_log) == [
         "get_daily_history",
+        "get_realtime_quote",
     ]
 
 

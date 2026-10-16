@@ -23,6 +23,7 @@ from src.agent.tools.execution import (
     ToolExecutionCancelled,
     ToolExecutionDeadlineExceeded,
     check_tool_execution,
+    get_tool_stock_identity,
 )
 from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
@@ -37,6 +38,7 @@ _NEWS_READ_POLICY = ToolPolicy.declared(
     permissions=["news:read"],
     scope_dimensions=["stock"],
     process_cancellation_safe=True,
+    supported_asset_types=("stock", "index"),
 )
 _INTEL_READ_POLICY = ToolPolicy.declared(
     read_only=True,
@@ -44,6 +46,7 @@ _INTEL_READ_POLICY = ToolPolicy.declared(
     permissions=["intel:read"],
     scope_dimensions=["stock"],
     process_cancellation_safe=True,
+    supported_asset_types=("stock", "index"),
 )
 _RESEARCH_READ_POLICY = ToolPolicy.declared(
     read_only=True,
@@ -51,6 +54,7 @@ _RESEARCH_READ_POLICY = ToolPolicy.declared(
     permissions=["research:read"],
     scope_dimensions=["stock"],
     process_cancellation_safe=True,
+    supported_asset_types=("stock",),
 )
 
 
@@ -67,6 +71,9 @@ def _get_search_service():
 
 
 def _canonical_search_code(stock_code: str) -> str:
+    identity = get_tool_stock_identity(stock_code)
+    if identity is not None:
+        return identity.stock_code
     from data_provider.base import canonical_stock_code, normalize_stock_code
     from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 
@@ -78,6 +85,12 @@ def _canonical_search_code(stock_code: str) -> str:
 
 
 def _resolve_search_subject(stock_code: str, stock_name: str) -> tuple[str, str]:
+    identity = get_tool_stock_identity(stock_code)
+    if identity is not None:
+        if identity.asset_type == "index":
+            return "", identity.stock_name or identity.stock_code
+        # A model-provided label is not evidence for the accepted subject.
+        return identity.stock_code, identity.stock_name or identity.stock_code
     from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 
     target = parse_analysis_target(stock_code)

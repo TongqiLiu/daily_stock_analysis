@@ -15,6 +15,7 @@ from src.agent.tools.execution import (
     ToolExecutionCancelled,
     ToolExecutionDeadlineExceeded,
     check_tool_execution,
+    get_tool_analysis_target,
 )
 from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
@@ -26,6 +27,7 @@ _BACKTEST_READ_POLICY = ToolPolicy.declared(
     permissions=["backtest:read"],
     scope_dimensions=["stock"],
     cancellation_safe=True,
+    supported_asset_types=("stock",),
 )
 _BACKTEST_GLOBAL_READ_POLICY = ToolPolicy.declared(
     read_only=True,
@@ -85,9 +87,9 @@ def _window_error(eval_window_days: Optional[int]) -> Optional[dict]:
     return None
 
 
-def _backtest_evidence(svc, code: Optional[str], requested: Optional[int], summary: Optional[dict]) -> dict:
+def _backtest_evidence(svc, code: Optional[str], requested: Optional[int], summary: Optional[dict], **target_kwargs) -> dict:
     """Resolve one horizon explicitly, and keep raw observations separate from claims."""
-    windows = svc.get_available_eval_windows(code=code)
+    windows = svc.get_available_eval_windows(code=code, **target_kwargs)
     check_tool_execution()
     effective = requested
     selection = "requested"
@@ -98,7 +100,7 @@ def _backtest_evidence(svc, code: Optional[str], requested: Optional[int], summa
         else:
             effective = windows[0] if windows else None
             selection = "shortest_available_results" if windows else "no_available_results"
-    profile = svc.get_evidence_profile(code=code, eval_window_days=effective) if effective is not None else None
+    profile = svc.get_evidence_profile(code=code, eval_window_days=effective, **target_kwargs) if effective is not None else None
     check_tool_execution()
     total = (profile or {}).get("total_evaluations", 0)
     completed = (profile or {}).get("completed_count", 0)
@@ -260,11 +262,13 @@ def _handle_get_stock_backtest_summary(stock_code: str, eval_window_days: Option
             return {"error": "limit must be an integer between 1 and 100"}
         svc = _get_backtest_service()
         result = {}
+        target = get_tool_analysis_target(stock_code)
+        target_kwargs = {"analysis_target": target} if target is not None else {}
 
         # Per-stock summary
-        summary = svc.get_summary(scope="stock", code=stock_code, eval_window_days=eval_window_days)
+        summary = svc.get_summary(scope="stock", code=stock_code, eval_window_days=eval_window_days, **target_kwargs)
         check_tool_execution()
-        evidence = _backtest_evidence(svc, stock_code, eval_window_days, summary)
+        evidence = _backtest_evidence(svc, stock_code, eval_window_days, summary, **target_kwargs)
         result.update(evidence)
         result["scope"] = "stock"
         result["code"] = stock_code
@@ -277,7 +281,7 @@ def _handle_get_stock_backtest_summary(stock_code: str, eval_window_days: Option
         # Recent evaluations
         effective = evidence["effective_eval_window_days"]
         evals = (
-            svc.get_recent_evaluations(code=stock_code, eval_window_days=effective, limit=limit)
+            svc.get_recent_evaluations(code=stock_code, eval_window_days=effective, limit=limit, **target_kwargs)
             if effective is not None else {"items": [], "total": 0}
         )
         check_tool_execution()

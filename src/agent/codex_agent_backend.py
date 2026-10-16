@@ -112,7 +112,7 @@ class CodexAgentBackend(AgentBackend):
             redact_result=True,
             require_fresh_market_data=(
                 is_fresh_market_data_required()
-                or (request.stock_scope is not None and frozen_date is None)
+                or (bool(request.stock_scope and request.stock_scope.allowed_stock_codes) and frozen_date is None)
             ),
             frozen_target_date=frozen_date,
         )

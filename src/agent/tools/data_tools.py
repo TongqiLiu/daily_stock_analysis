@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.agent.tools.execution import check_tool_execution
+from src.agent.tools.execution import check_tool_execution, get_tool_stock_identity, get_tool_analysis_target
 from src.agent.freshness import is_fresh_market_data_required
 from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
@@ -26,12 +26,15 @@ _MARKET_DATA_STOCK_POLICY = ToolPolicy.declared(
     side_effects=["network_read"],
     permissions=["market_data:read"],
     scope_dimensions=["stock"],
+    supported_asset_types=("stock",),
 )
+_MARKET_QUOTE_POLICY = replace(_MARKET_DATA_STOCK_POLICY, supported_asset_types=("stock", "index"))
 _MARKET_DATA_CACHE_POLICY = ToolPolicy.declared(
     read_only=True,
     side_effects=["network_read", "db_read", "db_write_cache"],
     permissions=["market_data:read"],
     scope_dimensions=["stock"],
+    supported_asset_types=("stock", "index"),
 )
 # These audited core handlers only fetch data or write a recomputable cache.
 # DatabaseManager cache upserts commit atomically; the owned worker's process
@@ -44,6 +47,7 @@ _ANALYSIS_CONTEXT_POLICY = ToolPolicy.declared(
     permissions=["analysis_context:read"],
     scope_dimensions=["stock"],
     cancellation_safe=True,
+    supported_asset_types=("stock", "index"),
 )
 _PORTFOLIO_READ_POLICY = ToolPolicy.declared(
     read_only=True,
@@ -122,6 +126,9 @@ def _normalize_history_days(days: Any) -> Tuple[int, Dict[str, Any]]:
 
 def _history_code_candidates(stock_code: str) -> Tuple[List[str], str]:
     """Return cache lookup candidates plus canonical write code."""
+    identity = get_tool_stock_identity(stock_code)
+    if identity is not None:
+        return [identity.stock_code], identity.stock_code
     from data_provider.base import canonical_stock_code, normalize_stock_code
     from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 
@@ -283,7 +290,8 @@ def _compact_portfolio_risk(risk: dict, top_n: int = 10) -> dict:
 def _handle_get_realtime_quote(stock_code: str) -> dict:
     """Get real-time stock quote."""
     manager = _get_fetcher_manager()
-    quote = manager.get_realtime_quote(stock_code)
+    target = get_tool_analysis_target(stock_code)
+    quote = manager.get_realtime_quote(stock_code, **({"analysis_target": target} if target is not None else {}))
     if quote is None:
         return {
             "error": f"No realtime quote available for {stock_code}",
@@ -349,7 +357,7 @@ get_realtime_quote_tool = ToolDefinition(
     ],
     handler=_handle_get_realtime_quote,
     category="data",
-    policy=_CORE_MARKET_DATA_STOCK_POLICY,
+    policy=replace(_MARKET_QUOTE_POLICY, process_cancellation_safe=True),
 )
 
 
@@ -699,8 +707,9 @@ get_analysis_context_tool = ToolDefinition(
 def _handle_get_stock_info(stock_code: str) -> dict:
     """Get stock fundamental information through unified fundamental context."""
     manager = _get_fetcher_manager()
+    target = get_tool_analysis_target(stock_code)
     try:
-        fundamental_context = manager.get_fundamental_context(stock_code)
+        fundamental_context = manager.get_fundamental_context(stock_code, **({"analysis_target": target} if target is not None else {}))
     except Exception as e:
         logger.warning(f"get_stock_info via fundamental pipeline failed for {stock_code}: {e}")
         fundamental_context = manager.build_failed_fundamental_context(stock_code, str(e))
@@ -712,7 +721,7 @@ def _handle_get_stock_info(stock_code: str) -> dict:
 
     stock_name = stock_code.upper()
     try:
-        stock_name = manager.get_stock_name(stock_code) or stock_name
+        stock_name = manager.get_stock_name(stock_code, **({"analysis_target": target} if target is not None else {})) or stock_name
     except Exception:
         pass
 
@@ -1212,7 +1221,7 @@ get_valuation_percentile_tool = ToolDefinition(
     ],
     handler=_handle_get_valuation_percentile,
     category="data",
-    policy=_CORE_MARKET_DATA_CACHE_POLICY,
+    policy=replace(_CORE_MARKET_DATA_CACHE_POLICY, supported_asset_types=("stock",)),
 )
 
 
@@ -1297,7 +1306,7 @@ get_dcf_valuation_tool = ToolDefinition(
     ],
     handler=_handle_get_dcf_valuation,
     category="data",
-    policy=_CORE_MARKET_DATA_CACHE_POLICY,
+    policy=replace(_CORE_MARKET_DATA_CACHE_POLICY, supported_asset_types=("stock",)),
 )
 
 

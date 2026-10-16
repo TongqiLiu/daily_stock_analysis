@@ -16,6 +16,7 @@ _VALUE_ANALYSIS_READ_POLICY = ToolPolicy.declared(
     side_effects=["network_read", "db_read"],
     permissions=["analysis:read"],
     scope_dimensions=["stock"],
+    supported_asset_types=("stock",),
 )
 
 
